@@ -304,6 +304,7 @@ Library
         Match
         MatchCon
         MatchLit
+        MatchTree
         HsBinds
         HsDecls
         HsDoc
