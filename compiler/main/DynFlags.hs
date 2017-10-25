@@ -496,6 +496,8 @@ data GeneralFlag
    -- bad things get if you turn it off!
    | Opt_SimplPreInlining
 
+   | Opt_TreeMatching
+
    -- Interface files
    | Opt_IgnoreInterfacePragmas
    | Opt_OmitInterfacePragmas
@@ -4007,7 +4009,8 @@ fFlagsDeps = [
   flagSpec "show-warning-groups"              Opt_ShowWarnGroups,
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
-  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs
+  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
+  flagSpec "tree-matching"                    Opt_TreeMatching
   ]
   ++ fHoleFlags
 
@@ -4278,7 +4281,8 @@ defaultFlags settings
       Opt_SharedImplib,
       Opt_SimplPreInlining,
       Opt_VersionMacros,
-      Opt_LlvmPassVectorsInRegisters
+      Opt_LlvmPassVectorsInRegisters,
+      Opt_TreeMatching
     ]
 
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]

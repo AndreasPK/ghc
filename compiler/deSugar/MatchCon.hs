@@ -9,7 +9,7 @@ Pattern-matching constructors
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module MatchCon ( matchConFamily, matchPatSyn ) where
+module MatchCon ( matchConFamily, matchPatSyn, selectConMatchVars ) where
 
 #include "HsVersions.h"
 
@@ -32,6 +32,10 @@ import SrcLoc
 import Outputable
 import Control.Monad(liftM)
 import Data.List (groupBy)
+
+import MonadUtils
+import HsDumpAst
+import Var (varName)
 
 {-
 We are confronted with the first column of patterns in a set of
@@ -92,8 +96,9 @@ matchConFamily :: [Id]
                -> DsM MatchResult
 -- Each group of eqns is for a single constructor
 matchConFamily (var:vars) ty groups
-  = do alts <- mapM (fmap toRealAlt . matchOneConLike vars ty) groups
-       return (mkCoAlgCaseMatchResult var ty alts)
+  = do dflags <- getDynFlags
+       alts <- mapM (fmap toRealAlt . matchOneConLike vars ty) groups
+       return (mkCoAlgCaseMatchResult dflags var ty alts Nothing)
   where
     toRealAlt alt = case alt_pat alt of
         RealDataCon dcon -> alt{ alt_pat = dcon }
@@ -137,10 +142,15 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
                      ; match_result <- match (group_arg_vars ++ vars) ty eqns'
                      ; return (adjustMatchResult (foldr1 (.) wraps) match_result) }
 
+              shift :: (ConArgPats, EquationInfo) -> DsM (DsWrapper, EquationInfo)
               shift (_, eqn@(EqnInfo { eqn_pats = ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
                                                              pat_binds = bind, pat_args = args
                                                   } : pats }))
-                = do ds_bind <- dsTcEvBinds bind
+                = do -- liftIO . putStrLn $ "tvs"
+                     -- liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan tvs
+                     -- liftIO . putStrLn $ "tvs1"
+                     -- liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan tvs1
+                     ds_bind <- dsTcEvBinds bind
                      return ( wrapBinds (tvs `zip` tvs1)
                             . wrapBinds (ds  `zip` dicts1)
                             . mkCoreLets ds_bind
@@ -157,7 +167,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
               groups = groupBy compatible_pats [ (pat_args (firstPat eqn), eqn)
                                                | eqn <- eqn1:eqns ]
 
-        ; match_results <- mapM (match_group arg_vars) groups
+        ; match_results <- mapM (match_group arg_vars) groups :: DsM [MatchResult]
 
         ; return $ MkCaseAlt{ alt_pat = con1,
                               alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
@@ -169,7 +179,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
               = firstPat eqn1
     fields1 = map flSelector (conLikeFieldLabels con1)
 
-    ex_tvs = conLikeExTyVars con1
+    ex_tvs = conLikeExTyVars con1 --Only used for the assert above
 
     -- Choose the right arg_vars in the right order for this group
     -- Note [Record patterns]
