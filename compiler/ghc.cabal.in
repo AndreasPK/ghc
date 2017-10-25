@@ -219,6 +219,7 @@ Library
         Hooks
         Id
         IdInfo
+        LetAlts
         Lexeme
         Literal
         Llvm
@@ -343,6 +344,7 @@ Library
         Match
         MatchCon
         MatchLit
+        MatchTree
         HsBinds
         HsDecls
         HsDoc

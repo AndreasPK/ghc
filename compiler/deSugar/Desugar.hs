@@ -77,7 +77,7 @@ import Plugins ( LoadedPlugin(..) )
 -}
 
 -- | Main entry point to the desugarer.
-deSugar :: HscEnv -> ModLocation -> TcGblEnv -> IO (Messages, Maybe ModGuts)
+deSugar :: HasCallStack => HscEnv -> ModLocation -> TcGblEnv -> IO (Messages, Maybe ModGuts)
 -- Can modify PCS by faulting in more declarations
 
 deSugar hsc_env

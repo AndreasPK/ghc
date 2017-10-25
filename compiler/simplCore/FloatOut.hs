@@ -33,6 +33,8 @@ import qualified Data.IntMap as M
 
 import Data.List        ( partition )
 
+import LetAlts
+
 #include "HsVersions.h"
 
 {-
@@ -169,7 +171,9 @@ floatOutwards :: FloatOutSwitches
 
 floatOutwards float_sws dflags us pgm
   = do {
-        let { annotated_w_levels = setLevels float_sws pgm us ;
+        let { (pgm', us') = (pgm, us);
+                            --letAlts dflags us pgm ;
+              annotated_w_levels = setLevels float_sws pgm' us' ;
               (fss, binds_s')    = unzip (map floatTopBind annotated_w_levels)
             } ;
 

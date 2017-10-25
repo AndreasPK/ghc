@@ -32,7 +32,7 @@ module CoreMap(
    TrieMap(..), insertTM, deleteTM,
    lkDFreeVar, xtDFreeVar,
    lkDNamed, xtDNamed,
-   (>.>), (|>), (|>>),
+   (>.>), (|>), (|>>), deBruijnize
  ) where
 
 #include "HsVersions.h"
