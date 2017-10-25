@@ -6,10 +6,10 @@
 Pattern-matching literal patterns
 -}
 
-{-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, ScopedTypeVariables, FlexibleContexts #-}
 
 module MatchLit ( dsLit, dsOverLit, dsOverLit', hsLitKey
-                , tidyLitPat, tidyNPat
+                , tidyLitPat, tidyNPat, wrap_str_guard
                 , matchLiterals, matchNPlusKPats, matchNPats
                 , warnAboutIdentities, warnAboutOverflowedLiterals
                 , warnAboutEmptyEnumerations
@@ -53,6 +53,7 @@ import Data.Int
 import Data.Word
 import Data.Proxy
 
+
 {-
 ************************************************************************
 *                                                                      *
@@ -66,8 +67,10 @@ We give int/float literals type @Integer@ and @Rational@, respectively.
 The typechecker will (presumably) have put \tr{from{Integer,Rational}s}
 around them.
 
-ToDo: put in range checks for when converting ``@i@''
-(or should that be in the typechecker?)
+There are some invariantes on the numberic Literals which are enforced by
+the mkMach* functions.
+
+ToDo: Decide if String should also refer to the wrapper.
 
 For numeric literals, we try to detect there use at a standard type
 (@Int@, @Float@, etc.) are directly put in the right constructor.
@@ -76,15 +79,19 @@ For numeric literals, we try to detect there use at a standard type
 See also below where we look for @DictApps@ for \tr{plusInt}, etc.
 -}
 
+
+
 dsLit :: HsLit GhcRn -> DsM CoreExpr
 dsLit (HsStringPrim _ s) = return (Lit (MachStr s))
-dsLit (HsCharPrim   _ c) = return (Lit (MachChar c))
-dsLit (HsIntPrim    _ i) = return (Lit (MachInt i))
-dsLit (HsWordPrim   _ w) = return (Lit (MachWord w))
-dsLit (HsInt64Prim  _ i) = return (Lit (MachInt64 i))
-dsLit (HsWord64Prim _ w) = return (Lit (MachWord64 w))
-dsLit (HsFloatPrim  _ f) = return (Lit (MachFloat (fl_value f)))
-dsLit (HsDoublePrim _ d) = return (Lit (MachDouble (fl_value d)))
+dsLit (HsCharPrim   _ c) = return (Lit (mkMachChar c))
+dsLit (HsIntPrim    _ i) = do df <- getDynFlags
+                              return (Lit (mkMachIntWrap df i))
+dsLit (HsWordPrim   _ w) = do df <- getDynFlags
+                              return (Lit (mkMachWordWrap df w))
+dsLit (HsInt64Prim  _ i) = return (Lit (mkMachInt64Wrap i))
+dsLit (HsWord64Prim _ w) = return (Lit (mkMachWord64Wrap w))
+dsLit (HsFloatPrim _ f)  = return (Lit (mkMachFloat (fl_value f)))
+dsLit (HsDoublePrim _ d) = return (Lit (mkMachDouble (fl_value d)))
 dsLit (HsChar _ c)       = return (mkCharExpr c)
 dsLit (HsString _ str)   = mkStringExprFS str
 dsLit (HsInteger _ i _)  = mkIntegerExpr i
@@ -352,10 +359,10 @@ matchLiterals (var:vars) ty sub_groups
                 -- a chain of if-then-else
         ; if isStringTy (idType var) then
             do  { eq_str <- dsLookupGlobalId eqStringName
-                ; mrs <- mapM (wrap_str_guard eq_str) alts
+                ; mrs <- mapM (wrap_str_guard var eq_str) alts
                 ; return (foldr1 combineMatchResults mrs) }
           else
-            return (mkCoPrimCaseMatchResult var ty alts)
+            return (mkCoPrimCaseMatchResult var ty alts Nothing)
         }
   where
     match_group :: [EquationInfo] -> DsM (Literal, MatchResult)
@@ -365,18 +372,18 @@ matchLiterals (var:vars) ty sub_groups
              match_result <- match vars ty (shiftEqns eqns)
              return (hsLitKey dflags hs_lit, match_result)
 
-    wrap_str_guard :: Id -> (Literal,MatchResult) -> DsM MatchResult
-        -- Equality check for string literals
-    wrap_str_guard eq_str (MachStr s, mr)
-        = do { -- We now have to convert back to FastString. Perhaps there
-               -- should be separate MachBytes and MachStr constructors?
-               let s'  = mkFastStringByteString s
-             ; lit    <- mkStringExprFS s'
-             ; let pred = mkApps (Var eq_str) [Var var, lit]
-             ; return (mkGuardedMatchResult pred mr) }
-    wrap_str_guard _ (l, _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
-
 matchLiterals [] _ _ = panic "matchLiterals []"
+
+wrap_str_guard :: Id -> Id -> (Literal,MatchResult) -> DsM MatchResult
+-- Equality check for string literals
+wrap_str_guard var eq_str (MachStr s, mr)
+  = do  { -- We now have to convert back to FastString. Perhaps there
+          -- should be separate MachBytes and MachStr constructors?
+          let s'  = mkFastStringByteString s
+        ; lit    <- mkStringExprFS s'
+        ; let pred = mkApps (Var eq_str) [Var var, lit]
+        ; return (mkGuardedMatchResult pred mr) }
+wrap_str_guard _ _ (l, _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
 
 ---------------------------
 hsLitKey :: DynFlags -> HsLit GhcTc -> Literal

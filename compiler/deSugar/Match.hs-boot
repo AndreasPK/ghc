@@ -5,23 +5,26 @@ import Var      ( Id )
 import TcType   ( Type )
 import DsMonad  ( DsM, EquationInfo, MatchResult )
 import CoreSyn  ( CoreExpr )
-import HsSyn    ( LPat, HsMatchContext, MatchGroup, LHsExpr )
+import HsSyn    ( LPat, HsMatchContext, MatchGroup, LHsExpr, GhcTc )
+import HsPat    ( Pat )
 import Name     ( Name )
-import HsExtension ( GhcTc )
+-- import HsExtension ( Id )
+import Util (HasCallStack)
 
-match   :: [Id]
+match   :: HasCallStack => [Id]
         -> Type
         -> [EquationInfo]
         -> DsM MatchResult
 
-matchWrapper
-        :: HsMatchContext Name
-        -> Maybe (LHsExpr GhcTc)
-        -> MatchGroup GhcTc (LHsExpr GhcTc)
-        -> DsM ([Id], CoreExpr)
+matchWrapper :: HasCallStack
+             => HsMatchContext Name    -- For shadowing warning messages
+             -> Maybe (LHsExpr GhcTc)  -- The scrutinee, if we check a case expr
+             -> MatchGroup GhcTc (LHsExpr GhcTc)   -- Matches being desugared
+             -> DsM ([Id], CoreExpr)   -- Results
 
 matchSimply
-        :: CoreExpr
+        :: HasCallStack
+        => CoreExpr
         -> HsMatchContext Name
         -> LPat GhcTc
         -> CoreExpr
@@ -29,7 +32,8 @@ matchSimply
         -> DsM CoreExpr
 
 matchSinglePat
-        :: CoreExpr
+        :: HasCallStack
+        => CoreExpr
         -> HsMatchContext Name
         -> LPat GhcTc
         -> Type

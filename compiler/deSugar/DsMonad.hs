@@ -94,6 +94,7 @@ import Literal ( mkMachString )
 
 import Data.IORef
 import Control.Monad
+import GHC.Stack
 
 {-
 ************************************************************************
@@ -135,7 +136,7 @@ data MatchResult
                         -- failure point(s). The expression should
                         -- be duplicatable!
 
-data CanItFail = CanFail | CantFail
+data CanItFail = CanFail | CantFail deriving (Eq)
 
 orFail :: CanItFail -> CanItFail -> CanItFail
 orFail CantFail CantFail = CantFail
@@ -201,7 +202,7 @@ runDs hsc_env (ds_gbl, ds_lcl) thing_inside
        ; let final_res
                | errorsFound dflags msgs = Nothing
                | Right r <- res          = Just r
-               | otherwise               = panic "initDs"
+               | otherwise               = pprPanic "initDs" empty
        ; return (msgs, final_res)
        }
   where dflags = hsc_dflags hsc_env
@@ -456,7 +457,7 @@ failWithDs err
   = do  { errDs err
         ; failM }
 
-failDs :: DsM a
+failDs :: HasCallStack => DsM a
 failDs = failM
 
 -- (askNoErrsDs m) runs m

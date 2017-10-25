@@ -6,6 +6,7 @@
 Utilities for desugaring
 
 This module exports some utility functions of no great interest.
+
 -}
 
 {-# LANGUAGE CPP #-}
@@ -16,6 +17,7 @@ module DsUtils (
         firstPat, shiftEqns,
 
         MatchResult(..), CanItFail(..), CaseAlt(..),
+        fmapAltPat,
         cantFailMatchResult, alwaysFailMatchResult,
         extractMatchResult, combineMatchResults,
         adjustMatchResult,  adjustMatchResultDs,
@@ -79,7 +81,11 @@ import qualified GHC.LanguageExtensions as LangExt
 
 import TcEvidence
 
+import Data.Maybe (fromMaybe)
 import Control.Monad    ( zipWithM )
+
+import Debug.Trace
+import Control.Monad.IO.Class (liftIO)
 
 {-
 ************************************************************************
@@ -189,23 +195,28 @@ matchCanFail :: MatchResult -> Bool
 matchCanFail (MatchResult CanFail _)  = True
 matchCanFail (MatchResult CantFail _) = False
 
-alwaysFailMatchResult :: MatchResult
+alwaysFailMatchResult :: HasCallStack => MatchResult
 alwaysFailMatchResult = MatchResult CanFail (\fail -> return fail)
 
-cantFailMatchResult :: CoreExpr -> MatchResult
+cantFailMatchResult :: HasCallStack => CoreExpr -> MatchResult
 cantFailMatchResult expr = MatchResult CantFail (\_ -> return expr)
 
-extractMatchResult :: MatchResult -> CoreExpr -> DsM CoreExpr
+extractMatchResult :: HasCallStack => MatchResult -> CoreExpr -> DsM CoreExpr
 extractMatchResult (MatchResult CantFail match_fn) _
   = match_fn (error "It can't fail!")
 
 extractMatchResult (MatchResult CanFail match_fn) fail_expr = do
     (fail_bind, if_it_fails) <- mkFailurePair fail_expr
+    --traceM "extract:fail_bind"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_bind
+    --traceM "extract:fail_expr"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     body <- match_fn if_it_fails
     return (mkCoreLet fail_bind body)
 
 
 combineMatchResults :: MatchResult -> MatchResult -> MatchResult
+-- | Use the second result as continuation inside the first one.
 combineMatchResults (MatchResult CanFail      body_fn1)
                     (MatchResult can_it_fail2 body_fn2)
   = MatchResult can_it_fail2 body_fn
@@ -219,6 +230,7 @@ combineMatchResults match_result1@(MatchResult CantFail _) _
   = match_result1
 
 adjustMatchResult :: DsWrapper -> MatchResult -> MatchResult
+-- | Wrap the given function around the MatchResult
 adjustMatchResult encl_fn (MatchResult can_it_fail body_fn)
   = MatchResult can_it_fail (\fail -> encl_fn <$> body_fn fail)
 
@@ -252,17 +264,22 @@ mkEvalMatchResult :: Id -> Type -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
   = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)])
 
-mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
+mkGuardedMatchResult :: HasCallStack => CoreExpr -> MatchResult -> MatchResult
 mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
                                      return (mkIfThenElse pred_expr body fail))
 
-mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
+withDefault :: HasCallStack => MatchResult -> Maybe MatchResult -> MatchResult
+withDefault mr def_branch = combineMatchResults mr (fromMaybe alwaysFailMatchResult def_branch)
+
+mkCoPrimCaseMatchResult :: HasCallStack
+                        => Id                        -- Scrutinee
                         -> Type                      -- Type of the case
                         -> [(Literal, MatchResult)]  -- Alternatives
+                        -> Maybe MatchResult         -- Default Branch
                         -> MatchResult               -- Literals are all unlifted
-mkCoPrimCaseMatchResult var ty match_alts
-  = MatchResult CanFail mk_case
+mkCoPrimCaseMatchResult var ty match_alts def_branch
+  = withDefault (MatchResult CanFail mk_case) def_branch
   where
     mk_case fail = do
         alts <- mapM (mk_alt fail) sorted_alts
@@ -274,26 +291,35 @@ mkCoPrimCaseMatchResult var ty match_alts
          do body <- body_fn fail
             return (LitAlt lit, [], body)
 
+fmapAltPat :: HasCallStack => (a -> b) -> CaseAlt a -> CaseAlt b
+fmapAltPat f alt@MkCaseAlt {alt_pat = x} = alt {alt_pat = (f x) }
+
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_bndrs :: [Var],
                             alt_wrapper :: HsWrapper,
                             alt_result :: MatchResult }
 
 mkCoAlgCaseMatchResult
-  :: DynFlags
+  :: HasCallStack
+  => DynFlags
   -> Id                 -- Scrutinee
   -> Type               -- Type of exp
   -> [CaseAlt DataCon]  -- Alternatives (bndrs *include* tyvars, dicts)
+  -> Maybe MatchResult  -- Default Branch
   -> MatchResult
-mkCoAlgCaseMatchResult dflags var ty match_alts
-  | isNewtype  -- Newtype case; use a let
+mkCoAlgCaseMatchResult dflags var ty match_alts def_branch
+  | isNewtype  -- Newtype case; use a let;
   = ASSERT( null (tail match_alts) && null (tail arg_ids1) )
-    mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1
+    withDefault
+      (mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1)
+      def_branch
 
   | isPArrFakeAlts match_alts
-  = MatchResult CanFail $ mkPArrCase dflags var ty (sort_alts match_alts)
+  = withDefault
+    (mkPArrCase dflags var ty (sort_alts match_alts))
+    def_branch
   | otherwise
-  = mkDataConCase var ty match_alts
+  = withDefault (mkDataConCase var ty match_alts) def_branch
   where
     isNewtype = isNewTyCon (dataConTyCon (alt_pat alt1))
 
@@ -362,7 +388,7 @@ mkPatSynCase var ty alt fail = do
     ensure_unstrict cont | needs_void_lam = Lam voidArgId cont
                          | otherwise      = cont
 
-mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkDataConCase :: HasCallStack => Id -> Type -> [CaseAlt DataCon] -> MatchResult
 mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
 mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
   where
@@ -416,12 +442,12 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
 --   parallel arrays, which are introduced by `tidy1' in the `PArrPat'
 --   case
 --
-mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> CoreExpr
-           -> DsM CoreExpr
-mkPArrCase dflags var ty sorted_alts fail = do
-    lengthP <- dsDPHBuiltin lengthPVar
-    alt <- unboxAlt
-    return (mkWildCase (len lengthP) intTy ty [alt])
+mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkPArrCase dflags var ty sorted_alts =
+    MatchResult CanFail $ (\fail_expr -> do
+      lengthP <- dsDPHBuiltin lengthPVar
+      alt <- unboxAlt fail_expr :: DsM CoreAlt
+      return (mkWildCase (len lengthP) intTy ty [alt]))
   where
     elemTy      = case splitTyConApp (idType var) of
         (_, [elemTy]) -> elemTy
@@ -429,13 +455,14 @@ mkPArrCase dflags var ty sorted_alts fail = do
     panicMsg    = "DsUtils.mkCoAlgCaseMatchResult: not a parallel array?"
     len lengthP = mkApps (Var lengthP) [Type elemTy, Var var]
     --
-    unboxAlt = do
+    unboxAlt :: CoreExpr -> DsM CoreAlt
+    unboxAlt fail_expr = do
         l      <- newSysLocalDs intPrimTy
         indexP <- dsDPHBuiltin indexPVar
-        alts   <- mapM (mkAlt indexP) sorted_alts
-        return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
+        alts   <- mapM (mkAlt indexP fail_expr) sorted_alts
+        return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft fail_expr: alts))
       where
-        dft  = (DEFAULT, [], fail)
+        dft fail_expr = (DEFAULT, [], fail_expr)
 
     --
     -- each alternative matches one array length (corresponding to one
@@ -444,8 +471,8 @@ mkPArrCase dflags var ty sorted_alts fail = do
     -- constructor argument, which are bound to array elements starting
     -- with the first
     --
-    mkAlt indexP alt@MkCaseAlt{alt_result = MatchResult _ bodyFun} = do
-        body <- bodyFun fail
+    mkAlt indexP fail_expr alt@MkCaseAlt{alt_result = MatchResult _ bodyFun} = do
+        body <- bodyFun fail_expr
         return (LitAlt lit, [], mkCoreLets binds body)
       where
         lit   = MachInt $ toInteger (dataConSourceArity (alt_pat alt))
@@ -740,7 +767,8 @@ mkSelectorBinds ticks pat val_expr
   = return (v, [(v, val_expr)])
 
   | is_flat_prod_lpat pat'           -- Special case (B)
-  = do { let pat_ty = hsLPatType pat'
+  = do { --traceM "mkSelector:B"
+       ; let pat_ty = hsLPatType pat'
        ; val_var <- newSysLocalDsNoLP pat_ty
 
        ; let mk_bind tick bndr_var
@@ -918,8 +946,16 @@ mkFailurePair expr
   = do { fail_fun_var <- newFailLocalDs (voidPrimTy `mkFunTy` ty)
        ; fail_fun_arg <- newSysLocalDs voidPrimTy
        ; let real_arg = setOneShotLambda fail_fun_arg
-       ; return (NonRec fail_fun_var (Lam real_arg expr),
-                 App (Var fail_fun_var) (Var voidPrimId)) }
+       ; let result = (NonRec fail_fun_var (Lam real_arg expr),
+                 App (Var fail_fun_var) (Var voidPrimId))
+       {-
+       ; traceM "mkFailurePair:result"
+       ; liftIO . putStrLn . showSDocUnsafe $ ppr result
+       ; traceM "mkFailurePair:argument"
+       ; liftIO . putStrLn . showSDocUnsafe $ ppr expr
+       -}
+
+       ; return result }
   where
     ty = exprType expr
 
