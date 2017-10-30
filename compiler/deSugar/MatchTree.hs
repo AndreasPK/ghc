@@ -87,7 +87,7 @@ Constraints are the sum of all constraints applicable to a rhs.
 -}
 
 data CondValue 
-    = LitCond { cv_lit :: Literal }
+    = LitCond { cv_lit :: HsLit GhcTc }
     | ConCond 
         { cv_tag :: ConTag
         , cv_type :: TyCon }
@@ -135,6 +135,11 @@ type PatternColumn e = Seq.Seq (Entry e)
 
 type TreeEquation = PatternEquation Occurrence MatrixRHS
 
+
+{-# INLINE addKnowledge #-}
+addKnowledge :: DecompositionKnowledge -> Occurrence -> (Either [CondValue] CondValue) -> DecompositionKnowledge
+addKnowledge knowledge occ information =
+    Map.insert occ information knowledge 
 
 
 
@@ -682,7 +687,7 @@ getPatternConstraint (LitPat lit) occ = do
     df <- getDynFlags
     return $ Just $ 
         (occ, Just 
-            (LitCond (hsLitKey df lit))
+            (LitCond (lit))
         )
 getPatternConstraint NPlusKPat {} occ = 
     error "Not implemented NPK"
@@ -713,17 +718,26 @@ Recursive match function. Parameters are:
     * (CoreExpr,Constraint) -> The default expr for match failure and the associated
         Constraint.
 -}
-matchWith :: Heuristic -> CPM -> DecompositionKnowledge -> CoreExpr -> DsM MatchResult
+matchWith :: Heuristic -> CPM -> DecompositionKnowledge -> MatchResult -> DsM MatchResult
 matchWith heuristic m knowledge failExpr = do
     --deepseq (m,knowledge) (return ())
     --let heuristic = leftToRight
     let pickRhs = 
-            let (expr, constraints) = getRhs m 0
+            let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
             in  resolveConstraints m knowledge expr constraints
     when (null m) (error "Matching empty matrix")
     let matchCol = heuristic m :: Maybe Int 
     case matchCol of
         Nothing -> pickRhs
+        Just colIndex -> mkCase heuristic m knowledge colIndex failExpr
+
+matchWith heuristic m knowledge failExpr = do
+    when (null m) (error "Matching empty matrix")
+    let matchCol = heuristic m :: Maybe Int 
+    case matchCol of
+        Nothing -> do
+            let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
+            resolveConstraints m knowledge expr constraints
         Just colIndex -> mkCase heuristic m knowledge colIndex failExpr
 
 {-
@@ -737,11 +751,13 @@ So (Number 1) and (Number 2) would be put into different Groups.
 data PGrp
     = VarGrp
     | ConGrp (Int)
-    | LitGrp (HsLit Var)
+    | LitGrp (HsLit GhcTc)
     deriving (Eq, Ord) -- , Show, Ord)
 
 --deriving instance Eq (HsLit Var)
 deriving instance Ord (HsLit Var)
+deriving instance Ord (HsLit GhcTc)
+
 --deriving instance Eq (Var)
 --deriving instance Ord (Var)
 
@@ -752,6 +768,7 @@ deriving instance Ord (HsLit Var)
 getGrp :: Entry e -> PGrp
 getGrp (p, _e ) = patGroup p
 
+patGroup :: Pat GhcTc -> PGrp
 patGroup (WildPat {} ) = VarGrp
 -- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
 patGroup (BangPat (L _loc p)) = patGroup p
@@ -766,40 +783,10 @@ patGroup (LitPat lit) = LitGrp lit
 
 --Unpack the constructor at the given column in the matrix
 unpackCol :: HasCallStack => CPM -> Int -> CPM
-unpackCol pm splitColIndex =
-    if arity == 0 
-        then withoutCol pm
-        else insertCols (withoutCol pm) splitColIndex $ newColumns pm
-        where
-            baseOccurrence m = snd $ getElement m 0 splitColIndex
-            withoutCol m = deleteCol m splitColIndex :: CPM
-            baseCol = (getCol pm splitColIndex)
-            anyConEntry = do
-                index_ <- findIndexL (\x -> case getGrp x of {ConGrp _tag -> True; _ -> False}) baseCol
-                Seq.lookup index_ baseCol
-            arity_ m = maybe (error "No constructor to unpack found") (P.length . pArgs . fst) anyConEntry  :: Int
-            arity = arity_ pm
-            args col = fmap 
-                (\x -> case getGrp x of
-                    ConGrp _t -> pArgs (fst x)
-                    VarGrp    -> L.replicate arity LP 
-                )
-                col -- :: Seq [SimplePattern]
-            --one column top down
-            buildColum m colIndex = fmap 
-                (\args -> 
-                    let patEntry = args !! colIndex
-                        occEntry = (baseOccurrence m) ++ [colIndex]
-                    in
-                    (patEntry, occEntry)
-                )
-                (args $ getCol m splitColIndex)
-                :: Seq (Entry Occurrence)
-            --list of columns left right (Seq top down)
-            newColumns m = map (\col -> buildColum m col) [0..(arity :: Int)-1] :: [Seq (Entry Occurrence)]
+unpackCol pm splitColIndex = error "Not implemented" -- see patternBench
 
 
-mkCase :: Heuristic -> CPM -> DecompositionKnowledge -> Int -> CoreExpr -> DsM MatchResult
+mkCase :: Heuristic -> CPM -> DecompositionKnowledge -> Int -> MatchResult -> DsM MatchResult
 -- TODO: Extend from just literals
 mkCase heuristic m knowledge colIndex failExpr =
     let column = getCol m colIndex
@@ -809,7 +796,7 @@ mkCase heuristic m knowledge colIndex failExpr =
         scrutinee = varToCoreExpr occ :: CoreExpr
 
         groupRows :: Map PGrp (Set Int)
-        groupRows = foldlWithIndex
+        groupRows = Seq.foldlWithIndex
             (\grps i a -> msInsert grps (getGrp a) i )
             Map.empty
             column -- :: Map PGrp (Set Int)
@@ -818,12 +805,25 @@ mkCase heuristic m knowledge colIndex failExpr =
         grps = Map.keys groupRows :: [PGrp]
         cgrps = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) grps :: [PGrp]
         hasDefaultGroup = Map.member VarGrp groupRows :: Bool
-        defaultExcludes = mapMaybe (\g -> case g of { VarGrp -> Nothing; ConGrp i -> Just i} ) $ Map.keys groupRows :: [ConTag]
 
-        newEvidence grp = 
-            case grp of
-                VarGrp -> Left defaultExcludes
-                ConGrp i -> Right i
+        defaultExcludes :: [CondValue]
+        defaultExcludes = mapMaybe grpCond cgrps
+            --mapMaybe (\g -> case g of { VarGrp -> Nothing; ConGrp i -> Just i} ) $ Map.keys groupRows :: [ConTag]
+
+        grpCond :: PGrp -> Maybe CondValue
+        grpCond (LitGrp lit) =
+            Just (LitCond lit)
+        grpCond (VarGrp) =  
+            Nothing
+        grpCond _ = error "Not implemented grpCond"
+
+        newEvidence :: PGrp -> Either [CondValue] CondValue
+        -- Returns evidence gained by selecting this branch/grp
+        newEvidence (VarGrp) =  
+            Left defaultExcludes
+        newEvidence grp =
+            Right . fromJust . grpCond $ grp
+        
         getSubMatrix :: [Int] -> CPM
         getSubMatrix rows =
             fmap fromJust $ Seq.filter isJust $ Seq.mapWithIndex (\i r -> if (i `elem` rows) then Just r else Nothing) m :: CPM
@@ -836,18 +836,20 @@ mkCase heuristic m knowledge colIndex failExpr =
                 VarGrp    -> deleteCol matrix colIndex
                 ConGrp _i -> unpackCol matrix colIndex
         
-        groupExpr :: PGrp -> DsM (CoreExpr)
-        groupExpr grp =
-            matchWith heuristic (newMatrix grp) (Map.insert occ (newEvidence grp) knowledge) failExpr
+        groupExpr :: PGrp -> DsM MatchResult
+        groupExpr grp = do
+            let newKnowledge = (Map.insert occ (newEvidence grp) knowledge)
+            matchWith heuristic (newMatrix grp) newKnowledge failExpr
 
+        defaultAlternative :: DsM MatchResult
         defaultAlternative = if hasDefaultGroup
             then
-                groupExpr VarGrp
+                MatchResult $ CanFail $ extractMatchResult failExpr $ groupExpr VarGrp
             else
-                return failExpr  
+                return $ failExpr
         
         --generate the alternative for a entry grp
-        mkAlt :: PGrp -> DsM CoreExpr
+        mkAlt :: PGrp -> DsM MatchResult
         mkAlt (LitGrp l@(HsInt {})) = do
             let coreLit = dsLit l
             undefined
@@ -890,7 +892,7 @@ matrixOcc :: CPM -> [Occurrence]
 matrixOcc m = F.toList $ fmap (snd) $ getRow m 0
 
 
-resolveConstraints :: CPM -> DecompositionKnowledge -> CoreExpr -> Constraints -> DsM MatchResult
+resolveConstraints :: CPM -> DecompositionKnowledge -> MatchResult -> Constraints -> DsM MatchResult
 resolveConstraints m knowledge expr constraints = do
     -- TODO
     {-
@@ -908,9 +910,9 @@ resolveConstraints m knowledge expr constraints = do
         then --trace "BaseCase" $ 
             return expr
         else --trace "solveCase" 
-            mkConstraintCase m knowledge expr simplifiedConstraints
+            return $ cantFailMatchResult $ mkConstraintCase m knowledge expr simplifiedConstraints
 
-mkConstraintCase :: CPM -> DecompositionKnowledge -> CoreExpr -> Constraints -> DsM MatchResult
+mkConstraintCase :: CPM -> DecompositionKnowledge -> CoreExpr -> Constraints -> DsM CoreExpr
 {-
 Resolve at least one constraint by introducing a additional case statement
 -}
