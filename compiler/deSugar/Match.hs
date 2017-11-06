@@ -56,6 +56,9 @@ import Control.Monad( when, unless )
 import qualified Data.Map as Map
 import Data.List (groupBy)
 
+import Data.Either (isRight)
+import qualified MatchTree
+
 {-
 ************************************************************************
 *                                                                      *
@@ -171,22 +174,30 @@ match [] ty eqns
                       eqn_rhs eqn
                     | eqn <- eqns ]
 
+
 match vars@(v:_) ty eqns    -- Eqns *can* be empty
   = ASSERT2( all (isInternalName . idName) vars, ppr vars )
     do  { dflags <- getDynFlags
-                -- Tidy the first pattern, generating
-                -- auxiliary bindings if necessary
-        ; (aux_binds, tidy_eqns) <- mapAndUnzipM (tidyEqnInfo v) eqns
+        ; treeResult <- tryM (MatchTree.match vars ty eqns)
+        ; case treeResult of
+            Right matchResult -> return matchResult
+            Left _ -> do 
+              {
+                      -- Tidy the first pattern, generating
+                      -- auxiliary bindings if necessary
+                (aux_binds, tidy_eqns) <- mapAndUnzipM (tidyEqnInfo v) eqns
 
-                -- Group the equations and match each group in turn
-        ; let grouped = groupEquations dflags tidy_eqns
+                      -- Group the equations and match each group in turn
+              ; let grouped = groupEquations dflags tidy_eqns
 
-         -- print the view patterns that are commoned up to help debug
-        ; whenDOptM Opt_D_dump_view_pattern_commoning (debug grouped)
+              -- print the view patterns that are commoned up to help debug
+              ; whenDOptM Opt_D_dump_view_pattern_commoning (debug grouped)
 
-        ; match_results <- match_groups grouped
-        ; return (adjustMatchResult (foldr (.) id aux_binds) $
-                  foldr1 combineMatchResults match_results) }
+              ; match_results <- match_groups grouped
+              ; return (adjustMatchResult (foldr (.) id aux_binds) $
+                        foldr1 combineMatchResults match_results) 
+              }
+        }
   where
     dropGroup :: [(PatGroup,EquationInfo)] -> [EquationInfo]
     dropGroup = map snd
