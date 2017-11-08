@@ -105,24 +105,36 @@ data CondValue
 instance Outputable CondValue where
     ppr (ConCond con) = lparen O.<> text "ConVal " O.<> ppr con O.<> rparen
     ppr (LitCond lit) = lparen O.<> text "LitVal " O.<> ppr (lit) O.<> rparen
-    
 
+data PatInfo 
+    = PatInfo 
+    { patCol :: [Int]
+    , patOcc :: !Occurrence }
+    deriving (Eq, Ord)
+
+instance Outputable PatInfo where
+    ppr info = lparen O.<> text "PatInfo " O.<> ppr (patCol info, patOcc info) O.<> rparen
 
 --Represents knowledge about the given occurence.
 --Left => Constructors which the Occurence does not match.
 --Right Tag => Occurence matches the constructor.
 type Evidence = (Occurrence, (Either [CondValue] CondValue))
 
+{-
+Taking apart nested constructors (W (A B)) requires us to insert new conditions into the list of conditions
+In order to facilitate this we keep the PatInfo of the original pattern around which allows as to insert
+new conditions in the middle of the list based on the patCol
+-}
 --Represents a condition on the given occurence. Nothing represents evaluation.
 --Just => Occurence matches the constructor.
 --Nothing -> Just evaluation
-type Condition = (Occurrence, Maybe CondValue)
+type Condition = (PatInfo, Maybe CondValue)
 type Conditions = [Condition]
 
 type Constraint = Conditions
 type Constraints = [Constraint]
 
-type CPM = PM MatchId MatrixRHS
+type CPM = PM PatInfo MatrixRHS
 {--
  Set of all occurences and the constructor it was evaluated to.
  We generate no knowledge for default branches
@@ -132,7 +144,7 @@ type DecompositionKnowledge = Map Occurrence (Either [CondValue] CondValue)
 type Heuristic = CPM -> Maybe Int
 
 -- Matrix Types
-type EqMatrix = PM MatchId MatrixRHS
+type EqMatrix = PM PatInfo MatrixRHS
 
 type MatrixRHS = (MatchResult, Constraints)
 
@@ -147,7 +159,7 @@ type PatternEquation e rhs = (Seq.Seq (Entry e), rhs)
 type PatternRow e = Seq.Seq (Entry e)
 type PatternColumn e = Seq.Seq (Entry e)
 
-type TreeEquation = PatternEquation Occurrence MatrixRHS
+type TreeEquation = PatternEquation PatInfo MatrixRHS
 
 -- "Debug" instances
 instance Outputable a => Outputable (Seq a) where
@@ -217,8 +229,16 @@ toMatrixRow :: HasCallStack => [MatchId] -> EquationInfo -> DsM (TreeEquation)
 -}
 toMatrixRow vars (EqnInfo pats rhs) = do
     liftIO $ traceM "tidyRow"
-    tidied <- mapM tidyEntry $ zip pats vars :: DsM [(DsWrapper, Entry MatchId)]
+    let patternInfos = zipWith (\occ col -> PatInfo {patOcc = occ, patCol = [col]}) vars [0..]
+    liftIO . putStrLn . showSDocUnsafe $ ppr patternInfos
+    let entries = zip pats $ patternInfos
+    tidied <- mapM tidyEntry entries :: DsM [(DsWrapper, Entry PatInfo)]
     seq tidied $ traceM "rowDone:"
+    liftIO . putStrLn . showSDocUnsafe $ ppr pats
+    liftIO . putStrLn . showSDocUnsafe $ ppr vars
+    liftIO . putStrLn . showSDocUnsafe $ ppr "Pats + Vars"
+    
+    
     liftIO . putStrLn . showSDocUnsafe $ ppr $ map snd tidied
     let (wrappers, pats) = unzip tidied
     liftIO $ putStrLn "AdjustMatch"
@@ -227,13 +247,16 @@ toMatrixRow vars (EqnInfo pats rhs) = do
 
 
 
-tidyEntry :: HasCallStack => Entry Occurrence -> DsM (DsWrapper, Entry MatchId)
-tidyEntry (pat, occ) = do
+tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
+tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
     liftIO $ putStrLn "tidyEntry"
-    (wrapper, pat) <- tidy1 occ pat
-
+    (wrapper, newPat) <- tidy1 occ pat
+    liftIO . putStrLn . showSDocUnsafe $ ppr newPat
+    liftIO . putStrLn $ "newPat"
+    
+    
     liftIO $ putStrLn "tidied"
-    return $ (wrapper, (pat, occ))
+    return $ (wrapper, (newPat, info))
 
 
 
@@ -461,13 +484,13 @@ push_bang_into_newtype_arg _ _ cd
 
 
 
-strictColumn :: PatternColumn MatchId -> Bool
+strictColumn :: PatternColumn e -> Bool
 strictColumn = all (isStrict . fst)
 
 strictSet :: HasCallStack => EqMatrix -> [Int]
 --TODO: Include columns of 
 strictSet m = 
-    let firstRow = getRow m 0 :: PatternRow MatchId
+    let firstRow = getRow m 0 :: PatternRow PatInfo
         start = Seq.findIndexL (isStrict . fst) firstRow :: Maybe Int
         columns = [0.. fromJust (columnCount m) - 1] :: [Int]
         strictColumns = filter (strictColumn . getCol m) columns :: [Int]
@@ -693,25 +716,21 @@ getConConstraint (RealDataCon dcon) = ConCond dcon
 getConConstraint (PatSynCon  scon ) = pprPanic "PatSynCon constraint not implemented" $ ppr scon
 
 
-getPatternConstraint :: HasCallStack => Pat GhcTc -> Occurrence -> DsM (Maybe Condition)
+getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
 -- | The conditions imposed on the RHS by this pattern.
 -- Result can have no condition, just evaluation or impose a condition on the
 -- following constraints
-getPatternConstraint (LitPat lit) occ = do
+getPatternConstraint ((LitPat lit),info) = do
     df <- getDynFlags :: DsM DynFlags
-    return $ Just $ 
-        (occ, Just 
-            (LitCond (lit))
-        )
-getPatternConstraint (ConPatOut { pat_con = con}) occ = do
+    return $ Just $ (info, Just (LitCond (lit)) )
+getPatternConstraint ((ConPatOut { pat_con = con}), info) = do
     -- TODO: Extend for nested arguments
     df <- getDynFlags :: DsM DynFlags
     traceM "conConstraint"
-    return $ Just $
-        (occ, Just $ getConConstraint $ unLoc con)
-getPatternConstraint WildPat {} occ = traceM "wp" >> return Nothing
-getPatternConstraint VarPat {} occ = traceM "vp" >> return Nothing
-getPatternConstraint p occ = traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
+    return $ Just $  (info, Just $ getConConstraint $ unLoc con)
+getPatternConstraint (WildPat {}, info) = traceM "wp" >> return Nothing
+getPatternConstraint (VarPat {}, info) = traceM "vp" >> return Nothing
+getPatternConstraint (p, info) = traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
 {-
 getPatternConstraint NPat {} occ = 
     error "TODO"
@@ -722,7 +741,7 @@ getPatternConstraint ConPatOut {} _ = error "ConPat not done" -}
 
 
 --Build up constraints within a row from left to right.
-rowConstraint :: (HasCallStack, Foldable t) => t (Entry Occurrence) -> DsM Constraint
+rowConstraint :: (HasCallStack, Foldable t) => t (Entry PatInfo) -> DsM Constraint
 rowConstraint entries = do
     traceM "rowConstraint"
     crow <- foldM (buildConstraint) [] entries
@@ -730,14 +749,14 @@ rowConstraint entries = do
     traceM "row done"
     return crow
         where
-            buildConstraint :: Conditions -> Entry Occurrence -> DsM Conditions
+            buildConstraint :: Conditions -> Entry PatInfo -> DsM Conditions
             buildConstraint preConditions entry = do
                 traceM "buildConstraint"
                 let (pattern, occurrence) = entry
                 traceM "getPatConstraint"
                 liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan pattern
                 traceM "patBuildCons"
-                constraint <- uncurry getPatternConstraint entry
+                constraint <- getPatternConstraint entry
                 liftIO $ putStrLn . showSDocUnsafe $ ppr constraint
                 case constraint of
                     Just c -> return $ preConditions ++ [c] --TODO: Don't append at end
@@ -958,11 +977,11 @@ occColIndex m occ
         Seq.findIndexL (\p -> occ == snd p) row
     
 -- :: (a -> Bool) -> Seq a -> Maybe Int
-colOcc :: PatternColumn Occurrence -> Occurrence
-colOcc c = snd $ Seq.index c 0
+colOcc :: PatternColumn PatInfo -> Occurrence
+colOcc c = patOcc . snd $ Seq.index c 0
 
 matrixOcc :: CPM -> [Occurrence]
-matrixOcc m = F.toList $ fmap (snd) $ getRow m 0
+matrixOcc m = F.toList $ fmap (patOcc . snd) $ getRow m 0
 
 
 resolveConstraints :: HasCallStack => CPM -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
@@ -993,9 +1012,11 @@ Resolve at least one constraint by introducing a additional case statement
 -}
 mkConstraintCase m knowledge constraints =
     --traceShowM ("mkConstraint", knowledge, expr, constraints)
-    let cond@(occ,conVal) = head . head $ constraints :: Condition
+    let cond@(info,conVal) = head . head $ constraints :: Condition
+        occ = patOcc info :: Occurrence
         ty = varType occ :: Kind
-        occValues = concatMap (\constraint -> foldMap (\cond -> if fst cond == occ then [conVal] else []) constraint) constraints :: [Maybe CondValue]
+        occValues = concatMap 
+            (\constraint -> foldMap (\(info, condVal) -> if (patOcc info) == occ then [conVal] else []) constraint) constraints :: [Maybe CondValue]
         occVals = nub $ catMaybes occValues :: [CondValue]
         newEvidence condVal = Right condVal
 
@@ -1050,8 +1071,9 @@ simplifyConstraint :: HasCallStack => Constraint -> DecompositionKnowledge -> Co
 --Take a constraint and remove all entries which are satisfied
 simplifyConstraint constraint knowledge =
     L.filter 
-        (\cond@(occ,_) -> 
-            let evidence = fromJust $ Map.lookup occ knowledge :: Either [CondValue] CondValue
+        (\cond@(info,_) ->
+            let occ = patOcc info :: Occurrence 
+                evidence = fromJust $ Map.lookup occ knowledge :: Either [CondValue] CondValue
                 m = case evidenceMatchesCond (occ, evidence) cond of
                         Nothing -> False
                         Just False -> False
@@ -1062,7 +1084,8 @@ simplifyConstraint constraint knowledge =
         constraint
 
 knowledgeMatchesCond :: HasCallStack => DecompositionKnowledge -> Condition -> Maybe Bool
-knowledgeMatchesCond knowledge condition@(occ, _occVal) = do
+knowledgeMatchesCond knowledge condition@(info, _occVal) = do
+    let occ = patOcc info
     evidence <- Map.lookup occ knowledge :: Maybe (Either [CondValue] CondValue)
     evidenceMatchesCond (occ, evidence) condition
 
@@ -1076,7 +1099,7 @@ knowledgeMatchesCond knowledge condition@(occ, _occVal) = do
 * We can't tell
 -} 
 evidenceMatchesCond :: HasCallStack => Evidence -> Condition -> Maybe Bool
-evidenceMatchesCond (eOcc, eVal) (cOcc, cVal)
+evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
     | eOcc /= cOcc = Nothing
     | eOcc == cOcc && cVal == Nothing = Just True
     | otherwise =
@@ -1088,10 +1111,8 @@ evidenceMatchesCond (eOcc, eVal) (cOcc, cVal)
                     (Right evidence) -> Just $ evidence == condVal
                     (Left evs) -> if (any (==condVal) evs) then Just False else Nothing
         in match (fromJust cVal)
-                
-
-
-
+    where
+        cOcc = patOcc cInfo :: Occurrence
 {- 
 
 data CondValue 
