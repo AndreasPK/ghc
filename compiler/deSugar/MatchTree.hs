@@ -855,8 +855,12 @@ patGroup _ = error "Not implemented"
 
 --Unpack the constructor at the given column in the matrix
 unpackCol :: HasCallStack => CPM -> Int -> DsM CPM
-unpackCol pm splitColIndex = WARN (False, text "Unpack stub")
-    return $ deleteCol pm splitColIndex
+unpackCol pm splitColIndex = WARN (False, text "Unpack stub") $ do
+    let originalColumn = getCol pm splitColIndex
+    let withoutCol = deleteCol pm splitColIndex
+    
+    
+    error "TODO"
      -- see patternBench
 
 
