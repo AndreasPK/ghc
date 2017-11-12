@@ -960,21 +960,8 @@ mkCase heuristic ty m knowledge colIndex failExpr =
         
         --TODO: Move into own function, PatSynonyms
         -}
-        entries = getGrpPats grp :: [Entry PatInfo]
-        firstPat = fst . head $ entries :: Pat GhcTc
-        firstPatInfo = snd . head $ entries :: PatInfo
-                
-        getNewConMatrix :: PGrp -> [Pat GhcTc] -> [Id] -> DsM CPM
-        getNewConMatrix ConGrp {} pat_args vars = 
-            let mkEntry :: Pat GhcTc -> Id -> Int -> Entry PatInfo
-                mkEntry pat occ col = 
-                    (pat
-                    ,PatInfo { patOcc = occ
-                             , patCol = patCol firstPatInfo ++ col}
-                             )
-                entries = zipWith3 mkEntry pat_args vars [0..]
-            in do
-                
+
+
 
             
         getNewConMatrix ConGrp {} = error "Constructor group2"
@@ -986,6 +973,22 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                     = firstPat
 
                 fields1 = map flSelector (conLikeFieldLabels con1)
+
+                entries = getGrpPats grp :: [Entry PatInfo]
+                firstPat = fst . head $ entries :: Pat GhcTc
+                firstPatInfo = snd . head $ entries :: PatInfo
+                        
+                getNewConMatrix :: PGrp -> [Pat GhcTc] -> [Id] -> DsM CPM
+                getNewConMatrix grp@ConGrp {} pat_args vars = 
+                    let mkEntry :: Pat GhcTc -> Id -> Int -> Entry PatInfo
+                        mkEntry pat occ col = 
+                            (pat
+                            ,PatInfo { patOcc = occ
+                                    , patCol = patCol firstPatInfo ++ [col] }
+                                    )
+                        entries = zipWith3 mkEntry pat_args vars [0..]
+                    in do
+                    undefined
 
                 -- Choose the right arg_vars in the right order for this group
                 -- Note [Record patterns]
@@ -1044,11 +1047,13 @@ mkCase heuristic ty m knowledge colIndex failExpr =
 
             ds_bind <- dsTcEvBinds bind
 
+            let match_results = undefined
+
             expr <- groupExpr grp -- TODO: Fix?
             return $ MkCaseAlt{ alt_pat = con1,
                                 alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
                                 alt_wrapper = wrapper1,
-                                alt_result = foldr1 combineMatchResults match_results } }
+                                alt_result = foldr1 combineMatchResults match_results }
             return $ (DataAlt con, [], wrapper expr)
         mkConAlt _ = error "mkConAlt - No Constructor Grp"
 
