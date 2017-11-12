@@ -61,6 +61,9 @@ import qualified Data.List as L
 import Control.Monad 
 import qualified Outputable as O ((<>))
 import Data.Ratio
+import NameEnv
+import MatchCon (selectConMatchVars)
+import Var (EvVar)
 
 
 --import Pattern.SimplePatterns
@@ -81,6 +84,9 @@ import HsDumpAst
 type MatchId = Id   -- See Note [Match Ids]
 
 type Occurrence = MatchId
+
+--Also defined in MatchCon
+type ConArgPats = HsConDetails (LPat GhcTc) (HsRecFields GhcTc (LPat GhcTc))
 
 {-
 Our system is such that:
@@ -855,7 +861,8 @@ patGroup _ = error "Not implemented"
 
 --Unpack the constructor at the given column in the matrix
 unpackCol :: HasCallStack => CPM -> Int -> DsM CPM
-unpackCol pm splitColIndex = WARN (False, text "Unpack stub") $ do
+unpackCol pm splitColIndex = do 
+    WARN (False, text "Unpack stub") (return ())
     let originalColumn = getCol pm splitColIndex
     let withoutCol = deleteCol pm splitColIndex
     
@@ -879,14 +886,7 @@ mkCase heuristic ty m knowledge colIndex failExpr =
             []
             column -- :: Map PGrp (Set Int)
 
-        {-
-        groupRows :: Map PGrp (Set Int)
-        groupRows = Seq.foldlWithIndex
-            (\grps i a -> msInsert grps (getGrp a) i )
-            Map.empty
-            column -- :: Map PGrp (Set Int)
-        -}
-        
+
         defRows = fromMaybe [] $ getGrpEntries VarGrp groupRows :: [Int]
         grps = map fst groupRows :: [PGrp]
         cgrps = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) grps :: [PGrp]
@@ -894,7 +894,6 @@ mkCase heuristic ty m knowledge colIndex failExpr =
 
         defaultExcludes :: [CondValue]
         defaultExcludes = mapMaybe grpCond cgrps
-            --mapMaybe (\g -> case g of { VarGrp -> Nothing; ConGrp i -> Just i} ) $ Map.keys groupRows :: [ConTag]
 
         grpCond :: PGrp -> Maybe CondValue
         grpCond (LitGrp lit) =
@@ -905,6 +904,12 @@ mkCase heuristic ty m knowledge colIndex failExpr =
             Just (ConCond dcon)
         grpCond _ = error "Not implemented grpCond"
 
+        condVars :: PGrp -> Maybe [Var]
+        condVars (ConGrp dcon) = Just $
+            error "TODO"
+        condVars _ =
+            Nothing
+
         newEvidence :: PGrp -> Either [CondValue] CondValue
         -- Returns evidence gained by selecting this branch/grp
         newEvidence (VarGrp) =  
@@ -914,11 +919,14 @@ mkCase heuristic ty m knowledge colIndex failExpr =
 
         getGrpRows :: PGrp -> [Int]
         getGrpRows grp = concatMap snd $ filter (\x -> fst x == grp) groupRows
-        
+     
         getSubMatrix :: [Int] -> CPM
         getSubMatrix rows =
             fmap fromJust $ Seq.filter isJust $ Seq.mapWithIndex (\i r -> if (i `elem` rows) then Just r else Nothing) m :: CPM
         getNewMatrix :: PGrp -> DsM CPM
+        -- Since we have to "splice in" the constructor arguments which requires more setup we deal
+        -- with Constructor groups in another function
+        getNewMatrix ConGrp {} = error "Constructor group"
         getNewMatrix grp = 
             let rows = getGrpRows grp :: [Int]
                 matrix = getSubMatrix rows
@@ -929,6 +937,7 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                 ConGrp con  | dataConSourceArity con == 0 -> return $ deleteCol matrix colIndex
                             | otherwise                   -> unpackCol matrix colIndex
         
+
         groupExpr :: PGrp -> DsM CoreExpr
         groupExpr grp = do
             let newKnowledge = (Map.insert occ (newEvidence grp) knowledge)
@@ -944,15 +953,127 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                 -- | Add a check for exhaustivness
                 return $ Just failExpr
         
+
+        {- Generate the alternatives for nested constructors,
+         this is somewhat more complex as we need to get vars,
+         treat type arguments and so on.
+        
+        --TODO: Move into own function, PatSynonyms
+        -}
+        entries = getGrpPats grp :: [Entry PatInfo]
+        firstPat = fst . head $ entries :: Pat GhcTc
+        firstPatInfo = snd . head $ entries :: PatInfo
+                
+        getNewConMatrix :: PGrp -> [Pat GhcTc] -> [Id] -> DsM CPM
+        getNewConMatrix ConGrp {} pat_args vars = 
+            let mkEntry :: Pat GhcTc -> Id -> Int -> Entry PatInfo
+                mkEntry pat occ col = 
+                    (pat
+                    ,PatInfo { patOcc = occ
+                             , patCol = patCol firstPatInfo ++ col}
+                             )
+                entries = zipWith3 mkEntry pat_args vars [0..]
+            in do
+                
+
+            
+        getNewConMatrix ConGrp {} = error "Constructor group2"
+
+        mkConAlt :: PGrp -> DsM CoreAlt
+        mkConAlt grp@(ConGrp con) = 
+            let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
+                    pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
+                    = firstPat
+
+                fields1 = map flSelector (conLikeFieldLabels con1)
+
+                -- Choose the right arg_vars in the right order for this group
+                -- Note [Record patterns]
+                -- Taken from MatchCon, slightly modified
+                select_arg_vars :: [Id] -> [ConArgPats] -> [Id]
+                select_arg_vars arg_vars ((arg_pats) : _)
+                    | RecCon flds <- arg_pats
+                    , let rpats = rec_flds flds
+                    , not (null rpats)     -- Treated specially; cf conArgPats
+                    = ASSERT2( fields1 `equalLength` arg_vars,
+                                ppr con1 $$ ppr fields1 $$ ppr arg_vars )
+                        map lookup_fld rpats
+                    | otherwise
+                    = arg_vars
+                    where
+                        fld_var_env = mkNameEnv $ zipEqual "get_arg_vars" fields1 arg_vars
+                        lookup_fld (L _ rpat) = lookupNameEnv_NF fld_var_env
+                                                            (idName (unLoc (hsRecFieldId rpat)))
+                select_arg_vars _ [] = panic "matchOneCon/select_arg_vars []"
+
+                inst_tys = arg_tys ++ mkTyVarTys tvs1
+                val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
+                
+                pats = map fst $ entries :: [Pat GhcTc]
+
+                -- Desugar the given patterns and produce a suitable wrapper.
+                desugarPats :: [Pat GhcTc] -> [Id]  -> DsM (DsWrapper, [Pat GhcTc])
+                desugarPats pats vars = do
+                    (wrappers, pats) <- unzip <$> zipWithM tidy1 vars pats
+                    return (foldr1 combineWrappers wrappers, pats)
+
+                -- Assign the variables introduced by a binding to the appropriate values
+                -- producing a wrapper for the rhs
+                wrapPatBinds :: [TyVar] -> [EvVar] -> Pat GhcTc -> DsM DsWrapper
+                wrapPatBinds tvs1 dicts1 ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
+                                        pat_binds = bind, pat_args = args }
+                    = do
+                        ds_bind <- dsTcEvBinds bind
+                        return ( wrapBinds (tvs `zip` tvs1)
+                                . wrapBinds (ds  `zip` dicts1)
+                                . mkCoreLets ds_bind
+                                )
+
+                                
+            in do
+            arg_vars <- selectConMatchVars val_arg_tys args1
+            
+            --TODO: make sure group is compatible (record patterns) and pattern variables in correct order
+
+            --Variable etc wrapper
+            (rhsDesugarWrapper, pats) <- desugarPats pats arg_vars
+            --Type variables etc wrapper
+            (rhsTyWrapper) <- foldr1 (.) <$> mapM (wrapPatBinds tvs1 dicts1) pats :: DsM DsWrapper
+
+            wrapper <- return $ rhsDesugarWrapper . rhsTyWrapper
+
+            ds_bind <- dsTcEvBinds bind
+
+            expr <- groupExpr grp -- TODO: Fix?
+            return $ MkCaseAlt{ alt_pat = con1,
+                                alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
+                                alt_wrapper = wrapper1,
+                                alt_result = foldr1 combineMatchResults match_results } }
+            return $ (DataAlt con, [], wrapper expr)
+        mkConAlt _ = error "mkConAlt - No Constructor Grp"
+
+        getGrpPats :: PGrp -> [Entry PatInfo]
+        getGrpPats grp = 
+            let submatrix = getSubMatrix . getGrpRows $ grp
+                column = getCol submatrix colIndex :: PatternColumn PatInfo
+            in
+            F.toList column
+
+
+
+
+        {-
+        ******************* End of Con Grp alt code *******************
+        -}
+
         --generate the alternative for a entry grp
         mkAlt :: PGrp -> DsM CoreAlt
         mkAlt grp@(LitGrp lit@(HsIntPrim _ val)) = do
             let coreLit = MachInt val --dsLit lit
             expr <- groupExpr grp
             return $ (LitAlt coreLit, [], expr)
-        mkAlt grp@(ConGrp con) = do
-            expr <- groupExpr grp
-            return $ (DataAlt con, [], expr)
+        mkAlt grp@(ConGrp _con) = do
+            mkConAlt grp
         mkAlt (VarGrp) = do
             expr <- groupExpr VarGrp
             return $ (DEFAULT, [], expr)
@@ -965,6 +1086,7 @@ mkCase heuristic ty m knowledge colIndex failExpr =
             grpAlts <- mapM mkAlt grps
             liftM (addDefault grpAlts) defaultFailure
             -- defFailBranch
+
 
     in do
         traceM "mkCase"
