@@ -491,10 +491,11 @@ data GeneralFlag
    | Opt_SolveConstantDicts
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
-
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
    | Opt_SimplPreInlining
+   
+   | Opt_TreeMatching
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -4006,6 +4007,7 @@ fFlagsDeps = [
   flagSpec "unclutter-valid-substitutions"    Opt_UnclutterValidSubstitutions,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs
+  flagSpec "tree-matching"                    Opt_TreeMatching
   ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
