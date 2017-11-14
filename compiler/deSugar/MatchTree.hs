@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveAnyClass, DeriveGeneric #-}
+{-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveGeneric, DeriveDataTypeable #-}
 
 module MatchTree 
     (match)
@@ -74,6 +74,7 @@ import Data.Bifunctor as BF
 import Data.Foldable as F
 import Data.Tuple (swap)
 import Data.List as L
+import Data.Data
 import Debug.Trace
 import Control.DeepSeq
 import GHC.Generics
@@ -116,7 +117,7 @@ data PatInfo
     = PatInfo 
     { patCol :: [Int]
     , patOcc :: !Occurrence }
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Data)
 
 instance Outputable PatInfo where
     ppr info = lparen O.<> text "PatInfo " O.<> ppr (patCol info, patOcc info) O.<> rparen
@@ -201,19 +202,19 @@ match vars ty eqns = do
     df <- getDynFlags
     useTreeMatching <- goptM Opt_TreeMatching
     unless useTreeMatching failDs
-    traceM "match2"
+    --traceM "match2"
     matrix <- (toPatternMatrix vars eqns)
-    traceM "created pattern Matrix"
+    --traceM "created pattern Matrix"
     matchWith leftToRight ty matrix (Map.empty)
 
 
 toPatternMatrix :: HasCallStack => [MatchId] -> [EquationInfo] -> DsM EqMatrix
 toPatternMatrix vars eqs = do
-    traceM "DesugarMatrix"
+    --traceM "DesugarMatrix"
     rows <- mapM (toMatrixRow vars) eqs
-    liftIO . putStrLn . showSDocUnsafe $ ppr $ fmap (fst . snd) rows
-    seq rows $ traceM "Desugared?"
-    traceM "made into matrix:"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr $ fmap (fst . snd) rows
+    --seq rows $ traceM "Desugared?"
+    --traceM "made into matrix:"
     constrainMatrix $  Seq.fromList rows
 
 toEqnInfo :: HasCallStack => EqMatrix -> [EquationInfo]
@@ -223,6 +224,16 @@ toEqnInfo m =
         eqnInfos = fmap (\x -> EqnInfo (fst x) (fst . snd $ x)) withPat :: [EquationInfo]
     in
     eqnInfos
+
+addRowWrappers :: HasCallStack => CPM -> [DsWrapper] -> CPM
+addRowWrappers m wrappers = 
+    Seq.zipWith 
+        (\wrapper row ->
+            second (first (adjustMatchResult wrapper)) row
+        )
+        (Seq.fromList wrappers) 
+        m
+
 
 combineWrappers :: DsWrapper -> DsWrapper -> DsWrapper
 combineWrappers wrap1 wrap2 = wrap1 . wrap2
@@ -234,34 +245,32 @@ toMatrixRow :: HasCallStack => [MatchId] -> EquationInfo -> DsM (TreeEquation)
     Adjust the RHS to incude the wrappers.
 -}
 toMatrixRow vars (EqnInfo pats rhs) = do
-    liftIO $ traceM "tidyRow"
+    --liftIO $ traceM "tidyRow"
     let patternInfos = zipWith (\occ col -> PatInfo {patOcc = occ, patCol = [col]}) vars [0..]
-    liftIO . putStrLn . showSDocUnsafe $ ppr patternInfos
+    --liftIO . putStrLn . showSDocUnsafe $ ppr patternInfos
     let entries = zip pats $ patternInfos
     tidied <- mapM tidyEntry entries :: DsM [(DsWrapper, Entry PatInfo)]
-    seq tidied $ traceM "rowDone:"
-    liftIO . putStrLn . showSDocUnsafe $ ppr pats
-    liftIO . putStrLn . showSDocUnsafe $ ppr vars
-    liftIO . putStrLn . showSDocUnsafe $ ppr "Pats + Vars"
+    --seq tidied $ traceM "rowDone:"
+    --liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ map snd tidied
+    --liftIO . putStrLn . showSDocUnsafe $ ppr vars
+    --liftIO . putStrLn . showSDocUnsafe $ ppr "Pats + Vars"
     
     
-    liftIO . putStrLn . showSDocUnsafe $ ppr $ map snd tidied
-    let (wrappers, pats) = unzip tidied
-    liftIO $ putStrLn "AdjustMatch"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr $ map snd tidied
+    let (wrappers, desugaredPats) = unzip tidied
+    --liftIO $ putStrLn "AdjustMatch"
     let rowMatchResult = adjustMatchResult (foldr1 combineWrappers wrappers) rhs
-    return (Seq.fromList pats, (rowMatchResult, []))
+    return (Seq.fromList desugaredPats, (rowMatchResult, []))
 
 
 
 tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
 tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
-    liftIO $ putStrLn "tidyEntry"
+    --liftIO $ putStrLn "tidyEntry"
     (wrapper, newPat) <- tidy1 occ pat
-    liftIO . putStrLn . showSDocUnsafe $ ppr newPat
-    liftIO . putStrLn $ "newPat"
-    
-    
-    liftIO $ putStrLn "tidied"
+    --liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan newPat
+    --liftIO . putStrLn $ "newPat"
+    --liftIO $ putStrLn "tidied"
     return $ (wrapper, (newPat, info))
 
 
@@ -518,7 +527,7 @@ isStrict ConPatOut {} = True
 isStrict LitPat {} = True
 isStrict NPat {} = True -- 
 isStrict NPlusKPat {} = True -- ?
-isStrict _ = error "Should have been tidied already"
+isStrict p = error $ "Should have been tidied already:" ++ (showSDocUnsafe (ppr p)) ++ " " ++ showSDocUnsafe (showAstData BlankSrcSpan p)
 
 
 
@@ -698,28 +707,31 @@ constrainMatrix :: HasCallStack => CPM -> DsM (CPM)
 constrainMatrix m = 
     let goRow :: Constraints -> [TreeEquation] -> DsM [TreeEquation]
         goRow constraints m = do
-            traceM "goRow"
+            --traceM "goRow"
             case m of
-                [] -> liftIO (print "RowBaseCase") >> return []
-                (row:eqs) -> liftIO (print "rowRecurse") >> do
-                    traceM "rowCons:"
-                    liftIO $ putStrLn . showSDocUnsafe $ ppr constraints
+                [] -> --liftIO (print "RowBaseCase") >> 
+                    return []
+                (row:eqs) -> --liftIO (print "rowRecurse") >> 
+                    do
+                    --traceM "rowCons:"
+                    --liftIO $ putStrLn . showSDocUnsafe $ ppr constraints
                     newConstraint <- rowConstraint $ fst row :: DsM Constraint -- Conditions
-                    liftIO $ putStrLn . showSDocUnsafe $ ppr newConstraint
+                    --liftIO $ putStrLn . showSDocUnsafe $ ppr newConstraint
                     let constraintSum = newConstraint:constraints :: Constraints
                     let currentRow = setEqConstraint row constraintSum :: TreeEquation
-                    traceM "doneRow:"
-                    liftIO $ putStrLn . showSDocUnsafe $ ppr currentRow
+                    --traceM "doneRow:"
+                    --liftIO $ putStrLn . showSDocUnsafe $ ppr currentRow
                     nextRows <- goRow constraintSum eqs
                     return $ currentRow : nextRows
     in do
-    traceM "constrainMatrix"
+    --traceM "constrainMatrix"
     rows <- goRow [] $ F.toList m :: DsM [TreeEquation]
     return $ Seq.fromList rows
 
-getConConstraint :: HasCallStack => ConLike -> (CondValue)
-getConConstraint (RealDataCon dcon) = ConCond dcon
-getConConstraint (PatSynCon  scon ) = pprPanic "PatSynCon constraint not implemented" $ ppr scon
+getConConstraint :: HasCallStack => ConLike -> DsM (CondValue)
+getConConstraint (RealDataCon dcon) = return $ ConCond dcon
+getConConstraint (PatSynCon  scon ) = --TODO
+    warnDs NoReason (ppr "Pat Synonyms not implemented for tree matching") >> failDs -- pprPanic "PatSynCon constraint not implemented" $ ppr scon
 
 
 getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
@@ -732,11 +744,18 @@ getPatternConstraint ((LitPat lit),info) = do
 getPatternConstraint ((ConPatOut { pat_con = con}), info) = do
     -- TODO: Extend for nested arguments
     df <- getDynFlags :: DsM DynFlags
-    traceM "conConstraint"
-    return $ Just $  (info, Just $ getConConstraint $ unLoc con)
-getPatternConstraint (WildPat {}, info) = traceM "wp" >> return Nothing
-getPatternConstraint (VarPat {}, info) = traceM "vp" >> return Nothing
-getPatternConstraint (p, info) = traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
+    --traceM "conConstraint"
+    conConstraint <- getConConstraint $ unLoc con
+    return $ Just $  (info, Just $ conConstraint )
+getPatternConstraint (WildPat {}, info) = 
+    --traceM "wp" >> 
+    return Nothing
+getPatternConstraint (VarPat {}, info) = 
+    --traceM "vp" >> 
+    return Nothing
+getPatternConstraint (p, info) = 
+    warnDs NoReason (ppr ("Pat should have been tidied already or not implemented", p)) >> failDs
+    --traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
 {-
 getPatternConstraint NPat {} occ = 
     error "TODO"
@@ -749,26 +768,40 @@ getPatternConstraint ConPatOut {} _ = error "ConPat not done" -}
 --Build up constraints within a row from left to right.
 rowConstraint :: (HasCallStack, Foldable t) => t (Entry PatInfo) -> DsM Constraint
 rowConstraint entries = do
-    traceM "rowConstraint"
+    --traceM "rowConstraint"
     crow <- foldM (buildConstraint) [] entries
-    liftIO $ putStrLn . showSDocUnsafe $ ppr crow
-    traceM "row done"
+    --liftIO $ putStrLn . showSDocUnsafe $ ppr crow
+    --traceM "row done"
     return crow
         where
             buildConstraint :: Conditions -> Entry PatInfo -> DsM Conditions
             buildConstraint preConditions entry = do
-                traceM "buildConstraint"
+                --traceM "buildConstraint"
                 let (pattern, occurrence) = entry
-                traceM "getPatConstraint"
-                liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan pattern
-                traceM "patBuildCons"
+                --traceM "getPatConstraint"
+                --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan pattern
+                --traceM "patBuildCons"
                 constraint <- getPatternConstraint entry
-                liftIO $ putStrLn . showSDocUnsafe $ ppr constraint
+                --liftIO $ putStrLn . showSDocUnsafe $ ppr constraint
                 case constraint of
                     Just c -> return $ preConditions ++ [c] --TODO: Don't append at end
                     Nothing -> return preConditions            
 
+addConstraints :: (Traversable t, HasCallStack) => CPM -> t (t (Entry PatInfo)) -> DsM CPM
+{- Takes a matrix and a list of unpacked entries.
+This is used when unpacking constructors during desugaring.
+* Calculate the constraints from the entries
+* Update the matrix with the new Constraints
 
+Important: Constraints have to be added at the right place in the constraint list (sorted according to patOcc in PatInfo)
+-}
+addConstraints m rows = do
+    newRowConstraints <- F.toList <$> mapM rowConstraint rows :: DsM [Constraint]
+    let addedConstraints = tail . inits $ newRowConstraints :: [Constraints]
+    let oldRowConstraints = F.toList $ fmap (snd . snd) m :: [Constraints]
+    let combinedConstraints = zipWith (++) oldRowConstraints addedConstraints :: [Constraints]
+    let sortedConstraints = Seq.fromList $ map (map (sortOn (patCol . fst))) combinedConstraints :: Seq.Seq Constraints
+    return $ Seq.zipWith (setEqConstraint) m (sortedConstraints)
 
 --matchWith heuristic (Seq.Empty) knowledge failExpr = return failExpr 
 {-
@@ -782,21 +815,22 @@ Recursive match function. Parameters are:
 -}
 matchWith :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> DsM MatchResult
 matchWith heuristic ty m knowledge = do 
-    traceM "matchWith:"
-    liftIO $ putStrLn . showSDocUnsafe . ppr $ m
-    traceM "Match matrix"
+    --traceM "matchWith:"
+    --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
+    --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
+    --traceM "Match matrix"
     when (null m) (error "Matching empty matrix")
     let matchCol = heuristic m :: Maybe Int 
-    liftIO $ print $ "Matchcol:" ++ show matchCol
+    --liftIO $ print $ "Matchcol:" ++ show matchCol
     case matchCol of
         Nothing -> do
-            traceM "getRHS"
+            --traceM "getRHS"
             let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
-            liftIO $ traceM "resCons"
-            rhsWrapper <- (resolveConstraints m knowledge constraints)
-            traceM "wrapper"
-            liftIO . putStrLn $ showSDocUnsafe $ ppr (rhsWrapper $ mkCharExpr 'F')
-            traceM "adjust and return match"
+            --liftIO $ traceM "resCons"
+            rhsWrapper <- (resolveConstraints m ty knowledge constraints)
+            --traceM "wrapper"
+            --liftIO . putStrLn $ showSDocUnsafe $ ppr (rhsWrapper $ mkCharExpr 'F')
+            --traceM "adjust and return match"
             return $ adjustMatchResult rhsWrapper expr
             --return $ MatchResult CantFail $ const (return $ mkCharExpr 'F') -- debug expr
         Just colIndex -> 
@@ -872,6 +906,9 @@ unpackCol pm splitColIndex = do
 
 
 mkCase :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> Int -> CoreExpr -> DsM CoreExpr
+{-
+
+-}
 -- TODO: Extend from just literals
 mkCase heuristic ty m knowledge colIndex failExpr =
     let column = getCol m colIndex
@@ -926,7 +963,6 @@ mkCase heuristic ty m knowledge colIndex failExpr =
         getNewMatrix :: PGrp -> DsM CPM
         -- Since we have to "splice in" the constructor arguments which requires more setup we deal
         -- with Constructor groups in another function
-        getNewMatrix ConGrp {} = error "Constructor group"
         getNewMatrix grp = 
             let rows = getGrpRows grp :: [Int]
                 matrix = getSubMatrix rows
@@ -935,7 +971,7 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                 VarGrp    -> return $ deleteCol matrix colIndex
                 LitGrp {} -> return $ deleteCol matrix colIndex
                 ConGrp con  | dataConSourceArity con == 0 -> return $ deleteCol matrix colIndex
-                            | otherwise                   -> unpackCol matrix colIndex
+                            | otherwise                   -> error "Constructor group"
         
 
         groupExpr :: PGrp -> DsM CoreExpr
@@ -964,10 +1000,11 @@ mkCase heuristic ty m knowledge colIndex failExpr =
 
 
             
-        getNewConMatrix ConGrp {} = error "Constructor group2"
+
 
         mkConAlt :: PGrp -> DsM CoreAlt
         mkConAlt grp@(ConGrp con) = 
+            -- Look at the pattern info from the first pattern.
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = firstPat
@@ -978,18 +1015,6 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                 firstPat = fst . head $ entries :: Pat GhcTc
                 firstPatInfo = snd . head $ entries :: PatInfo
                         
-                getNewConMatrix :: PGrp -> [Pat GhcTc] -> [Id] -> DsM CPM
-                getNewConMatrix grp@ConGrp {} pat_args vars = 
-                    let mkEntry :: Pat GhcTc -> Id -> Int -> Entry PatInfo
-                        mkEntry pat occ col = 
-                            (pat
-                            ,PatInfo { patOcc = occ
-                                    , patCol = patCol firstPatInfo ++ [col] }
-                                    )
-                        entries = zipWith3 mkEntry pat_args vars [0..]
-                    in do
-                    undefined
-
                 -- Choose the right arg_vars in the right order for this group
                 -- Note [Record patterns]
                 -- Taken from MatchCon, slightly modified
@@ -1012,13 +1037,16 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                 inst_tys = arg_tys ++ mkTyVarTys tvs1
                 val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
                 
+                --All patterns in column
                 pats = map fst $ entries :: [Pat GhcTc]
 
                 -- Desugar the given patterns and produce a suitable wrapper.
                 desugarPats :: [Pat GhcTc] -> [Id]  -> DsM (DsWrapper, [Pat GhcTc])
                 desugarPats pats vars = do
+                    --liftIO . putStrLn . showSDocUnsafe $ ppr pats
                     (wrappers, pats) <- unzip <$> zipWithM tidy1 vars pats
-                    return (foldr1 combineWrappers wrappers, pats)
+                    --traceM "kjhsadf"
+                    return (foldr combineWrappers idDsWrapper wrappers, pats)
 
                 -- Assign the variables introduced by a binding to the appropriate values
                 -- producing a wrapper for the rhs
@@ -1032,29 +1060,68 @@ mkCase heuristic ty m knowledge colIndex failExpr =
                                 . mkCoreLets ds_bind
                                 )
 
-                                
+                unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
+                -- | Pick apart a constructor returning result suitable to be spliced into
+                -- the match matrix
+                unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+                    let args = pat_args conPat 
+                        arg_pats = map unLoc $ hsConPatArgs args :: [Pat GhcTc]
+                    in do
+                    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars arg_pats
+                    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
+                    let entries = zipWith3 mkEntry desugaredPats vars [0..]
+                    return (foldr (.) idDsWrapper wrappers, entries)
+
+                getNewConMatrix :: PGrp -> [Id] -> DsM CPM
+                getNewConMatrix grp@ConGrp {} vars = 
+                    let rows = getGrpRows grp :: [Int]
+                        filteredRows = getSubMatrix rows :: CPM
+                        colEntries = getCol filteredRows colIndex :: PatternColumn PatInfo
+                        withoutCol = deleteCol filteredRows colIndex :: CPM
+                        
+                    in do
+                    (wrappers, entries) <- unzip <$> (mapM (\e -> unpackCon e vars) $ F.toList colEntries) :: DsM ([DsWrapper], [[Entry PatInfo]])
+                    let wrappedMatrix = addRowWrappers withoutCol wrappers
+                    let unpackedMatrix = insertCols wrappedMatrix colIndex (Seq.fromList . map Seq.fromList . transpose $ entries)
+                    constrainedMatrix <- addConstraints unpackedMatrix entries
+                    return constrainedMatrix
+
+                    --TODO: Build constraint for added entries
+                getNewConMatrix ConGrp {} _ = error "Constructor group2"
+
+                conGroupExpr :: PGrp -> [Id] -> DsM CoreExpr
+                conGroupExpr grp vars = do
+                    let newKnowledge = (Map.insert occ (newEvidence grp) knowledge)
+                    newMatrix <- getNewConMatrix grp vars  
+                    (MatchResult _ f) <- matchWith heuristic ty (newMatrix) newKnowledge
+                    f failExpr
+
             in do
             arg_vars <- selectConMatchVars val_arg_tys args1
             
             --TODO: make sure group is compatible (record patterns) and pattern variables in correct order
+            --For now we just fail on records
+            when 
+                (any 
+                    (\x -> case x of {RecCon {} -> True; _ -> False })
+                    (map pat_args pats)
+                )
+                (failDs)
 
             --Variable etc wrapper
             (rhsDesugarWrapper, pats) <- desugarPats pats arg_vars
             --Type variables etc wrapper
-            (rhsTyWrapper) <- foldr1 (.) <$> mapM (wrapPatBinds tvs1 dicts1) pats :: DsM DsWrapper
+            (rhsTyWrapper) <- foldr (.) idDsWrapper <$> mapM (wrapPatBinds tvs1 dicts1) pats :: DsM DsWrapper
 
             wrapper <- return $ rhsDesugarWrapper . rhsTyWrapper
 
             ds_bind <- dsTcEvBinds bind
 
-            let match_results = undefined
+            unpackedMatrix <- getNewConMatrix grp arg_vars :: DsM CPM
 
-            expr <- groupExpr grp -- TODO: Fix?
-            return $ MkCaseAlt{ alt_pat = con1,
-                                alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
-                                alt_wrapper = wrapper1,
-                                alt_result = foldr1 combineMatchResults match_results }
-            return $ (DataAlt con, [], wrapper expr)
+            expr <- conGroupExpr grp arg_vars
+
+            return $ (DataAlt con, arg_vars, wrapper . mkCoreLets ds_bind $ expr)
         mkConAlt _ = error "mkConAlt - No Constructor Grp"
 
         getGrpPats :: PGrp -> [Entry PatInfo]
@@ -1088,15 +1155,17 @@ mkCase heuristic ty m knowledge colIndex failExpr =
 
         alts :: DsM [CoreAlt]
         alts = do
-            grpAlts <- mapM mkAlt grps
+            grpAlts <- sortBy (\(a,x,y) (a2,_,_)-> compare a2 a) <$> mapM mkAlt grps
             liftM (addDefault grpAlts) defaultFailure
             -- defFailBranch
 
 
     in do
-        traceM "mkCase"
+        --traceM "mkCase"
         alts <- alts
-        return $ Case (Var occ) (mkWildValBinder ty) ty (alts)
+        --traceM "alts"
+        --liftIO $ putStrLn $ showSDocUnsafe $ ppr alts
+        return $ Case (Var occ) (mkWildValBinder (idType occ)) ty (alts)
 
 
 occColIndex :: HasCallStack => forall rhs. HasCallStack => PatternMatrix Occurrence rhs -> Occurrence -> Maybe Int
@@ -1115,11 +1184,11 @@ matrixOcc :: CPM -> [Occurrence]
 matrixOcc m = F.toList $ fmap (patOcc . snd) $ getRow m 0
 
 
-resolveConstraints :: HasCallStack => CPM -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
+resolveConstraints :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
 {- Produces a wrapper which guarantees evaluation of arguments according to Augustsons algorithm.
  a match result to include required evaluation of occurences according to the constraints. -}
 
-resolveConstraints m knowledge constraints = do
+resolveConstraints m ty knowledge constraints = do
     -- TODO
     {-
     * Remove satisfied constraints
@@ -1135,27 +1204,27 @@ resolveConstraints m knowledge constraints = do
         then --trace "BaseCase" $ 
             return (\expr -> expr)
         else --trace "solveCase" 
-            (mkConstraintCase m knowledge simplifiedConstraints)
+            (mkConstraintCase m ty knowledge simplifiedConstraints)
 
-mkConstraintCase :: HasCallStack => CPM -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
+mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
 {-
 Resolve at least one constraint by introducing a additional case statement
 -}
-mkConstraintCase m knowledge constraints =
+mkConstraintCase m ty knowledge constraints =
     --traceShowM ("mkConstraint", knowledge, expr, constraints)
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
-        ty = varType occ :: Kind
+        --ty = varType occ :: Kind
         occValues = concatMap 
             (\constraint -> foldMap (\(info, condVal) -> if (patOcc info) == occ then [conVal] else []) constraint) constraints :: [Maybe CondValue]
         occVals = nub $ catMaybes occValues :: [CondValue]
         newEvidence condVal = Right condVal
 
         getAltExpr :: CondValue -> DsM (CoreExpr -> CoreExpr)
-        getAltExpr condVal = resolveConstraints m (Map.insert occ (newEvidence condVal) knowledge) constraints :: DsM DsWrapper
+        getAltExpr condVal = resolveConstraints m ty (Map.insert occ (newEvidence condVal) knowledge) constraints :: DsM DsWrapper
 
         defaultEvidence = Left occVals
-        defaultExpr = resolveConstraints m (Map.insert occ (defaultEvidence) knowledge) constraints :: DsM DsWrapper
+        defaultExpr = resolveConstraints m ty (Map.insert occ (defaultEvidence) knowledge) constraints :: DsM DsWrapper
 
         scrutinee = varToCoreExpr occ :: CoreExpr
 
@@ -1184,7 +1253,7 @@ mkConstraintCase m knowledge constraints =
     
 
     return (\rhs ->
-        Case (Var occ) (mkWildValBinder ty) ty (alts rhs)
+        Case (Var occ) (mkWildValBinder (idType occ)) ty (alts rhs)
         )
     
     
