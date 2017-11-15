@@ -4006,7 +4006,7 @@ fFlagsDeps = [
   flagSpec "abstract-refinement-substitutions" Opt_AbstractRefSubstitutions,
   flagSpec "unclutter-valid-substitutions"    Opt_UnclutterValidSubstitutions,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
-  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs
+  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
   flagSpec "tree-matching"                    Opt_TreeMatching
   ]
 
