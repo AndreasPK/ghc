@@ -83,6 +83,9 @@ import TcEvidence
 
 import Control.Monad    ( zipWithM )
 
+import Debug.Trace
+import Control.Monad.IO.Class (liftIO)
+
 {-
 ************************************************************************
 *                                                                      *
@@ -203,6 +206,10 @@ extractMatchResult (MatchResult CantFail match_fn) _
 
 extractMatchResult (MatchResult CanFail match_fn) fail_expr = do
     (fail_bind, if_it_fails) <- mkFailurePair fail_expr
+    traceM "extract:fail_bind"
+    liftIO . putStrLn . showSDocUnsafe $ ppr fail_bind
+    traceM "extract:fail_expr"
+    liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     body <- match_fn if_it_fails
     return (mkCoreLet fail_bind body)
 
@@ -221,6 +228,7 @@ combineMatchResults match_result1@(MatchResult CantFail _) _
   = match_result1
 
 adjustMatchResult :: DsWrapper -> MatchResult -> MatchResult
+-- | Wrap the given function around the MatchResult
 adjustMatchResult encl_fn (MatchResult can_it_fail body_fn)
   = MatchResult can_it_fail (\fail -> encl_fn <$> body_fn fail)
 
@@ -742,7 +750,8 @@ mkSelectorBinds ticks pat val_expr
   = return (v, [(v, val_expr)])
 
   | is_flat_prod_lpat pat'           -- Special case (B)
-  = do { let pat_ty = hsLPatType pat'
+  = do { traceM "mkSelector:B"
+       ; let pat_ty = hsLPatType pat'
        ; val_var <- newSysLocalDsNoLP pat_ty
 
        ; let mk_bind tick bndr_var
@@ -761,8 +770,9 @@ mkSelectorBinds ticks pat val_expr
        ; return ( val_var, (val_var, val_expr) : binds) }
 
   | otherwise                          -- General case (C)
+  = do { traceM "mkSelector:C"
   = do { tuple_var  <- newSysLocalDs tuple_ty
-       ; error_expr <- mkErrorAppDs pAT_ERROR_ID tuple_ty (ppr pat')
+       ; error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
                                    local_tuple error_expr
        ; let mk_tup_bind tick binder
@@ -920,8 +930,14 @@ mkFailurePair expr
   = do { fail_fun_var <- newFailLocalDs (voidPrimTy `mkFunTy` ty)
        ; fail_fun_arg <- newSysLocalDs voidPrimTy
        ; let real_arg = setOneShotLambda fail_fun_arg
-       ; return (NonRec fail_fun_var (Lam real_arg expr),
-                 App (Var fail_fun_var) (Var voidPrimId)) }
+       ; let result = (NonRec fail_fun_var (Lam real_arg expr),
+                 App (Var fail_fun_var) (Var voidPrimId))
+       ; traceM "mkFailurePair:result"
+       ; liftIO . putStrLn . showSDocUnsafe $ ppr result
+       ; traceM "mkFailurePair:argument"
+       ; liftIO . putStrLn . showSDocUnsafe $ ppr expr
+       
+       ; return result }
   where
     ty = exprType expr
 
