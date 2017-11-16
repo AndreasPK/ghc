@@ -6,22 +6,26 @@ import TcType   ( Type )
 import DsMonad  ( DsM, EquationInfo, MatchResult )
 import CoreSyn  ( CoreExpr )
 import HsSyn    ( LPat, HsMatchContext, MatchGroup, LHsExpr )
+import HsPat    ( Pat )
 import Name     ( Name )
 import HsExtension ( GhcTc )
+import Util (HasCallStack)
 
-match   :: [Id]
+match   :: HasCallStack => [Id]
         -> Type
         -> [EquationInfo]
         -> DsM MatchResult
 
 matchWrapper
-        :: HsMatchContext Name
+        :: HasCallStack
+        => HsMatchContext Name
         -> Maybe (LHsExpr GhcTc)
         -> MatchGroup GhcTc (LHsExpr GhcTc)
         -> DsM ([Id], CoreExpr)
 
 matchSimply
-        :: CoreExpr
+        :: HasCallStack
+        => CoreExpr
         -> HsMatchContext Name
         -> LPat GhcTc
         -> CoreExpr
@@ -29,7 +33,8 @@ matchSimply
         -> DsM CoreExpr
 
 matchSinglePat
-        :: CoreExpr
+        :: HasCallStack
+        => CoreExpr
         -> HsMatchContext Name
         -> LPat GhcTc
         -> Type

@@ -58,6 +58,9 @@ import Data.List (groupBy)
 import Data.Either (isRight)
 
 import qualified MatchTree
+import Util
+import Debug.Trace
+import GHC.Stack
 
 {-
 ************************************************************************
@@ -160,7 +163,7 @@ with External names (Trac #13043).
 
 type MatchId = Id   -- See Note [Match Ids]
 
-match :: [MatchId]        -- Variables rep\'ing the exprs we\'re matching with
+match :: HasCallStack => [MatchId]        -- Variables rep\'ing the exprs we\'re matching with
                           -- See Note [Match Ids]
       -> Type             -- Type of the case expression
       -> [EquationInfo]   -- Info about patterns, etc. (type synonym below)
@@ -238,7 +241,7 @@ match vars@(v:_) ty eqns    -- Eqns *can* be empty
           maybeWarn $ (map (\g -> text "Putting these view expressions into the same case:" <+> (ppr g))
                        (filter (not . null) gs))
 
-matchEmpty :: MatchId -> Type -> DsM [MatchResult]
+matchEmpty :: HasCallStack => MatchId -> Type -> DsM [MatchResult]
 -- See Note [Empty case expressions]
 matchEmpty var res_ty
   = return [MatchResult CanFail mk_seq]
@@ -246,20 +249,20 @@ matchEmpty var res_ty
     mk_seq fail = return $ mkWildCase (Var var) (idType var) res_ty
                                       [(DEFAULT, [], fail)]
 
-matchVariables :: [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
+matchVariables :: HasCallStack => [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
 -- Real true variables, just like in matchVar, SLPJ p 94
 -- No binding to do: they'll all be wildcards by now (done in tidy)
 matchVariables (_:vars) ty eqns = match vars ty (shiftEqns eqns)
 matchVariables [] _ _ = panic "matchVariables"
 
-matchBangs :: [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
+matchBangs :: HasCallStack => [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
 matchBangs (var:vars) ty eqns
   = do  { match_result <- match (var:vars) ty $
                           map (decomposeFirstPat getBangPat) eqns
         ; return (mkEvalMatchResult var ty match_result) }
 matchBangs [] _ _ = panic "matchBangs"
 
-matchCoercion :: [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
+matchCoercion :: HasCallStack => [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
 -- Apply the coercion to the match variable and then match that
 matchCoercion (var:vars) ty (eqns@(eqn1:_))
   = do  { let CoPat co pat _ = firstPat eqn1
@@ -272,7 +275,7 @@ matchCoercion (var:vars) ty (eqns@(eqn1:_))
         ; return (mkCoLetMatchResult bind match_result) }
 matchCoercion _ _ _ = panic "matchCoercion"
 
-matchView :: [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
+matchView :: HasCallStack => [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
 -- Apply the view function to the match variable and then match that
 matchView (var:vars) ty (eqns@(eqn1:_))
   = do  { -- we could pass in the expr from the PgView,
@@ -291,7 +294,7 @@ matchView (var:vars) ty (eqns@(eqn1:_))
                     match_result) }
 matchView _ _ _ = panic "matchView"
 
-matchOverloadedList :: [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
+matchOverloadedList :: HasCallStack => [MatchId] -> Type -> [EquationInfo] -> DsM MatchResult
 matchOverloadedList (var:vars) ty (eqns@(eqn1:_))
 -- Since overloaded list patterns are treated as view patterns,
 -- the code is roughly the same as for matchView
@@ -304,7 +307,7 @@ matchOverloadedList (var:vars) ty (eqns@(eqn1:_))
 matchOverloadedList _ _ _ = panic "matchOverloadedList"
 
 -- decompose the first pattern and leave the rest alone
-decomposeFirstPat :: (Pat GhcTc -> Pat GhcTc) -> EquationInfo -> EquationInfo
+decomposeFirstPat :: HasCallStack => (Pat GhcTc -> Pat GhcTc) -> EquationInfo -> EquationInfo
 decomposeFirstPat extractpat (eqn@(EqnInfo { eqn_pats = pat : pats }))
         = eqn { eqn_pats = extractpat pat : pats}
 decomposeFirstPat _ _ = panic "decomposeFirstPat"
@@ -381,7 +384,7 @@ only these which can be assigned a PatternGroup (see patGroup).
 
 -}
 
-tidyEqnInfo :: Id -> EquationInfo
+tidyEqnInfo :: HasCallStack => Id -> EquationInfo
             -> DsM (DsWrapper, EquationInfo)
         -- DsM'd because of internal call to dsLHsBinds
         --      and mkSelectorBinds.
@@ -398,7 +401,7 @@ tidyEqnInfo v eqn@(EqnInfo { eqn_pats = pat : pats })
   = do { (wrap, pat') <- tidy1 v pat
        ; return (wrap, eqn { eqn_pats = do pat' : pats }) }
 
-tidy1 :: Id                  -- The Id being scrutinised
+tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
       -> Pat GhcTc           -- The pattern against which it is to be matched
       -> DsM (DsWrapper,     -- Extra bindings to do before the match
               Pat GhcTc)     -- Equivalent pattern
@@ -492,7 +495,7 @@ tidy1 _ non_interesting_pat
   = return (idDsWrapper, non_interesting_pat)
 
 --------------------
-tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
+tidy_bang_pat :: HasCallStack => Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
 
 -- Discard par/sig under a bang
 tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
@@ -540,7 +543,7 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 
 -------------------
-push_bang_into_newtype_arg :: SrcSpan
+push_bang_into_newtype_arg :: HasCallStack => SrcSpan
                            -> Type -- The type of the argument we are pushing
                                    -- onto
                            -> HsConPatDetails GhcTc -> HsConPatDetails GhcTc
@@ -686,7 +689,8 @@ Call @match@ with all of this information!
 \end{enumerate}
 -}
 
-matchWrapper :: HsMatchContext Name    -- For shadowing warning messages
+matchWrapper :: HasCallStack
+             => HsMatchContext Name    -- For shadowing warning messages
              -> Maybe (LHsExpr GhcTc)  -- The scrutinee, if we check a case expr
              -> MatchGroup GhcTc (LHsExpr GhcTc)   -- Matches being desugared
              -> DsM ([Id], CoreExpr)   -- Results
@@ -719,7 +723,8 @@ matchWrapper ctxt mb_scr (MG { mg_alts = L _ matches
                              , mg_arg_tys = arg_tys
                              , mg_res_ty = rhs_ty
                              , mg_origin = origin })
-  = do  { dflags <- getDynFlags
+  = do  { traceM "matchWrapper"
+        ; dflags <- getDynFlags
         ; locn   <- getSrcSpanDs
 
         ; new_vars    <- case matches of
@@ -754,16 +759,21 @@ matchWrapper ctxt mb_scr (MG { mg_alts = L _ matches
                      else id
 
 
-matchEquations  :: HsMatchContext Name
+matchEquations  :: HasCallStack
+                => HsMatchContext Name
                 -> [MatchId] -> [EquationInfo] -> Type
                 -> DsM CoreExpr
 matchEquations ctxt vars eqns_info rhs_ty
   = do  { let error_doc = matchContextErrString ctxt
-
+        ; traceM "matchEquations"
         ; match_result <- match vars rhs_ty eqns_info
-
+--        ; traceM "treeResult:"
+--        ; MatchTree.printmr match_result
         ; fail_expr <- mkErrorAppDs pAT_ERROR_ID rhs_ty error_doc
-        ; extractMatchResult match_result fail_expr }
+--        ; traceM "matchEquation, failExpr:"
+--        ; liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
+        ; result <- extractMatchResult match_result fail_expr 
+        ; return result }
 
 {-
 ************************************************************************
@@ -777,7 +787,8 @@ situation where we want to match a single expression against a single
 pattern. It returns an expression.
 -}
 
-matchSimply :: CoreExpr                 -- Scrutinee
+matchSimply :: HasCallStack
+            => CoreExpr                 -- Scrutinee
             -> HsMatchContext Name      -- Match kind
             -> LPat GhcTc               -- Pattern it should match
             -> CoreExpr                 -- Return this if it matches
@@ -785,6 +796,14 @@ matchSimply :: CoreExpr                 -- Scrutinee
             -> DsM CoreExpr
 -- Do not warn about incomplete patterns; see matchSinglePat comments
 matchSimply scrut hs_ctx pat result_expr fail_expr = do
+    traceM "matchSimply:"
+    liftIO . putStrLn . showSDocUnsafe $ ppr scrut
+    traceM "matchSimply:pat"
+    liftIO . putStrLn . showSDocUnsafe $ ppr pat
+    traceM "succ:"
+    liftIO . putStrLn . showSDocUnsafe $ ppr result_expr
+    --traceM "fail:"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     let
       match_result = cantFailMatchResult result_expr
       rhs_ty       = exprType fail_expr
@@ -792,7 +811,8 @@ matchSimply scrut hs_ctx pat result_expr fail_expr = do
     match_result' <- matchSinglePat scrut hs_ctx pat rhs_ty match_result
     extractMatchResult match_result' fail_expr
 
-matchSinglePat :: CoreExpr -> HsMatchContext Name -> LPat GhcTc
+matchSinglePat :: HasCallStack
+               => CoreExpr -> HsMatchContext Name -> LPat GhcTc
                -> Type -> MatchResult -> DsM MatchResult
 -- matchSinglePat ensures that the scrutinee is a variable
 -- and then calls match_single_pat_var
@@ -872,7 +892,7 @@ the PgN constructor as a Rational if numeric, and add a PgOverStr constructor
 for overloaded strings.
 -}
 
-groupEquations :: DynFlags -> [EquationInfo] -> [[(PatGroup, EquationInfo)]]
+groupEquations :: HasCallStack => DynFlags -> [EquationInfo] -> [[(PatGroup, EquationInfo)]]
 -- If the result is of form [g1, g2, g3],
 -- (a) all the (pg,eq) pairs in g1 have the same pg
 -- (b) none of the gi are empty
