@@ -433,10 +433,13 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 --      NPat
 --      NPlusKPat
 
-tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
-tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
+tidy1 x y = do
+  --liftIO . putStrLn $ ("tidy1:" ++ showSDocUnsafe (ppr y))
+  MatchTree.tidy1 x y
+tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPat _ pat)      = tidy1 v (unLoc pat)
+tidy1 _ (WildPat ty)        = return (idDsWrapper, WildPat ty)
+tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
@@ -744,8 +747,7 @@ matchWrapper ctxt mb_scr (MG { mg_alts = L _ matches
                              , mg_arg_tys = arg_tys
                              , mg_res_ty = rhs_ty
                              , mg_origin = origin })
-  = do  { traceM "matchWrapper"
-        ; dflags <- getDynFlags
+  = do  { dflags <- getDynFlags
         ; locn   <- getSrcSpanDs
 
         ; new_vars    <- case matches of
@@ -791,13 +793,8 @@ matchEquations  :: HasCallStack
                 -> DsM CoreExpr
 matchEquations ctxt vars eqns_info rhs_ty
   = do  { let error_doc = matchContextErrString ctxt
-        ; traceM "matchEquations"
         ; match_result <- match vars rhs_ty eqns_info
---        ; traceM "treeResult:"
---        ; MatchTree.printmr match_result
         ; fail_expr <- mkErrorAppDs pAT_ERROR_ID rhs_ty error_doc
---        ; traceM "matchEquation, failExpr:"
---        ; liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
         ; result <- extractMatchResult match_result fail_expr 
         ; return result }
 
@@ -822,14 +819,6 @@ matchSimply :: HasCallStack
             -> DsM CoreExpr
 -- Do not warn about incomplete patterns; see matchSinglePat comments
 matchSimply scrut hs_ctx pat result_expr fail_expr = do
-    traceM "matchSimply:"
-    liftIO . putStrLn . showSDocUnsafe $ ppr scrut
-    traceM "matchSimply:pat"
-    liftIO . putStrLn . showSDocUnsafe $ ppr pat
-    traceM "succ:"
-    liftIO . putStrLn . showSDocUnsafe $ ppr result_expr
-    --traceM "fail:"
-    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     let
       match_result = cantFailMatchResult result_expr
       rhs_ty       = exprType fail_expr

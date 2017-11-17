@@ -195,7 +195,7 @@ runDs hsc_env (ds_gbl, ds_lcl) thing_inside
        ; let final_res
                | errorsFound dflags msgs = Nothing
                | Right r <- res          = Just r
-               | otherwise               = panic "initDs"
+               | otherwise               = pprPanic "initDs" empty
        ; return (msgs, final_res)
        }
   where dflags = hsc_dflags hsc_env
