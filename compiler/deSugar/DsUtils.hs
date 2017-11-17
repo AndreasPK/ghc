@@ -200,16 +200,16 @@ alwaysFailMatchResult = MatchResult CanFail (\fail -> return fail)
 cantFailMatchResult :: CoreExpr -> MatchResult
 cantFailMatchResult expr = MatchResult CantFail (\_ -> return expr)
 
-extractMatchResult :: MatchResult -> CoreExpr -> DsM CoreExpr
+extractMatchResult :: HasCallStack => MatchResult -> CoreExpr -> DsM CoreExpr
 extractMatchResult (MatchResult CantFail match_fn) _
   = match_fn (error "It can't fail!")
 
 extractMatchResult (MatchResult CanFail match_fn) fail_expr = do
     (fail_bind, if_it_fails) <- mkFailurePair fail_expr
-    traceM "extract:fail_bind"
-    liftIO . putStrLn . showSDocUnsafe $ ppr fail_bind
-    traceM "extract:fail_expr"
-    liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
+    --traceM "extract:fail_bind"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_bind
+    --traceM "extract:fail_expr"
+    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     body <- match_fn if_it_fails
     return (mkCoreLet fail_bind body)
 
@@ -373,7 +373,7 @@ mkPatSynCase var ty alt fail = do
                          | otherwise      = cont
 
 mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
-mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
+mkDataConCase _   _  []            = pprPanic "mkDataConCase: no alternatives" empty
 mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
   where
     con1          = alt_pat alt1
@@ -750,7 +750,7 @@ mkSelectorBinds ticks pat val_expr
   = return (v, [(v, val_expr)])
 
   | is_flat_prod_lpat pat'           -- Special case (B)
-  = do { traceM "mkSelector:B"
+  = do { --traceM "mkSelector:B"
        ; let pat_ty = hsLPatType pat'
        ; val_var <- newSysLocalDsNoLP pat_ty
 
@@ -770,8 +770,8 @@ mkSelectorBinds ticks pat val_expr
        ; return ( val_var, (val_var, val_expr) : binds) }
 
   | otherwise                          -- General case (C)
-  = do { traceM "mkSelector:C"
-  = do { tuple_var  <- newSysLocalDs tuple_ty
+  = do { --traceM "mkSelector:C"
+       ; tuple_var  <- newSysLocalDs tuple_ty
        ; error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
                                    local_tuple error_expr
@@ -932,10 +932,12 @@ mkFailurePair expr
        ; let real_arg = setOneShotLambda fail_fun_arg
        ; let result = (NonRec fail_fun_var (Lam real_arg expr),
                  App (Var fail_fun_var) (Var voidPrimId))
+       {-
        ; traceM "mkFailurePair:result"
        ; liftIO . putStrLn . showSDocUnsafe $ ppr result
        ; traceM "mkFailurePair:argument"
        ; liftIO . putStrLn . showSDocUnsafe $ ppr expr
+       -}
        
        ; return result }
   where

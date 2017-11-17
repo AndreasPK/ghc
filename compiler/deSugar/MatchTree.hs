@@ -36,7 +36,7 @@ import MatchCon
 import MatchLit
 import Type
 import Coercion ( eqCoercion )
-import TcType ( toTcTypeBag, tcSplitTyConApp, isIntegerTy)
+import TcType ( toTcTypeBag, tcSplitTyConApp, isIntegerTy, isStringTy)
 import TyCon( isNewTyCon )
 import TysWiredIn
 import ListSetOps
@@ -175,8 +175,14 @@ instance Outputable a => Outputable (Seq a) where
 instance Outputable MatchResult where
     ppr (MatchResult _ mr) = text "MatchResult"
 
-printmr :: MatchResult -> DsM ()
-printmr (MatchResult _ mr) = do
+printmr :: HasCallStack => MatchResult -> DsM ()
+printmr (MatchResult CantFail mr) = do
+    liftIO $ putStr "pmr: Matchresult: "
+    filler <- mkStringExpr "Should not be able to fail"
+    core <- (mr filler) 
+    liftIO . putStrLn . showSDocUnsafe $ ppr core 
+printmr (MatchResult CanFail mr) = do
+    liftIO $ putStr "pmr: Matchresult: "
     core <- (mr $ mkCharExpr 'F') 
     liftIO . putStrLn . showSDocUnsafe $ ppr core 
 
@@ -203,7 +209,8 @@ match vars ty eqns = do
     useTreeMatching <- goptM Opt_TreeMatching
     unless useTreeMatching failDs
     matrix <- (toPatternMatrix vars eqns)
-    --traceM "created pattern Matrix"
+    traceM "match:"
+    liftIO . putStrLn . showSDocUnsafe $ ppr $ eqns
     result <- matchWith leftToRight ty matrix (Map.empty)
     return result
 
@@ -498,9 +505,17 @@ strictSet m =
         (Just c) -> L.nub $ c:strictColumns
 
 leftToRight :: EqMatrix -> Maybe Int
-leftToRight m = 
-    let ss = strictSet m
-    in if null ss then Nothing else Just $ head ss
+{-
+We select strict columns left to right for one exception:
+If there is just a single row we can process patterns from
+left to right no matter their strictness.
+-}
+leftToRight m 
+--    | rowCount m == 1 && (fromJust $ columnCount m) > 0 = Just 0
+    | null ss         = Nothing 
+    | otherwise       = Just $ head ss
+    where
+        ss = strictSet m
 
 
 -- | Is evaluation of the pattern required
@@ -737,7 +752,8 @@ getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >> 
     return Nothing
 getPatternConstraint (p, info) = 
-    warnDs NoReason (ppr ("Pat should have been tidied already or not implemented", p)) >> failDs
+    --warnDs NoReason (ppr ("Pat should have been tidied already or not implemented", p)) >>
+    failDs
     --traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
 {-
 getPatternConstraint NPat {} occ = 
@@ -797,32 +813,60 @@ Recursive match function. Parameters are:
         Constraint.
 -}
 matchWith :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> DsM MatchResult
-matchWith heuristic ty m knowledge = do 
-    --traceM "matchWith:"
-    --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
-    --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
-    --traceM "Match matrix"
-    when (null m) (error "Matching empty matrix")
-    let matchCol = heuristic m :: Maybe Int 
-    --liftIO $ putStrLn $ "Matchcol:" ++ show matchCol
-    case matchCol of
-        Nothing -> do
-            --traceM "getRHS"
-            let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
-            --traceM "MatchResult"
-            --printmr expr
-            --liftIO $ putStrLn ""
-            --Makes sure all required occurences are evaluated.
-            --constraintWrapper <- (resolveConstraints m ty knowledge constraints)
-            --traceM "wrapper"
-            --liftIO . putStrLn $ showSDocUnsafe $ ppr (constraintWrapper $ mkCharExpr 'F')
-            --traceM "adjust and return match"
-            --return $ adjustMatchResult constraintWrapper expr
-            return $ expr -- TODO: Include wrapper
-            --return $ MatchResult CantFail $ const (return $ mkCharExpr 'F') -- debug expr
-        Just colIndex -> 
-            --return $ MatchResult CantFail $ const (return $ mkCharExpr 'F') -- debug expr
-            return $ mkCase heuristic ty m knowledge colIndex
+matchWith heuristic ty m knowledge 
+    | null m = do
+        --traceM "nullMatrix"
+        return $ alwaysFailMatchResult
+    | otherwise = do 
+        traceM "matchWith:"
+        liftIO $ putStrLn . showSDocUnsafe $ ppr $ fmap fst m
+        --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
+        --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
+        --traceM "Match matrix"
+
+        --If we match on something like f x = <canFailRhs> we can end up with a match on an empty matrix
+        let matchCol = heuristic m :: Maybe Int 
+        liftIO $ putStrLn $ "Matchcol:" ++ show matchCol
+        case matchCol of
+        {-
+
+        Consider a definition of the form:
+        f _ | <evaluates to False> = e1
+        f _ | otherwise            = e2
+
+        Here we need to ensure we dont fail after trying the first rhs but instead continue with the second row.
+
+        The heuristic can return no column in two cases:
+        a) We already matched on all patterns
+        b) There are no strict columns left.
+
+        In the case of a) we can simply combine the MatchResult of all remaining rows.
+        In the case of b) we have to continue matching on the rest of the matrix if the
+        current row fails.
+
+        -}
+            Nothing 
+                | fromJust (columnCount m) > 0 -> do
+                    let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
+
+                    continuation <- matchWith heuristic ty (Seq.drop 1 m) knowledge :: DsM MatchResult
+                    constraintWrapper <- (resolveConstraints m ty knowledge constraints) :: DsM DsWrapper
+                    let constrainedMatch = (adjustMatchResult constraintWrapper expr) :: MatchResult
+
+                    return $ combineMatchResults constrainedMatch continuation
+                | fromJust (columnCount m) == 0 -> do
+                    let rhss = F.toList $ fmap snd m :: [(MatchResult, Constraints)]
+                    let (results, constraints) = unzip rhss
+                    
+                    constraintWrappers <- mapM (resolveConstraints m ty knowledge) constraints :: DsM [DsWrapper]
+                    let constrainedMatches = zipWith adjustMatchResult constraintWrappers results :: [MatchResult]
+
+                    return $ foldr combineMatchResults alwaysFailMatchResult constrainedMatches
+
+            Just colIndex -> do
+                mr@(MatchResult cf _) <- mkCase heuristic ty m knowledge colIndex
+                --liftIO $ putStrLn $ case cf of { CanFail ->"CanFail"; CantFail -> "CantFail" }
+                return mr
 
 {-
 Split the matrix based on the given column, we use a helper data type to group patterns together.
@@ -892,11 +936,11 @@ unpackCol pm splitColIndex = do
      -- see patternBench
 
 
-mkCase :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> Int -> MatchResult
+mkCase :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
 
 -}
--- TODO: Extend from just literals
+-- TODO: Extend for patSyn and all constructors
 mkCase heuristic ty m knowledge colIndex =
     let column = getCol m colIndex
         occ = colOcc column :: Occurrence --What we match on
@@ -961,12 +1005,11 @@ mkCase heuristic ty m knowledge colIndex =
                             | otherwise                   -> error "Constructor group"
         
 
-        groupExpr :: PGrp -> DsM (CoreExpr -> DsM CoreExpr)
+        groupExpr :: PGrp -> DsM MatchResult
         groupExpr grp = do
             let newKnowledge = (Map.insert occ (newEvidence grp) knowledge)
             newMatrix <- getNewMatrix grp 
-            (MatchResult _ f) <- matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
-            return f
+            matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
 
         defaultFailure :: CoreExpr -> DsM (Maybe (CoreExpr))
         defaultFailure failExpr = if hasDefaultGroup || exhaustiveGrps
@@ -988,7 +1031,7 @@ mkCase heuristic ty m knowledge colIndex =
 
 
 
-        mkConAlt :: HasCallStack => PGrp -> (CoreExpr -> DsM CoreAlt)
+        mkConAlt :: HasCallStack => PGrp -> (CoreExpr -> DsM (CoreAlt,CanItFail))
         mkConAlt grp@(ConGrp con) = 
             -- Look at the pattern info from the first pattern.
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
@@ -1075,15 +1118,17 @@ mkCase heuristic ty m knowledge colIndex =
                     --TODO: Build constraint for added entries
                 getNewConMatrix ConGrp {} _ = error "Constructor group2"
 
-                conGroupExpr :: PGrp -> [Id] -> (CoreExpr -> DsM CoreExpr)
-                conGroupExpr grp vars = \failExpr -> do
+                conGroupExpr :: PGrp -> [Id] -> DsM MatchResult
+                conGroupExpr grp vars = do
                     let newKnowledge = (Map.insert occ (newEvidence grp) knowledge)
                     newMatrix <- getNewConMatrix grp vars  
-                    (MatchResult _ f) <- matchWith heuristic ty (newMatrix) newKnowledge
-                    f failExpr
+                    matchWith heuristic ty (newMatrix) newKnowledge
+
 
             in (\failExpr -> do
                 arg_vars <- selectConMatchVars val_arg_tys args1
+
+                when (not . null $ fields1) failDs
                 
                 --TODO: make sure group is compatible (record patterns) and pattern variables in correct order
                 --For now we just fail on records
@@ -1105,10 +1150,13 @@ mkCase heuristic ty m knowledge colIndex =
 
                 unpackedMatrix <- getNewConMatrix grp arg_vars :: DsM CPM
 
-                let expr = conGroupExpr grp arg_vars 
-                body <- expr failExpr
+                (MatchResult fail_val body_fnc) <- conGroupExpr grp arg_vars :: DsM MatchResult
 
-                return $ (DataAlt con, arg_vars, wrapper . mkCoreLets ds_bind $ body)
+                body <- body_fnc failExpr :: DsM CoreExpr
+
+                return $ 
+                    ((DataAlt con, arg_vars, wrapper . mkCoreLets ds_bind $ body)
+                    , fail_val)
             )
         mkConAlt _ = error "mkConAlt - No Constructor Grp"
 
@@ -1127,62 +1175,75 @@ mkCase heuristic ty m knowledge colIndex =
         -}
 
         --generate the alternative for a entry grp
-        mkAlt :: PGrp -> (CoreExpr -> DsM CoreAlt)
-        mkAlt grp@(LitGrp lit@(HsIntPrim _ val)) = (\failExpr -> do
+        mkAlt :: PGrp -> (CoreExpr -> DsM (CoreAlt, CanItFail))
+        mkAlt grp@(LitGrp lit) = (\failExpr -> do
+            --TODO: For now fall back to regular matching when strings are involved
+            if isStringTy occType then failDs else return ()
             Lit coreLit <- dsLit (convertLit lit)
-            expr <- groupExpr grp
-            body <- expr failExpr
-            return (LitAlt coreLit, [], body)
+            (MatchResult fail_val body_fnc) <- groupExpr grp
+            body <- body_fnc failExpr
+            return ((LitAlt coreLit, [], body), fail_val)
             )
         mkAlt grp@(ConGrp _con) = do
             mkConAlt grp
         mkAlt (VarGrp) = (\failExpr -> do
-            expr <- groupExpr VarGrp
-            body <- expr failExpr
-            return $ (DEFAULT, [], body)
+            (MatchResult fail_val body_fnc) <- groupExpr VarGrp
+            body <- body_fnc failExpr
+            return $ ((DEFAULT, [], body), fail_val)
             )
 
-        alts :: CoreExpr -> DsM [CoreAlt]
+        alts :: CoreExpr -> DsM ([CoreAlt], CanItFail)
         alts failExpr = do
             let altBuilders = map (mkAlt) grps
-            grpAlts <- sortBy (\(a,x,y) (a2,_,_)-> compare a a2) <$> mapM ($ failExpr) altBuilders
-            liftM (addDefault grpAlts) (defaultFailure failExpr) --Add default if no var grp exists
+            -- for each branch check if it can fail
+            (grpAlts, fail_values) <- unzip <$> mapM ($ failExpr) altBuilders 
+            --If any branch can fail or the case itself might fail the resulting matchresult could fail.
+            let canCaseFail = foldr1 orFail (canItFail:fail_values) 
+
+            resultAlts <- liftM (addDefault grpAlts) (defaultFailure failExpr) --Add default if no var grp exists
+            return (resultAlts, canCaseFail)
 
 
         canItFail :: CanItFail
-        canItFail 
+        canItFail
             | hasDefaultGroup = CantFail
             | exhaustiveGrps = CantFail
             | otherwise = CanFail
         
         exhaustiveGrps :: Bool
-        exhaustiveGrps = 
-            let usedCons = mapMaybe (\x -> case x of { ConGrp {pgrpCon = dcon} -> Just dcon; otherwise -> Nothing}) grps
-                tyCon = dataConTyCon $ head usedCons
-                dataCons = tyConDataCons tyCon
-            in
-            all (`elem` dataCons) usedCons
+        -- Determine if all constructors where mentioned
+        exhaustiveGrps 
+            | any (\x -> case x of { ConGrp {pgrpCon = dcon} -> True; _ -> False}) grps = 
+                let usedCons = mapMaybe (\x -> case x of { ConGrp {pgrpCon = dcon} -> Just dcon; otherwise -> Nothing}) grps
+                    tyCon = dataConTyCon $ head $ usedCons
+                    dataCons = tyConDataCons tyCon
+                    usedCount = length $ Set.fromList $ map dataConTag usedCons
+                in
+                usedCount == length dataCons
+                --all (`elem` dataCons) usedCons
+            | any (\x -> case x of { LitGrp lit -> True; _ -> False}) grps = 
+                False -- Literals are never assumed to be exhaustive. 
+            | otherwise =
+                error "Exhaustive check should only be performed if there are con or lit grps"
+            
 
         
 
 
-    in MatchResult canItFail $ \failExpr -> do
-
-        error "TODO:" 
-        {-
-        Consider case matchresults for value of CanItFail expression.
-        Deal with multiple rows matching the given values. (GRHS)
-        -}
-
-
-        --traceM "mkCase: failExpr"
-        --liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan failExpr
-        --liftIO . putStrLn . showSDocUnsafe $ ppr failExpr
+    in do
+        traceM "mkCase"
+        let failExpr = undefined
+        (_, fail_val) <- alts failExpr
         
-        alts <- alts failExpr
-        --traceM "alts"
-        --liftIO $ putStrLn $ showSDocUnsafe $ ppr alts
-        return $ Case (Var occ) (mkWildValBinder (idType occ)) ty (alts)
+
+        let caseBuilder = \failExpr -> do
+                (alts, _) <- alts failExpr
+                let orderedAlts = sortOn (\(x,y,z) -> x) alts
+                let altCons = map (\(x,y,z) -> x) orderedAlts
+                return $ Case (Var occ) (mkWildValBinder (idType occ)) ty (orderedAlts)
+
+        return $ MatchResult fail_val  caseBuilder
+
 
 
 occColIndex :: HasCallStack => forall rhs. HasCallStack => PatternMatrix Occurrence rhs -> Occurrence -> Maybe Int
@@ -1228,7 +1289,6 @@ mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Con
 Resolve at least one constraint by introducing a additional case statement
 -}
 mkConstraintCase m ty knowledge constraints =
-    --traceShowM ("mkConstraint", knowledge, expr, constraints)
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
         --ty = varType occ :: Kind
@@ -1256,6 +1316,7 @@ mkConstraintCase m ty knowledge constraints =
 
     
     in do
+    traceM ("mkConstraint")
     def <- defaultExpr :: DsM DsWrapper
     let defAlt = (\rhs -> (DEFAULT, [], def rhs)) :: CoreExpr -> CoreAlt
     altWrappers <- mapM (condAlt) occVals :: DsM [CoreExpr -> CoreAlt]

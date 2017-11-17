@@ -184,7 +184,7 @@ match vars@(v:_) ty eqns    -- Eqns *can* be empty
         ; treeResult <- tryM (MatchTree.match vars ty eqns)
         ; case treeResult of
             Right matchResult -> return matchResult
-            Left _ -> do 
+            Left _ -> do
               {
                       -- Tidy the first pattern, generating
                       -- auxiliary bindings if necessary
@@ -198,7 +198,7 @@ match vars@(v:_) ty eqns    -- Eqns *can* be empty
 
               ; match_results <- match_groups grouped
               ; return (adjustMatchResult (foldr (.) id aux_binds) $
-                        foldr1 combineMatchResults match_results) 
+                        foldr1 combineMatchResults match_results)
               }
         }
   where
@@ -412,6 +412,9 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 -- It eliminates many pattern forms (as-patterns, variable patterns,
 -- list patterns, etc) and returns any created bindings in the wrapper.
 
+tidy1 x y = do
+  --liftIO . putStrLn $ ("tidy1:" ++ showSDocUnsafe (ppr y))
+  MatchTree.tidy1 x y
 tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
 tidy1 v (SigPat _ pat)      = tidy1 v (unLoc pat)
 tidy1 _ (WildPat ty)        = return (idDsWrapper, WildPat ty)
@@ -725,8 +728,7 @@ matchWrapper ctxt mb_scr (MG { mg_alts = L _ matches
                              , mg_arg_tys = arg_tys
                              , mg_res_ty = rhs_ty
                              , mg_origin = origin })
-  = do  { traceM "matchWrapper"
-        ; dflags <- getDynFlags
+  = do  { dflags <- getDynFlags
         ; locn   <- getSrcSpanDs
 
         ; new_vars    <- case matches of
@@ -767,14 +769,9 @@ matchEquations  :: HasCallStack
                 -> DsM CoreExpr
 matchEquations ctxt vars eqns_info rhs_ty
   = do  { let error_doc = matchContextErrString ctxt
-        ; traceM "matchEquations"
         ; match_result <- match vars rhs_ty eqns_info
---        ; traceM "treeResult:"
---        ; MatchTree.printmr match_result
         ; fail_expr <- mkErrorAppDs pAT_ERROR_ID rhs_ty error_doc
---        ; traceM "matchEquation, failExpr:"
---        ; liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
-        ; result <- extractMatchResult match_result fail_expr 
+        ; result <- extractMatchResult match_result fail_expr
         ; return result }
 
 {-
@@ -798,14 +795,6 @@ matchSimply :: HasCallStack
             -> DsM CoreExpr
 -- Do not warn about incomplete patterns; see matchSinglePat comments
 matchSimply scrut hs_ctx pat result_expr fail_expr = do
-    traceM "matchSimply:"
-    liftIO . putStrLn . showSDocUnsafe $ ppr scrut
-    traceM "matchSimply:pat"
-    liftIO . putStrLn . showSDocUnsafe $ ppr pat
-    traceM "succ:"
-    liftIO . putStrLn . showSDocUnsafe $ ppr result_expr
-    --traceM "fail:"
-    --liftIO . putStrLn . showSDocUnsafe $ ppr fail_expr
     let
       match_result = cantFailMatchResult result_expr
       rhs_ty       = exprType fail_expr
