@@ -53,6 +53,7 @@ import Data.Int
 import Data.Word
 import Data.Proxy
 
+
 {-
 ************************************************************************
 *                                                                      *
@@ -66,8 +67,10 @@ We give int/float literals type @Integer@ and @Rational@, respectively.
 The typechecker will (presumably) have put \tr{from{Integer,Rational}s}
 around them.
 
-ToDo: put in range checks for when converting ``@i@''
-(or should that be in the typechecker?)
+There are some invariantes on the numberic Literals which are enforced by
+the mkMach* functions.
+
+ToDo: Decide if String should also refer to the wrapper.
 
 For numeric literals, we try to detect there use at a standard type
 (@Int@, @Float@, etc.) are directly put in the right constructor.
