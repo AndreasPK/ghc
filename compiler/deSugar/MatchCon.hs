@@ -126,7 +126,7 @@ matchOneConLike :: [Id]
                 -> [EquationInfo]
                 -> DsM (CaseAlt ConLike)
 matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
-  = do  { let inst_tys = ASSERT( all id $ zipWith tcEqType (mkTyVarTys tvs1) (mkTyVarTys ex_tvs)) 
+  = do  { let inst_tys = ASSERT( tvs1 `equalLength` ex_tvs )
                          arg_tys ++ mkTyVarTys tvs1
 
               val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
