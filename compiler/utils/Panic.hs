@@ -33,6 +33,7 @@ import Config
 import Exception
 
 import Control.Monad.IO.Class
+import Control.Monad (when)
 import Control.Concurrent
 import Debug.Trace        ( trace )
 import System.IO.Unsafe
@@ -178,9 +179,12 @@ handleGhcException = ghandle
 
 
 -- | Panics and asserts.
-panic, sorry, pgmError :: String -> a
+panic, sorry, pgmError :: HasCallStack => String -> a
 panic    x = unsafeDupablePerformIO $ do
    stack <- ccsToStrings =<< getCurrentCCS x
+#if defined(DEBUG)
+   putStrLn $ prettyCallStack callStack
+#endif
    if null stack
       then throwGhcException (Panic x)
       else throwGhcException (Panic (x ++ '\n' : renderStack stack))
