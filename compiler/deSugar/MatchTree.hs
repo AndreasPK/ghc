@@ -1155,8 +1155,16 @@ mkCase heuristic ty m knowledge colIndex =
                     matchWith heuristic ty (newMatrix) newKnowledge
 
             in  do
+
                 --dsPrint $ text "mkCaseAlt: " <+> ppr con
                 arg_vars <- selectConMatchVars val_arg_tys args1
+
+                {- 
+                TODO: GADTs require special attention to get bindings right.
+                Particularly data2 showcases where we miss creating a binder
+                so for now we just use regular matching on these constructors.
+                -}
+                unless (isVanillaDataCon con) failDs
 
                 -- TODO: Newtypes require lets instead of cases.
                 -- For now once again we just fail instead
@@ -1387,6 +1395,7 @@ dsPrint = liftIO . putStrLn . showSDocUnsafe
 mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
 {-
 Resolve at least one constraint by introducing a additional case statement
+There is some bookkeeping not done here which needs to be fixed.
 -}
 mkConstraintCase m ty knowledge constraints =
     let cond@(info,conVal) = head . head $ constraints :: Condition
@@ -1429,7 +1438,7 @@ mkConstraintCase m ty knowledge constraints =
             
             --dsPrint $ text "altCon: " <+> ppr dcon
             
-            --let binders = map (\i -> mkLocalIdOrCoVar ("resBdr" ++ show i)   dataConSourceArity
+            --todo: Might require handling of unpacked arguments
             return (\expr -> ((DataAlt dcon), tvs1 ++ dicts1 ++ arg_vars, wrapper expr)) 
 
     
@@ -1515,55 +1524,3 @@ evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
         in match (fromJust cVal)
     where
         cOcc = patOcc cInfo :: Occurrence
-{- 
-
-data CondValue 
-    = LitCond { cv_lit :: HsLit GhcTc }
-    | ConCond DataCon
-    deriving (Eq)
-
-
-
---Represents knowledge about the given occurence.
---Left => Constructors which the Occurence does not match.
---Right Tag => Occurence matches the constructor.
-type Evidence = (Occurrence, (Either [ConTag] ConTag))
-
---Represents a condition on the given occurence. Nothing represents evaluation.
---Just => Occurence matches the constructor.
---Nothing -> Just evaluation
-type Condition = (Occurrence, Maybe CondValue)
-type Conditions = [Condition]
-
-type Constraint = Conditions
-type Constraints = [Constraint]
-
-type CPM = PM MatchId MatrixRHS
-{--
- Set of all occurences and the constructor it was evaluated to.
- We generate no knowledge for default branches
--}
-type DecompositionKnowledge = Map Occurrence (Either [CondValue] CondValue)
-
-type Heuristic = CPM -> Maybe Int
-
--- Matrix Types
-type EqMatrix = PM MatchId MatrixRHS
-
-type MatrixRHS = (MatchResult, Constraints)
-
-
-type Entry e = (Pat GhcTc, e)
-
--- Pattern matrix row major. The plan is to store the pattern in a and additional info in e
-type PM e rhs = (Seq.Seq (Seq.Seq (Entry e), rhs))
-
-type PatternMatrix e rhs = PM e rhs
-type PatternEquation e rhs = (Seq.Seq (Entry e), rhs)
-type PatternRow e = Seq.Seq (Entry e)
-type PatternColumn e = Seq.Seq (Entry e)
-
-type TreeEquation = PatternEquation Occurrence MatrixRHS
-
-
--}
