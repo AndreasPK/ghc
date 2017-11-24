@@ -63,7 +63,7 @@ import Data.Either      ( partitionEithers, isRight, rights )
 import Data.Map         ( Map )
 import qualified Data.Map as Map
 import Data.Ord         ( comparing )
-import Data.List        ( partition, (\\), find, sortBy )
+import Data.List        ( partition, (\\), find, sortBy, sortOn )
 import qualified Data.Set as S
 -- import qualified Data.Set as Set
 import System.FilePath  ((</>))

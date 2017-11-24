@@ -68,6 +68,7 @@ import Util
 import Outputable
 import qualified GHC.LanguageExtensions as LangExt
 
+import Data.List (sortOn)
 import Control.Monad( unless )
 
 {-

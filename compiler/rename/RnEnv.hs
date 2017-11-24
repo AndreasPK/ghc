@@ -78,6 +78,7 @@ import qualified GHC.LanguageExtensions as LangExt
 import RnUnbound
 import RnUtils
 import Data.Maybe (isJust)
+import Data.List (sortOn)
 import qualified Data.Semigroup as Semi
 
 {-
