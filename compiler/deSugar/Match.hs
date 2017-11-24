@@ -8,7 +8,7 @@ The @match@ function
 
 {-# LANGUAGE CPP #-}
 
-module Match ( match, matchEquations, matchWrapper, matchSimply, matchSinglePat ) where
+module Match ( match, matchEquations, matchWrapper, matchSimply, matchSinglePat, tidy1 ) where
 
 #include "HsVersions.h"
 
@@ -433,13 +433,10 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 --      NPat
 --      NPlusKPat
 
-tidy1 x y = do
-  --liftIO . putStrLn $ ("tidy1:" ++ showSDocUnsafe (ppr y))
-  MatchTree.tidy1 x y
-tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 _ (WildPat ty)        = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
+tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
+tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
+tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
@@ -455,11 +452,8 @@ tidy1 v (AsPat (L _ var) pat)
 {- now, here we handle lazy patterns:
     tidy1 v ~p bs = (v, v1 = case v of p -> v1 :
                         v2 = case v of p -> v2 : ... : bs )
-
     where the v_i's are the binders in the pattern.
-
     ToDo: in "v_i = ... -> v_i", are the v_i's really the same thing?
-
     The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
 -}
 
@@ -519,7 +513,7 @@ tidy1 _ non_interesting_pat
   = return (idDsWrapper, non_interesting_pat)
 
 --------------------
-tidy_bang_pat :: HasCallStack => Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
+tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
 
 -- Discard par/sig under a bang
 tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
@@ -567,7 +561,7 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 
 -------------------
-push_bang_into_newtype_arg :: HasCallStack => SrcSpan
+push_bang_into_newtype_arg :: SrcSpan
                            -> Type -- The type of the argument we are pushing
                                    -- onto
                            -> HsConPatDetails Id -> HsConPatDetails Id
