@@ -308,34 +308,31 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 -- It eliminates many pattern forms (as-patterns, variable patterns,
 -- list patterns, etc) and returns any created bindings in the wrapper.
 
-tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 _ (WildPat ty)        = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
+tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
+tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
+tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
-tidy1 v (VarPat _ (L _ var))
+tidy1 v (VarPat (L _ var))
   = return (wrapBind var v, WildPat (idType var))
 
         -- case v of { x@p -> mr[] }
         -- = case v of { p -> let x=v in mr[] }
-tidy1 v (AsPat _ (L _ var) pat)
+tidy1 v (AsPat (L _ var) pat)
   = do  { (wrap, pat') <- tidy1 v (unLoc pat)
         ; return (wrapBind var v . wrap, pat') }
 
 {- now, here we handle lazy patterns:
     tidy1 v ~p bs = (v, v1 = case v of p -> v1 :
                         v2 = case v of p -> v2 : ... : bs )
-
     where the v_i's are the binders in the pattern.
-
     ToDo: in "v_i = ... -> v_i", are the v_i's really the same thing?
-
     The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
 -}
 
-tidy1 v (LazyPat _ pat)
+tidy1 v (LazyPat pat)
     -- This is a convenient place to check for unlifted types under a lazy pattern.
     -- Doing this check during type-checking is unsatisfactory because we may
     -- not fully know the zonked types yet. We sure do here.
@@ -351,7 +348,7 @@ tidy1 v (LazyPat _ pat)
         ; let sel_binds =  [NonRec b rhs | (b,rhs) <- sel_prs]
         ; return (mkCoreLets sel_binds, WildPat (idType v)) }
 
-tidy1 _ (ListPat _ pats ty Nothing)
+tidy1 _ (ListPat pats ty Nothing)
   = return (idDsWrapper, unLoc list_ConPat)
   where
     list_ConPat = foldr (\ x y -> mkPrefixConPat consDataCon [x, y] [ty])
@@ -360,29 +357,29 @@ tidy1 _ (ListPat _ pats ty Nothing)
 
 -- Introduce fake parallel array constructors to be able to handle parallel
 -- arrays with the existing machinery for constructor pattern
-tidy1 _ (PArrPat ty pats)
+tidy1 _ (PArrPat pats ty)
   = return (idDsWrapper, unLoc parrConPat)
   where
     arity      = length pats
     parrConPat = mkPrefixConPat (parrFakeCon arity) pats [ty]
 
-tidy1 _ (TuplePat tys pats boxity)
+tidy1 _ (TuplePat pats boxity tys)
   = return (idDsWrapper, unLoc tuple_ConPat)
   where
     arity = length pats
     tuple_ConPat = mkPrefixConPat (tupleDataCon boxity arity) pats tys
 
-tidy1 _ (SumPat tys pat alt arity)
+tidy1 _ (SumPat pat alt arity tys)
   = return (idDsWrapper, unLoc sum_ConPat)
   where
     sum_ConPat = mkPrefixConPat (sumDataCon alt arity) [pat] tys
 
 -- LitPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (LitPat _ lit)
+tidy1 _ (LitPat lit)
   = return (idDsWrapper, tidyLitPat lit)
 
 -- NPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (NPat ty (L _ lit) mb_neg eq)
+tidy1 _ (NPat (L _ lit) mb_neg eq ty)
   = return (idDsWrapper, tidyNPat tidyLitPat lit mb_neg eq ty)
 
 -- Everything else goes through unchanged...
@@ -391,17 +388,16 @@ tidy1 _ non_interesting_pat
   = return (idDsWrapper, non_interesting_pat)
 
 --------------------
-tidy_bang_pat :: HasCallStack => Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
+tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
 
 -- Discard par/sig under a bang
-tidy_bang_pat v _ (ParPat _ (L l p)) = tidy_bang_pat v l p
-tidy_bang_pat v _ (SigPat _ (L l p)) = tidy_bang_pat v l p
+tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
+tidy_bang_pat v _ (SigPatOut (L l p) _) = tidy_bang_pat v l p
 
 -- Push the bang-pattern inwards, in the hope that
 -- it may disappear next time
-tidy_bang_pat v l (AsPat x v' p) = tidy1 v (AsPat x v' (L l (BangPat noExt p)))
-tidy_bang_pat v l (CoPat x w p t)
-  = tidy1 v (CoPat x w (BangPat noExt (L l p)) t)
+tidy_bang_pat v l (AsPat v' p)  = tidy1 v (AsPat v' (L l (BangPat p)))
+tidy_bang_pat v l (CoPat w p t) = tidy1 v (CoPat w (BangPat (L l p)) t)
 
 -- Discard bang around strict pattern
 tidy_bang_pat v _ p@(LitPat {})    = tidy1 v p
@@ -437,10 +433,10 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 --
 -- NB: SigPatIn, ConPatIn should not happen
 
-tidy_bang_pat _ l p = return (idDsWrapper, BangPat noExt (L l p))
+tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 
 -------------------
-push_bang_into_newtype_arg :: HasCallStack => SrcSpan
+push_bang_into_newtype_arg :: SrcSpan
                            -> Type -- The type of the argument we are pushing
                                    -- onto
                            -> HsConPatDetails GhcTc -> HsConPatDetails GhcTc
@@ -448,19 +444,17 @@ push_bang_into_newtype_arg :: HasCallStack => SrcSpan
 -- We are transforming   !(N p)   into   (N !p)
 push_bang_into_newtype_arg l _ty (PrefixCon (arg:args))
   = ASSERT( null args)
-    PrefixCon [L l (BangPat noExt arg)]
+    PrefixCon [L l (BangPat arg)]
 push_bang_into_newtype_arg l _ty (RecCon rf)
   | HsRecFields { rec_flds = L lf fld : flds } <- rf
   , HsRecField { hsRecFieldArg = arg } <- fld
   = ASSERT( null flds)
-    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg
-                                           = L l (BangPat noExt arg) })] })
+    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
 push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
   | HsRecFields { rec_flds = [] } <- rf
-  = PrefixCon [L l (BangPat noExt (noLoc (WildPat ty)))]
+  = PrefixCon [L l (BangPat (noLoc (WildPat ty)))]
 push_bang_into_newtype_arg _ _ cd
   = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
-
 
 
 
@@ -759,7 +753,7 @@ getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
 -- | The conditions imposed on the RHS by this pattern.
 -- Result can have no condition, just evaluation or impose a condition on the
 -- following constraints
-getPatternConstraint ((LitPat _ lit),info) = do
+getPatternConstraint ((LitPat lit),info) = do
     df <- getDynFlags :: DsM DynFlags
     return $ Just $ (info, Just (LitCond (hsLitKey df lit)) )
 getPatternConstraint (pat@(ConPatOut { pat_con = con}), info) = do
@@ -949,14 +943,14 @@ getGrp df (p, _e ) = patGroup df p
 patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
 -- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
-patGroup df  (BangPat _ (L _loc p)) = patGroup df p
+patGroup df  (BangPat (L _loc p)) = patGroup df p
 patGroup _df (pat@ConPatOut { pat_con = L _ con
                       , pat_arg_tys = tys })
     | PatSynCon psyn <- con                = error "Not implemented" -- gSyn psyn tys
     | RealDataCon dcon <- con              = 
         ConGrp dcon pat
         --Literals
-patGroup df (LitPat _ lit) = LitGrp $ hsLitKey df lit
+patGroup df (LitPat lit) = LitGrp $ hsLitKey df lit
 patGroup _ _ = error "Not implemented"
 
 -- Assign the variables introduced by a binding to the appropriate values
@@ -1178,7 +1172,7 @@ mkCase heuristic ty m knowledge colIndex =
                     --let fieldArgs = unLoc $ hsRecFieldArg field :: Pat GhcTc
                     let fieldSelector = hsRecFieldSel field --Selector for the field
                     let fname = unLoc $ rdrNameFieldOcc fieldLabel :: RdrName
-                    let fextocc = extFieldOcc fieldLabel :: Id --The selector for the field
+                    let fextocc = selectorFieldOcc fieldLabel :: Id --The selector for the field
 
                     let conField = (head $ conLikeFieldLabels con1) :: FieldLabel --First field in the constructor
                     let conSelector = flSelector conField :: Name -- Name of constructor selector
