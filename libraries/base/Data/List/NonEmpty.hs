@@ -35,7 +35,8 @@ module Data.List.NonEmpty (
    , scanr1      -- :: (a -> a -> a) -> NonEmpty a -> NonEmpty a
    , transpose   -- :: NonEmpty (NonEmpty a) -> NonEmpty (NonEmpty a)
    , sortBy      -- :: (a -> a -> Ordering) -> NonEmpty a -> NonEmpty a
-   , sortWith      -- :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
+   , sortWith    -- :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
+   , sortOn      -- :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
    -- * Basic functions
    , length      -- :: NonEmpty a -> Int
    , head        -- :: NonEmpty a -> a
@@ -378,7 +379,7 @@ groupWith1 f = groupBy1 ((==) `on` f)
 
 -- | 'groupAllWith1' is to 'groupWith1' as 'groupAllWith' is to 'groupWith'
 groupAllWith1 :: (Ord b) => (a -> b) -> NonEmpty a -> NonEmpty (NonEmpty a)
-groupAllWith1 f = groupWith1 f . sortWith f
+groupAllWith1 f = groupWith1 f . sortOn f
 
 -- | The 'isPrefix' function returns @True@ if the first argument is
 -- a prefix of the second.
@@ -441,5 +442,12 @@ sortBy f = lift (List.sortBy f)
 -- | 'sortWith' for 'NonEmpty', behaves the same as:
 --
 -- > sortBy . comparing
+{-# DEPRECATED sortWith "use sortOn instead" #-}
 sortWith :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
-sortWith = sortBy . comparing
+sortWith = sortOn
+
+-- | 'sortWith' for 'NonEmpty', behaves the same as:
+--
+-- > sortBy . comparing
+sortOn :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
+sortOn = sortBy . comparing

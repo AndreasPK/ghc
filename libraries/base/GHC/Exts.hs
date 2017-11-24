@@ -114,15 +114,17 @@ the []            = errorWithoutStackTrace "GHC.Exts.the: empty list"
 
 -- | The 'sortWith' function sorts a list of elements using the
 -- user supplied function to project something out of each element
+{-# DEPRECATED sortWith "use 'sortOn' from Data.List instead" #-}
 sortWith :: Ord b => (a -> b) -> [a] -> [a]
-sortWith f = sortBy (\x y -> compare (f x) (f y))
+--sortWith f = sortBy (\x y -> compare (f x) (f y))
+sortWith = sortOn
 
 -- | The 'groupWith' function uses the user supplied function which
 -- projects an element out of every list element in order to first sort the
 -- input list and then to form groups by equality on these projected elements
 {-# INLINE groupWith #-}
 groupWith :: Ord b => (a -> b) -> [a] -> [[a]]
-groupWith f xs = build (\c n -> groupByFB c n (\x y -> f x == f y) (sortWith f xs))
+groupWith f xs = build (\c n -> groupByFB c n (\x y -> f x == f y) (sortOn f xs))
 
 {-# INLINE [0] groupByFB #-} -- See Note [Inline FB functions] in GHC.List
 groupByFB :: ([a] -> lst -> lst) -> lst -> (a -> a -> Bool) -> [a] -> lst

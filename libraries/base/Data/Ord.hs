@@ -43,7 +43,7 @@ comparing p x y = compare (p x) (p y)
 -- If @a@ has an @'Ord'@ instance associated with it then comparing two
 -- values thus wrapped will give you the opposite of their normal sort order.
 -- This is particularly useful when sorting in generalised list comprehensions,
--- as in: @then sortWith by 'Down' x@
+-- as in: @then sortOn by 'Down' x@
 --
 -- @since 4.6.0.0
 newtype Down a = Down a
