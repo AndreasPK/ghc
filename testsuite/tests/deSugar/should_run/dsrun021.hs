@@ -4,8 +4,7 @@
 
 module Main where
 
-import Data.List(takeWhile)
-import GHC.Exts(sortWith)
+import Data.List(takeWhile, sortOn)
 
 employees = [ ("Simon", "MS", 80)
             , ("Erik", "MS", 100)
@@ -17,6 +16,6 @@ main = putStrLn (show output)
   where
     output = [ (dept, salary)
              | (name, dept, salary) <- employees
-             , then sortWith by salary
+             , then sortOn by salary
              , then filter by salary > 50
              , then take 1 ]

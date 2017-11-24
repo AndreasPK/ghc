@@ -8,7 +8,7 @@ module Test10312 where
 import GHC.Exts
 import qualified Data.Map as M
 import Data.Ord (comparing)
-import Data.List (sortBy)
+import Data.List (sortBy, sortOn)
 
 -- Let’s look at a simple, normal list comprehension to start:
 
@@ -61,7 +61,7 @@ friends = [ Character "Phoebe" "Buffay" 1963
 oldest :: Int -> [Character] -> [String]
 oldest k tbl = [ firstName ++ " " ++ lastName
                | Character{..} <- tbl
-               , then sortWith by birthYear
+               , then sortOn by birthYear
                , then take k
                ]
 

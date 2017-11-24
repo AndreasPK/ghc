@@ -4,7 +4,8 @@
 
 module Main where
 
-import GHC.Exts(sortWith, the, groupWith)
+import GHC.Exts(the, groupWith)
+import Data.List(sortOn)
 
 employees = [ ("Simon", "MS", 80)
             , ("Erik", "MS", 100)
@@ -19,7 +20,7 @@ main = putStrLn (show can_still_use_group_function) >> putStrLn (show output)
              , then group by dept using groupWith
              , x <- [1, 2, 3]
              , y <- [4, 5, 6]
-             , then sortWith by sum salary
+             , then sortOn by sum salary
              , then take 4
              , then group using replicate 2 ]
     group = const "my group function called!"
