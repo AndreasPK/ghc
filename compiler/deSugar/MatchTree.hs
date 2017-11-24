@@ -66,6 +66,7 @@ import MatchCon (selectConMatchVars)
 import Var (EvVar)
 import MkId (DataConBoxer(..))
 import UniqSupply (initUs_)
+import HsTypes --(selectorFieldOcc)
 
 
 --import Pattern.SimplePatterns
@@ -82,7 +83,7 @@ import Control.DeepSeq
 import GHC.Generics
 import System.IO.Unsafe
 import HsDumpAst
-
+import RdrName
 
 type MatchId = Id   -- See Note [Match Ids]
 
@@ -1079,31 +1080,12 @@ mkCase heuristic ty m knowledge colIndex =
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = firstPat
 
-                fields1 = map flSelector (conLikeFieldLabels con1)
+                fields1 = map flSelector (conLikeFieldLabels con1) :: [Name]
 
                 entries = getGrpPats df grp :: [Entry PatInfo]
                 firstPat = fst . head $ entries :: Pat GhcTc
                 firstPatInfo = snd . head $ entries :: PatInfo
                         
-                -- Choose the right arg_vars in the right order for this group
-                -- Note [Record patterns]
-                -- Taken from MatchCon, slightly modified
-                select_arg_vars :: [Id] -> [ConArgPats] -> [Id]
-                select_arg_vars arg_vars ((arg_pats) : _)
-                    | RecCon flds <- arg_pats
-                    , let rpats = rec_flds flds
-                    , not (null rpats)     -- Treated specially; cf conArgPats
-                    = ASSERT2( fields1 `equalLength` arg_vars,
-                                ppr con1 $$ ppr fields1 $$ ppr arg_vars )
-                        map lookup_fld rpats
-                    | otherwise
-                    = arg_vars
-                    where
-                        fld_var_env = mkNameEnv $ zipEqual "get_arg_vars" fields1 arg_vars
-                        lookup_fld (L _ rpat) = lookupNameEnv_NF fld_var_env
-                                                            (idName (unLoc (hsRecFieldId rpat)))
-                select_arg_vars _ [] = panic "matchOneCon/select_arg_vars []"
-
                 inst_tys = arg_tys ++ mkTyVarTys tvs1
                 val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
                 
@@ -1154,7 +1136,13 @@ mkCase heuristic ty m knowledge colIndex =
                     newMatrix <- getNewConMatrix grp vars  
                     matchWith heuristic ty (newMatrix) newKnowledge
 
-            in  do
+                vanillaFields :: Pat GhcTc -> Bool
+                vanillaFields ConPatOut {pat_args = args, pat_con = L _ con@(RealDataCon dataCon)}
+                    | null (conLikeFieldLabels con) = True --Constructor has no records
+                    | null (hsConPatArgs args) = True -- Con {} can be expanded by wildcards
+                    | otherwise = False 
+                vanillaFields _ = False
+            in do
 
                 --dsPrint $ text "mkCaseAlt: " <+> ppr con
                 arg_vars <- selectConMatchVars val_arg_tys args1
@@ -1170,17 +1158,45 @@ mkCase heuristic ty m knowledge colIndex =
                 -- For now once again we just fail instead
                 let isNewtype = isNewTyCon (dataConTyCon (con))
                 when isNewtype $ failDs
-                
-                --TODO: make sure group is compatible (record patterns) and pattern variables in correct order
-                --For now we just fail on records
-                when (not . null $ fields1) failDs
-                when 
-                    (any 
-                        (\x -> case x of {RecCon {} -> True; _ -> False })
-                        (map pat_args pats)
-                    )
-                    (failDs)
 
+                {-
+                Check for fields, record patterns are not fully implemented hence we fail on
+                most cases involving them. 
+                -}
+                when (not . null $ conLikeFieldLabels con1) $ do
+                    let patArgs = map pat_args pats :: [HsConPatDetails GhcTc]
+                    let records = (
+                            mapMaybe 
+                            (\conDetail -> 
+                                case conDetail of {RecCon r -> Just r; _ -> Nothing})
+                            patArgs
+                            ) :: [HsRecFields GhcTc (LPat GhcTc)] --Fields in the pattern(s)
+                    
+                    let firstFields = map unLoc $ rec_flds $ head records :: [HsRecField GhcTc (LPat GhcTc)] --Fields in the first pattern
+                    let field = head firstFields :: HsRecField GhcTc (LPat GhcTc) --First record field of first pattern
+                    let fieldLabel = unLoc $ hsRecFieldLbl field :: FieldOcc GhcTc
+                    --let fieldArgs = unLoc $ hsRecFieldArg field :: Pat GhcTc
+                    let fieldSelector = hsRecFieldSel field --Selector for the field
+                    let fname = unLoc $ rdrNameFieldOcc fieldLabel :: RdrName
+                    let fextocc = extFieldOcc fieldLabel :: Id --The selector for the field
+
+                    let conField = (head $ conLikeFieldLabels con1) :: FieldLabel --First field in the constructor
+                    let conSelector = flSelector conField :: Name -- Name of constructor selector
+
+                    let fextname = getName fextocc :: Name -- Name of the pattern selector
+
+
+
+                    dsPrint $ text "fieldLabel" <+> showAstData NoBlankSrcSpan fname
+                    dsPrint $ text "fieldSelector" <+> showAstData NoBlankSrcSpan fextocc
+                    dsPrint $ text "conLabels" <+> showAstData NoBlankSrcSpan (head $ conLikeFieldLabels con1)
+                    dsPrint $ text "selectorsMatch" <+> ppr (conSelector == fextname)
+
+
+                    --dsPrint $ text "firstFieldSelectored" <+> ppr $ map selectorFieldOcc firstField
+                    return ()
+                    
+                
                 --TODO: Check if type/dict variables are required for tidying
                 --Variable etc wrapper
                 (rhsDesugarWrapper, pats) <- desugarPats pats arg_vars
@@ -1206,21 +1222,6 @@ mkCase heuristic ty m knowledge colIndex =
                                 ; us <- newUniqueSupply
                                 ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
                                 ; return (DataAlt con, rep_ids, mkLets binds body) }
-
-{-
-    Unpacking of arguments:
-    mk_alt :: CoreExpr -> CaseAlt DataCon -> DsM CoreAlt
-    mk_alt fail MkCaseAlt{ alt_pat = con,
-                           alt_bndrs = args,
-                           alt_result = MatchResult _ body_fn }
-      = do { body <- body_fn fail
-           ; case dataConBoxer con of {
-                Nothing -> return (DataAlt con, args, body) ;
-                Just (DCB boxer) ->
-                  do { us <- newUniqueSupply
-                    ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
-                    ; return (DataAlt con, rep_ids, mkLets binds body) } } }
--}
 
                 let altBuilder = (\failExpr -> do
                         caseFail <- caseFailBuilder failExpr
@@ -1339,8 +1340,8 @@ mkCase heuristic ty m knowledge colIndex =
                 alts <- altsBuilder failExpr
                 failAlt <- mfailAlt df failExpr
                                  
-                let orderedAlts = sortOn (\(x,y,z) -> x) alts
-                let altCons = map (\(x,y,z) -> x) orderedAlts
+                let orderedAlts = sortOn (\(x,_y,_z) -> x) alts
+                let altCons = map (\(x,_y,_z) -> x) orderedAlts
                 let withFailAlt = maybe orderedAlts (:orderedAlts) failAlt
                 df <- getDynFlags
                 --caseAlts <- map ((p,vs,e)-> MkCaseAlt p vs ) withFailAlt
@@ -1348,6 +1349,18 @@ mkCase heuristic ty m knowledge colIndex =
                 return $ Case (Var occ) (mkWildValBinder (idType occ)) ty (withFailAlt)
 
         return $ MatchResult fail_val matchFnc
+
+{-
+patsCompatible :: HasCallStack => ConArgPats -> ConArgPats -> Bool
+-- Two constructors have compatible argument patterns if the number
+-- and order of sub-matches is the same in both cases
+-- also if the starting fields are the same
+patsCompatible (RecCon flds1, _) (RecCon flds2, _) 
+    | same_fields flds1 flds2 = True
+patsCompatible (RecCon flds1, _) _                 = null (rec_flds flds1)
+patsCompatible _                 (RecCon flds2, _) = null (rec_flds flds2)
+patsCompatible _                 _                 = True -- Prefix or infix con
+-}
 
 
 
@@ -1443,7 +1456,7 @@ mkConstraintCase m ty knowledge constraints =
 
     
     in do
-    traceM ("mkConstraint")
+    --traceM ("mkConstraint")
     --dsPrint $ text "knowledge" <+> ppr knowledge
     --dsPrint $ text "constraints" <+> ppr constraints
     --dsPrint $ ppr ty
@@ -1461,7 +1474,7 @@ mkConstraintCase m ty knowledge constraints =
     
     let caseBuilder = (\rhs ->
             let appliedAlts = alts rhs
-                sortedAlts = sortOn (\(x,y,z) -> x) appliedAlts
+                sortedAlts = sortOn (\(x,_y,_z) -> x) appliedAlts
             in
             Case (Var occ) (mkWildValBinder (idType occ)) ty (sortedAlts)
             )
