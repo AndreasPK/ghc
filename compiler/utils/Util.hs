@@ -630,7 +630,7 @@ changeLast (x:xs) x' = x : changeLast xs x'
 
 minWith :: Ord b => (a -> b) -> [a] -> a
 minWith get_key xs = ASSERT( not (null xs) )
-                     head (sortWith get_key xs)
+                     head (sortOn get_key xs)
 
 nubSort :: Ord a => [a] -> [a]
 nubSort = Set.toAscList . Set.fromList

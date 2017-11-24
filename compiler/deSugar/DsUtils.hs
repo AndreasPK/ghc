@@ -78,6 +78,7 @@ import FastString
 import qualified GHC.LanguageExtensions as LangExt
 
 import TcEvidence
+import Data.List (sortOn)
 
 import Control.Monad    ( zipWithM )
 
@@ -268,7 +269,7 @@ mkCoPrimCaseMatchResult var ty match_alts
         alts <- mapM (mk_alt fail) sorted_alts
         return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
 
-    sorted_alts = sortWith fst match_alts       -- Right order for a Case
+    sorted_alts = sortOn fst match_alts       -- Right order for a Case
     mk_alt fail (lit, MatchResult _ body_fn)
        = ASSERT( not (litIsLifted lit) )
          do body <- body_fn fail
@@ -341,7 +342,7 @@ mkCoSynCaseMatchResult :: Id -> Type -> CaseAlt PatSyn -> MatchResult
 mkCoSynCaseMatchResult var ty alt = MatchResult CanFail $ mkPatSynCase var ty alt
 
 sort_alts :: [CaseAlt DataCon] -> [CaseAlt DataCon]
-sort_alts = sortWith (dataConTag . alt_pat)
+sort_alts = sortOn (dataConTag . alt_pat)
 
 mkPatSynCase :: Id -> Type -> CaseAlt PatSyn -> CoreExpr -> DsM CoreExpr
 mkPatSynCase var ty alt fail = do

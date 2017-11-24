@@ -1217,7 +1217,7 @@ Here is an example:
     output = [ (the dept, sum salary)
              | (name, dept, salary) <- employees
              , then group by dept using groupWith
-             , then sortWith by (sum salary)
+             , then sortOn by (sum salary)
              , then take 5 ]
 
 In this example, the list ``output`` would take on the value:
@@ -1227,7 +1227,7 @@ In this example, the list ``output`` would take on the value:
     [("Yale", 60), ("Ed", 85), ("MS", 180)]
 
 There are three new keywords: ``group``, ``by``, and ``using``. (The
-functions ``sortWith`` and ``groupWith`` are not keywords; they are
+functions ``sortOn`` and ``groupWith`` are not keywords; they are
 ordinary functions that are exported by ``GHC.Exts``.)
 
 There are five new forms of comprehension qualifier, all introduced by
@@ -1256,7 +1256,7 @@ the (existing) keyword ``then``:
    this function lets f "project out" some information from the elements
    of the list it is transforming.
 
-   An example is shown in the opening example, where ``sortWith`` is
+   An example is shown in the opening example, where ``sortOn`` is
    supplied with a function that lets it find out the ``sum salary`` for
    any item in the list comprehension it transforms.
 

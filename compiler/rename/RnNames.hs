@@ -1605,7 +1605,7 @@ addDupDeclErr gres@(gre : _)
                    vcat (map (ppr . nameSrcLoc) sorted_names)]
   where
     name = gre_name gre
-    sorted_names = sortWith nameSrcLoc (map gre_name gres)
+    sorted_names = sortOn nameSrcLoc (map gre_name gres)
 
 
 

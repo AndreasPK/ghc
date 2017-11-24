@@ -341,7 +341,7 @@ sameNameErr gres@(_ : _)
   = hang (text "Same exact name in multiple name-spaces:")
        2 (vcat (map pp_one sorted_names) $$ th_hint)
   where
-    sorted_names = sortWith nameSrcLoc (map gre_name gres)
+    sorted_names = sortOn nameSrcLoc (map gre_name gres)
     pp_one name
       = hang (pprNameSpace (occNameSpace (getOccName name))
               <+> quotes (ppr name) <> comma)
