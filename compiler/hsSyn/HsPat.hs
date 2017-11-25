@@ -25,6 +25,7 @@ module HsPat (
         HsRecUpdField, LHsRecUpdField,
         hsRecFields, hsRecFieldSel, hsRecFieldId, hsRecFieldsArgs,
         hsRecUpdFieldId, hsRecUpdFieldOcc, hsRecUpdFieldRdr,
+        hsConPatFields,
 
         mkPrefixConPat, mkCharLitPat, mkNilPat,
 
@@ -273,6 +274,12 @@ hsConPatArgs :: HsConPatDetails p -> [LPat p]
 hsConPatArgs (PrefixCon ps)   = ps
 hsConPatArgs (RecCon fs)      = map (hsRecFieldArg . unLoc) (rec_flds fs)
 hsConPatArgs (InfixCon p1 p2) = [p1,p2]
+
+hsConPatFields :: HsConPatDetails p -> [LHsRecField p (LPat p)]
+hsConPatFields (RecCon fs)      = (rec_flds fs)
+hsConPatFields _                = []
+
+
 
 -- | Haskell Record Fields
 --
