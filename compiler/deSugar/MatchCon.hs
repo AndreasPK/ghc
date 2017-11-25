@@ -96,7 +96,7 @@ matchConFamily :: [Id]
 matchConFamily (var:vars) ty groups
   = do dflags <- getDynFlags
        alts <- mapM (fmap toRealAlt . matchOneConLike vars ty) groups
-       return (mkCoAlgCaseMatchResult dflags var ty alts)
+       return (mkCoAlgCaseMatchResult dflags var ty alts Nothing)
   where
     toRealAlt alt = case alt_pat alt of
         RealDataCon dcon -> alt{ alt_pat = dcon }
