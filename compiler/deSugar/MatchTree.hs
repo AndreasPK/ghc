@@ -465,44 +465,6 @@ push_bang_into_newtype_arg _ _ cd
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 strictColumn :: PatternColumn e -> Bool
 strictColumn = all (isStrict . fst)
 
@@ -526,8 +488,12 @@ If there is just a single row we can process patterns from
 left to right no matter their strictness.
 -}
 leftToRight m 
---    | rowCount m == 1 && (fromJust $ columnCount m) > 0 = Just 0
-    | null ss         = Nothing 
+    | null m = Nothing
+    | rowCount m == 0 = Nothing
+    | Just cols <- columnCount m, cols == 0 = Nothing
+    | rowCount m == 1 && (fromJust $ columnCount m) > 0 = Just 0
+    | (not . all isStrict) (fmap (fst . flip Seq.index 0. fst) m) = Just 0
+    | null ss         = Nothing
     | otherwise       = Just $ head ss
     where
         ss = strictSet m
@@ -836,7 +802,7 @@ matchWith heuristic ty m knowledge
         return $ alwaysFailMatchResult
     | otherwise = do 
         --traceM "matchWith:"
-        --liftIO $ putStrLn . showSDocUnsafe $ ppr $ fmap fst m
+        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -909,33 +875,6 @@ instance Eq PGrp where
     ConGrp con1 pat1 == ConGrp con2 pat2 = con1 == con2
     _ == _ = False
     
-
---deriving instance Eq  a => Eq  (HsLit a)
---deriving instance Ord a => Ord (HsLit a)
-
---deriving instance Ord (GhcTc)
-
---deriving instance Eq (Var)
---deriving instance Ord (Var)
-
-{-}
-instance Ord x => Ord (HsLit x) where
-  (HsChar _ x1)       `compare` (HsChar _ x2)       = x1 `compare ` x2
-  (HsCharPrim _ x1)   `compare` (HsCharPrim _ x2)   = x1 `compare ` x2
-  (HsString _ x1)     `compare` (HsString _ x2)     = x1 `compare ` x2
-  (HsStringPrim _ x1) `compare` (HsStringPrim _ x2) = x1 `compare ` x2
-  (HsInt _ x1)        `compare` (HsInt _ x2)        = x1 `compare ` x2
-  (HsIntPrim _ x1)    `compare` (HsIntPrim _ x2)    = x1 `compare ` x2
-  (HsWordPrim _ x1)   `compare` (HsWordPrim _ x2)   = x1 `compare ` x2
-  (HsInt64Prim _ x1)  `compare` (HsInt64Prim _ x2)  = x1 `compare ` x2
-  (HsWord64Prim _ x1) `compare` (HsWord64Prim _ x2) = x1 `compare ` x2
-  (HsInteger _ x1 _)  `compare` (HsInteger _ x2 _)  = x1 `compare ` x2
-  (HsRat _ x1 _)      `compare` (HsRat _ x2 _)      = x1 `compare ` x2
-  (HsFloatPrim _ x1)  `compare` (HsFloatPrim _ x2)  = x1 `compare ` x2
-  (HsDoublePrim _ x1) `compare` (HsDoublePrim _ x2) = x1 `compare ` x2
-  _                   `compare` _                   = pprPanic "Ordering between different Literals not defined" (text "")
-  -}
-
 
 getGrp :: HasCallStack => DynFlags -> Entry e -> PGrp
 getGrp df (p, _e ) = patGroup df p
@@ -1095,18 +1034,6 @@ mkCase heuristic ty m knowledge colIndex =
                     return (foldr (.) idDsWrapper wrappers, pats)
 
 
-                unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
-                -- | Pick apart a constructor returning result suitable to be spliced into
-                -- the match matrix
-                unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
-                    let args = pat_args conPat 
-                        arg_pats = map unLoc $ hsConPatArgs args :: [Pat GhcTc]
-                    in do
-                    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars arg_pats
-                    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
-                    let entries = zipWith3 mkEntry desugaredPats vars [0..]
-                    return (foldr (.) idDsWrapper wrappers, entries)
-
                 getNewConMatrix :: PGrp -> [Id] -> DsM CPM
                 getNewConMatrix grp@ConGrp {} vars = do
                     let rows = getGrpRows df grp :: [Int]
@@ -1134,8 +1061,16 @@ mkCase heuristic ty m knowledge colIndex =
                 vanillaFields ConPatOut {pat_args = args, pat_con = L _ con@(RealDataCon dataCon)}
                     | null (conLikeFieldLabels con) = True --Constructor has no records
                     | null (hsConPatArgs args) = True -- Con {} can be expanded by wildcards
+                    | patLabels `isPrefixOf` conLabels = True
                     | otherwise = False 
+                    where
+                        patLabels = map flSelector $ conLikeFieldLabels con :: [Name]
+                        conLabels = map (getName . selectorFieldOcc . unLoc . hsRecFieldLbl . unLoc) $ hsConPatFields args :: [Name]
                 vanillaFields _ = False
+
+                getFields :: Pat GhcTc -> [FieldOcc GhcTc]
+                getFields = map (unLoc . hsRecFieldLbl . unLoc) . hsConPatFields . pat_args
+
             in do
 
                 --dsPrint $ text "mkCaseAlt: " <+> ppr con
@@ -1151,13 +1086,25 @@ mkCase heuristic ty m knowledge colIndex =
                 -- TODO: Newtypes require lets instead of cases.
                 -- For now once again we just fail instead
                 let isNewtype = isNewTyCon (dataConTyCon (con))
-                when isNewtype $ failDs
+                when isNewtype $ traceM "failNewType" >> failDs
 
                 {-
                 Check for fields, record patterns are not fully implemented hence we fail on
                 most cases involving them. 
+                We can combine patterns like:
+                f C {p1=_, p2=_, pn=_}
+                f C {}
+                f C {p1=_}
+
+                However for that we need to create a wildcard patterns for the last two cases
                 -}
-                when (not . null $ conLikeFieldLabels con1) $ do
+                unless (all vanillaFields pats -- || 
+                        {-and (zipWith (==) 
+                            (map getFields pats) 
+                            (map getFields (tail pats)) 
+                                                    ) -} ) $ do
+                    --traceM "incompatible Patterns"
+                    failDs
                     let patArgs = map pat_args pats :: [HsConPatDetails GhcTc]
                     let records = (
                             mapMaybe 
@@ -1179,7 +1126,9 @@ mkCase heuristic ty m knowledge colIndex =
 
                     let fextname = getName fextocc :: Name -- Name of the pattern selector
 
-
+                    --dsPrint $ text "vanillaCon" <+> ppr $ all vanillaFields pats
+                    --dsPrint $ text "sameFields" <+> ppr $ ppr (and (zipWith (==) (map getFields pats) (map getFields (tail pats))))
+                    
 
                     dsPrint $ text "fieldLabel" <+> showAstData NoBlankSrcSpan fname
                     dsPrint $ text "fieldSelector" <+> showAstData NoBlankSrcSpan fextocc
@@ -1344,19 +1293,21 @@ mkCase heuristic ty m knowledge colIndex =
 
         return $ MatchResult fail_val matchFnc
 
-{-
-patsCompatible :: HasCallStack => ConArgPats -> ConArgPats -> Bool
--- Two constructors have compatible argument patterns if the number
--- and order of sub-matches is the same in both cases
--- also if the starting fields are the same
-patsCompatible (RecCon flds1, _) (RecCon flds2, _) 
-    | same_fields flds1 flds2 = True
-patsCompatible (RecCon flds1, _) _                 = null (rec_flds flds1)
-patsCompatible _                 (RecCon flds2, _) = null (rec_flds flds2)
-patsCompatible _                 _                 = True -- Prefix or infix con
--}
-
-
+unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
+-- | Pick apart a constructor returning result suitable to be spliced into
+-- the match matrix
+unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+    let 
+        arg_pats = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
+    in do
+    --dsPrint $ text "pat_arg_types" <+> ppr val_arg_tys
+    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars arg_pats
+    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
+    let entries = zipWith3 mkEntry desugaredPats vars [0..]
+    return (foldr (.) idDsWrapper wrappers, entries)
+    where
+        ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
+                pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 } = conPat
 
 occColIndex :: HasCallStack => forall rhs. HasCallStack => PatternMatrix Occurrence rhs -> Occurrence -> Maybe Int
 occColIndex m occ 
