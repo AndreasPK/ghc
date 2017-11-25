@@ -362,7 +362,7 @@ matchLiterals (var:vars) ty sub_groups
                 ; mrs <- mapM (wrap_str_guard eq_str) alts
                 ; return (foldr1 combineMatchResults mrs) }
           else
-            return (mkCoPrimCaseMatchResult var ty alts)
+            return (mkCoPrimCaseMatchResult var ty alts Nothing)
         }
   where
     match_group :: [EquationInfo] -> DsM (Literal, MatchResult)
