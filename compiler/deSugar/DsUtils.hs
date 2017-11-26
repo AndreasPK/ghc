@@ -6,9 +6,10 @@
 Utilities for desugaring
 
 This module exports some utility functions of no great interest.
+
 -}
 
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, DeriveDataTypeable #-}
 
 -- | Utility functions for constructing Core syntax, principally for desugaring
 module DsUtils (
@@ -16,6 +17,7 @@ module DsUtils (
         firstPat, shiftEqns,
 
         MatchResult(..), CanItFail(..), CaseAlt(..),
+        fmapAltPat,
         cantFailMatchResult, alwaysFailMatchResult,
         extractMatchResult, combineMatchResults,
         adjustMatchResult,  adjustMatchResultDs,
@@ -214,6 +216,7 @@ extractMatchResult (MatchResult CanFail match_fn) fail_expr = do
 
 
 combineMatchResults :: MatchResult -> MatchResult -> MatchResult
+-- | Use the second result as continuation inside the first one.
 combineMatchResults (MatchResult CanFail      body_fn1)
                     (MatchResult can_it_fail2 body_fn2)
   = MatchResult can_it_fail2 body_fn
@@ -286,6 +289,9 @@ mkCoPrimCaseMatchResult var ty match_alts def_branch
             return (LitAlt lit, [], body)
 
     MatchResult fail_flag def_body = fromMaybe alwaysFailMatchResult def_branch 
+
+fmapAltPat :: (a -> b) -> CaseAlt a -> CaseAlt b
+fmapAltPat f alt@MkCaseAlt {alt_pat = x} = alt {alt_pat = (f x) }
 
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_bndrs :: [Var],
