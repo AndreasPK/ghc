@@ -908,6 +908,19 @@ wrapPatBinds tvs1 dicts1 ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
 
 mkCase :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
+The failure story:
+
+We use the given fail expression to create:
+* The default alternative
+* A default expression
+
+The default expression is:
+* Built by using the fail expression and the RHS of the wildcard grp
+  if one exists
+* Otherwise we just use the given fail expression
+
+We then use this default expression to generate the other alternatives.
+    
 
 -}
 -- TODO: Extend for patSyn and all constructors
@@ -926,9 +939,12 @@ mkCase heuristic ty m knowledge colIndex =
             column -- :: Map PGrp (Set Int)
 
         defRows df = fromMaybe [] $ getGrpEntries VarGrp $ groupRows df :: [Int]
-        grps :: DynFlags -> [PGrp]
+
+        grps :: DynFlags -> [PGrp] --All Grps
         grps df = map fst $ groupRows df
-        cgrps df = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) $ grps df :: [PGrp]
+
+        cgrps :: DynFlags -> [PGrp] -- Non default groups
+        cgrps df = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) $ grps df
         hasDefaultGroup df = elem VarGrp $ map fst $ groupRows df :: Bool
 
         -- | If we take the default branch we record the branches NOT taken instead.
@@ -981,19 +997,23 @@ mkCase heuristic ty m knowledge colIndex =
             newMatrix <- getNewMatrix df grp 
             matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
 
-        caseFailBuilder :: CoreExpr -> DsM CoreExpr
+
+        defBranchMatchResult :: DsM MatchResult
         {- 
         We use this as a filler for the non-variable cases
         since if they fail we want to use the default expr if available.
         -}
-        caseFailBuilder failExpr = do
+        defBranchMatchResult = do
             df <- getDynFlags
-            if hasDefaultGroup df
-                then do
-                    mr@(MatchResult defFailVal bodyFnc) <- groupExpr VarGrp
-                    bodyFnc failExpr
-                else
-                    return failExpr     
+            if hasDefaultGroup df 
+                then groupExpr VarGrp
+                else return alwaysFailMatchResult
+
+        isLitCase :: DsM Bool
+        isLitCase = do
+            df <- getDynFlags
+            return $ any (\g -> case g of {LitGrp {} -> True; _ -> False}) $ cgrps df
+                                 
 
 
         {- 
@@ -1006,7 +1026,7 @@ mkCase heuristic ty m knowledge colIndex =
 
         
 
-        mkConAlt :: HasCallStack => DynFlags -> PGrp -> DsM (CoreExpr -> DsM CoreAlt, CanItFail) --(CoreExpr -> DsM CoreAlt, CanItFail)
+        mkConAlt :: HasCallStack => DynFlags -> PGrp -> DsM (CaseAlt AltCon) --(CoreExpr -> DsM CoreAlt, CanItFail)
         mkConAlt df grp@(ConGrp con pat) = 
             -- Look at the pattern info from the first pattern.
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
@@ -1105,40 +1125,6 @@ mkCase heuristic ty m knowledge colIndex =
                                                     ) -} ) $ do
                     --traceM "incompatible Patterns"
                     failDs
-                    let patArgs = map pat_args pats :: [HsConPatDetails GhcTc]
-                    let records = (
-                            mapMaybe 
-                            (\conDetail -> 
-                                case conDetail of {RecCon r -> Just r; _ -> Nothing})
-                            patArgs
-                            ) :: [HsRecFields GhcTc (LPat GhcTc)] --Fields in the pattern(s)
-                    
-                    let firstFields = map unLoc $ rec_flds $ head records :: [HsRecField GhcTc (LPat GhcTc)] --Fields in the first pattern
-                    let field = head firstFields :: HsRecField GhcTc (LPat GhcTc) --First record field of first pattern
-                    let fieldLabel = unLoc $ hsRecFieldLbl field :: FieldOcc GhcTc
-                    --let fieldArgs = unLoc $ hsRecFieldArg field :: Pat GhcTc
-                    let fieldSelector = hsRecFieldSel field --Selector for the field
-                    let fname = unLoc $ rdrNameFieldOcc fieldLabel :: RdrName
-                    let fextocc = selectorFieldOcc fieldLabel :: Id --The selector for the field
-
-                    let conField = (head $ conLikeFieldLabels con1) :: FieldLabel --First field in the constructor
-                    let conSelector = flSelector conField :: Name -- Name of constructor selector
-
-                    let fextname = getName fextocc :: Name -- Name of the pattern selector
-
-                    --dsPrint $ text "vanillaCon" <+> ppr $ all vanillaFields pats
-                    --dsPrint $ text "sameFields" <+> ppr $ ppr (and (zipWith (==) (map getFields pats) (map getFields (tail pats))))
-                    
-
-                    dsPrint $ text "fieldLabel" <+> showAstData NoBlankSrcSpan fname
-                    dsPrint $ text "fieldSelector" <+> showAstData NoBlankSrcSpan fextocc
-                    dsPrint $ text "conLabels" <+> showAstData NoBlankSrcSpan (head $ conLikeFieldLabels con1)
-                    dsPrint $ text "selectorsMatch" <+> ppr (conSelector == fextname)
-
-
-                    --dsPrint $ text "firstFieldSelectored" <+> ppr $ map selectorFieldOcc firstField
-                    return ()
-                    
                 
                 --TODO: Check if type/dict variables are required for tidying
                 --Variable etc wrapper
@@ -1155,24 +1141,14 @@ mkCase heuristic ty m knowledge colIndex =
                 --given the rhs add the bindings created above.
                 let bodyBuilder = wrapper . mkCoreLets ds_bind :: CoreExpr -> CoreExpr
 
-                let dataAltBuilder con args body = do
-                        -- If arguments are unpacked in the Constructor we need to pack them again
-                        -- on the usage site: (Con (v ::Int#)) -> let x = I# v in expr
-                        let (_, ty_args) = tcSplitTyConApp occType
-                        case dataConBoxer con of
-                            Nothing -> return (DataAlt con, args, body)
-                            Just (DCB boxer) -> do {
-                                ; us <- newUniqueSupply
-                                ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
-                                ; return (DataAlt con, rep_ids, mkLets binds body) }
+                let altBindings = tvs1 ++ dicts1 ++ arg_vars
 
-                let altBuilder = (\failExpr -> do
-                        caseFail <- caseFailBuilder failExpr
-                        body <- body_fnc caseFail :: DsM CoreExpr
-                        dataAltBuilder con (tvs1 ++ dicts1 ++ arg_vars) (bodyBuilder body)
-                        )
-
-                return (altBuilder, fail_val)
+                return $ MkCaseAlt 
+                    { alt_pat = DataAlt con
+                    , alt_bndrs = altBindings
+                    , alt_wrapper = WpHole
+                    , alt_result = adjustMatchResult bodyBuilder mr
+                    }
         
         mkConAlt _ _ = error "mkConAlt - No Constructor Grp"
 
@@ -1183,115 +1159,71 @@ mkCase heuristic ty m knowledge colIndex =
             in
             F.toList column
 
-
-
-
         {-
         ******************* End of Con Grp alt code *******************
         -}
 
         --generate the alternative for a entry grp
-        mkAlt :: PGrp -> DsM (CoreExpr -> DsM CoreAlt, CanItFail)
+        mkAlt :: PGrp -> DsM (CaseAlt AltCon)
         mkAlt grp@(LitGrp lit) = do
             --TODO: For now fall back to regular matching when strings are involved
             if isStringTy occType then failDs else return ()
-
-            --dsPrint $ text "lit:" <+> ppr lit <+> text "dsLit:" <+> ppr lit
+            mr <- groupExpr grp
             
-            (MatchResult fail_val body_fnc) <- groupExpr grp
-            let altBuilder = 
-                    (\failExpr -> do
-                    body <- body_fnc failExpr
-                    return (LitAlt lit, [], body))
-            return (altBuilder, fail_val)
+            return $ MkCaseAlt 
+                { alt_pat = LitAlt lit
+                , alt_bndrs = []
+                , alt_wrapper = WpHole
+                , alt_result = mr } 
+
         mkAlt grp@(ConGrp {}) = do
             df <- getDynFlags
             mkConAlt df grp 
-        mkAlt (VarGrp) = do
-            (MatchResult fail_val body_fnc) <- groupExpr VarGrp
-            let altBuilder = (\failExpr -> do
-                    body <- body_fnc failExpr
-                    return (DEFAULT, [], body))
-            return (altBuilder, fail_val)
+        mkAlt (VarGrp) = error "mk*CaseMatchResult takes the default result"
             
 
-        alts :: DsM (CoreExpr -> DsM [CoreAlt], CanItFail)
+        alts :: DsM [CaseAlt AltCon]
         {-
         This gathers the failure flag for all branches and a builder for the branches themselves.
         The actual failure branch if required is added later via mfailAt
         -}
         alts = do
             df <- getDynFlags
-            (altBuilders, fail_values) <- unzip <$> mapM (mkAlt) (grps df) :: DsM ([CoreExpr -> DsM CoreAlt], [CanItFail])
-            -- for each branch check if it can fail
-            --If any branch can fail or the case itself might fail the resulting matchresult could fail.
-            let canCaseFail = foldr1 orFail (canItFail df :fail_values) 
+            mapM (mkAlt) (cgrps df)
+
+
+        toLitPair :: CaseAlt AltCon -> (Literal, MatchResult)
+        toLitPair MkCaseAlt {alt_pat = LitAlt lit, alt_result = mr} 
+            = (lit, mr)
+        toLitPair alt  
+            = pprPanic "Alt not of literal type" $ ppr $ alt_pat alt
+
+        toConAlt :: CaseAlt AltCon -> CaseAlt DataCon
+        toConAlt alt@MkCaseAlt {alt_pat = DataAlt con}
+            = alt {alt_pat = con}
+        toConAlt alt  
+            = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
             
-            let grpAltsBuilder = \failExpr -> mapM ($ failExpr) altBuilders 
-            return (grpAltsBuilder, canCaseFail)
-
-        {- TODO:
-        Check how cases like:
-        f True | False = 1
-        f False        = 2
-        should be handled. 
-        
-        Since it's exhaustive we might assume it can't fail.
-        However while true is covered it will always fail potentially messing stuff up.
-        
-        -}
-        canItFail :: DynFlags -> CanItFail
-        canItFail df
-            | hasDefaultGroup df = CantFail
-            | exhaustiveGrps df = CantFail
-            | otherwise = CanFail
-
-
-        
-        exhaustiveGrps :: DynFlags -> Bool
-        -- Determine if all constructors where mentioned
-        exhaustiveGrps df
-            | any (\x -> case x of { ConGrp {pgrpCon = dcon} -> True; _ -> False}) (grps df) = 
-                let usedCons = mapMaybe (\x -> case x of { ConGrp {pgrpCon = dcon} -> Just dcon; otherwise -> Nothing}) (grps df)
-                    tyCon = dataConTyCon $ head $ usedCons
-                    dataCons = tyConDataCons tyCon
-                    usedCount = length $ Set.fromList $ map dataConTag usedCons
-                in
-                usedCount == length dataCons
-                --all (`elem` dataCons) usedCons
-            | any (\x -> case x of { LitGrp lit -> True; _ -> False}) (grps df) = 
-                False -- Literals are never assumed to be exhaustive. 
-            | otherwise =
-                error "Exhaustive check should only be performed if there are con or lit grps"
-            
-        mfailAlt :: DynFlags -> CoreExpr -> DsM (Maybe CoreAlt)
-        mfailAlt df failExpr = if hasDefaultGroup df || exhaustiveGrps df
-            then
-                return Nothing -- Default can also be generated by the var group
-            else
-                -- Add a check for exhaustivness
-                -- If all constructors are covered we don't need a default case.
-                return $ Just (DEFAULT, [], failExpr)
-
     in do
         --traceM "mkCase"
         let failExpr = undefined
-        (altsBuilder, fail_val) <- alts
+        caseAlts <- alts :: DsM [CaseAlt AltCon]
+        df <- getDynFlags
 
-        let matchFnc = \failExpr -> do
-                df <- getDynFlags
-                alts <- altsBuilder failExpr
-                failAlt <- mfailAlt df failExpr
-                                 
-                let orderedAlts = sortOn (\(x,_y,_z) -> x) alts
-                let altCons = map (\(x,_y,_z) -> x) orderedAlts
-                let withFailAlt = maybe orderedAlts (:orderedAlts) failAlt
-                df <- getDynFlags
-                --caseAlts <- map ((p,vs,e)-> MkCaseAlt p vs ) withFailAlt
-                --mkCoAlgCaseMatchResult df occ occType withFailAlt
-                return $ Case (Var occ) (mkWildValBinder (idType occ)) ty (withFailAlt)
+        isLit <- isLitCase
+        defBranch <- Just <$> defBranchMatchResult :: DsM (Maybe MatchResult)
+        
+        case True of
+            _   | null (cgrps df) -> 
+                    defBranchMatchResult
+                | isLit           -> do 
+                    let litAlts = map toLitPair caseAlts
+                    return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
+                | otherwise       -> do
+                    let conAlts = map toConAlt caseAlts
+                    return $ mkCoAlgCaseMatchResult df occ ty conAlts defBranch
 
-        return $ MatchResult fail_val matchFnc
+
 
 unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
 -- | Pick apart a constructor returning result suitable to be spliced into
