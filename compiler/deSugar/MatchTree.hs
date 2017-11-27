@@ -802,7 +802,7 @@ matchWith heuristic ty m knowledge
         return $ alwaysFailMatchResult
     | otherwise = do 
         --traceM "matchWith:"
-        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
+        --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -998,7 +998,7 @@ mkCase heuristic ty m knowledge colIndex =
             matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
 
 
-        defBranchMatchResult :: DsM MatchResult
+        defBranchMatchResult :: DsM (Maybe MatchResult)
         {- 
         We use this as a filler for the non-variable cases
         since if they fail we want to use the default expr if available.
@@ -1006,8 +1006,8 @@ mkCase heuristic ty m knowledge colIndex =
         defBranchMatchResult = do
             df <- getDynFlags
             if hasDefaultGroup df 
-                then groupExpr VarGrp
-                else return alwaysFailMatchResult
+                then Just <$> (groupExpr VarGrp)
+                else return Nothing
 
         isLitCase :: DsM Bool
         isLitCase = do
@@ -1022,6 +1022,11 @@ mkCase heuristic ty m knowledge colIndex =
           treat type arguments and so on.
         
         --TODO: Move into own function, PatSynonyms
+
+
+        Record Handling:
+
+        We keep the ids in the order of the constructor for the match.
         -}
 
         
@@ -1050,7 +1055,6 @@ mkCase heuristic ty m knowledge colIndex =
                 desugarPats pats vars = do
                     --liftIO . putStrLn . showSDocUnsafe $ ppr pats
                     (wrappers, pats) <- unzip <$> zipWithM tidy1 vars pats
-                    --traceM "kjhsadf"
                     return (foldr (.) idDsWrapper wrappers, pats)
 
 
@@ -1061,8 +1065,13 @@ mkCase heuristic ty m knowledge colIndex =
                     let colEntries = getCol filteredRows colIndex :: PatternColumn PatInfo
                     let withoutCol = deleteCol filteredRows colIndex :: CPM
 
-                    (wrappers, entries) <- unzip <$> (mapM (\e -> unpackCon e vars) $ F.toList colEntries) :: DsM ([DsWrapper], [[Entry PatInfo]])
+                    --Unpack the constructors
+                    (wrappers, entries) <- unzip <$> 
+                                            (mapM 
+                                                (\e -> unpackCon e vars paddedLabels)
+                                                (F.toList colEntries)) :: DsM ([DsWrapper], [[Entry PatInfo]])
                     let wrappedMatrix = addRowWrappers withoutCol wrappers
+                    --Insert the unpacked entries.
                     let unpackedMatrix = insertCols wrappedMatrix colIndex (Seq.fromList . map Seq.fromList . transpose $ entries)
                     constrainedMatrix <- addConstraints unpackedMatrix entries
                     return constrainedMatrix
@@ -1084,17 +1093,25 @@ mkCase heuristic ty m knowledge colIndex =
                     | patLabels `isPrefixOf` conLabels = True
                     | otherwise = False 
                     where
-                        patLabels = map flSelector $ conLikeFieldLabels con :: [Name]
-                        conLabels = map (getName . selectorFieldOcc . unLoc . hsRecFieldLbl . unLoc) $ hsConPatFields args :: [Name]
+                        conLabels = map flSelector $ conLikeFieldLabels con :: [Name]
+                        patLabels = map (getName . selectorFieldOcc . unLoc . hsRecFieldLbl . unLoc) $ hsPatFields args :: [Name]
                 vanillaFields _ = False
 
                 getFields :: Pat GhcTc -> [FieldOcc GhcTc]
-                getFields = map (unLoc . hsRecFieldLbl . unLoc) . hsConPatFields . pat_args
+                getFields = map (unLoc . hsRecFieldLbl . unLoc) . hsPatFields . pat_args
+
+                patLabels :: [[Name]]
+                patLabels = map (map (getName . selectorFieldOcc) . getFields) pats
+
+                paddedLabels :: [Name]
+                paddedLabels = extendFields con (head patLabels)
+
 
             in do
 
-                --dsPrint $ text "mkCaseAlt: " <+> ppr con
+                --Arguments to the Constructor
                 arg_vars <- selectConMatchVars val_arg_tys args1
+
 
                 {- 
                 TODO: GADTs require special attention to get bindings right.
@@ -1103,10 +1120,6 @@ mkCase heuristic ty m knowledge colIndex =
                 -}
                 unless (isVanillaDataCon con) failDs
 
-                -- TODO: Newtypes require lets instead of cases.
-                -- For now once again we just fail instead
-                let isNewtype = isNewTyCon (dataConTyCon (con))
-                when isNewtype $ traceM "failNewType" >> failDs
 
                 {-
                 Check for fields, record patterns are not fully implemented hence we fail on
@@ -1115,17 +1128,17 @@ mkCase heuristic ty m knowledge colIndex =
                 f C {p1=_, p2=_, pn=_}
                 f C {}
                 f C {p1=_}
-
                 However for that we need to create a wildcard patterns for the last two cases
                 -}
-                unless (all vanillaFields pats -- || 
-                        {-and (zipWith (==) 
-                            (map getFields pats) 
-                            (map getFields (tail pats)) 
-                                                    ) -} ) $ do
-                    --traceM "incompatible Patterns"
-                    failDs
-                
+
+                let sameFields = and (map (== head patLabels) patLabels) :: Bool
+                unless (
+                    all vanillaFields pats || sameFields ) $ do
+                        --traceM "incompatible Patterns"
+                        --dsPrint $ ppr $ hsPatFields args1
+                        --dsPrint $ text "vanilla!" <+> ppr (map vanillaFields pats)
+                        failDs
+
                 --TODO: Check if type/dict variables are required for tidying
                 --Variable etc wrapper
                 (rhsDesugarWrapper, pats) <- desugarPats pats arg_vars
@@ -1135,8 +1148,7 @@ mkCase heuristic ty m knowledge colIndex =
                 wrapper <- return $ rhsDesugarWrapper . rhsTyWrapper
 
                 ds_bind <- dsTcEvBinds bind
-                unpackedMatrix <- getNewConMatrix grp arg_vars :: DsM CPM
-                mr@(MatchResult fail_val body_fnc) <- conGroupExpr grp arg_vars :: DsM MatchResult
+                mr <- conGroupExpr grp arg_vars :: DsM MatchResult
 
                 --given the rhs add the bindings created above.
                 let bodyBuilder = wrapper . mkCoreLets ds_bind :: CoreExpr -> CoreExpr
@@ -1211,11 +1223,14 @@ mkCase heuristic ty m knowledge colIndex =
         df <- getDynFlags
 
         isLit <- isLitCase
-        defBranch <- Just <$> defBranchMatchResult :: DsM (Maybe MatchResult)
+        defBranch <- defBranchMatchResult :: DsM (Maybe MatchResult)
         
         case True of
             _   | null (cgrps df) -> 
-                    defBranchMatchResult
+                    return $ 
+                        fromMaybe 
+                            (error "No branch case not handled yet as") 
+                            defBranch
                 | isLit           -> do 
                     let litAlts = map toLitPair caseAlts
                     return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
@@ -1223,19 +1238,63 @@ mkCase heuristic ty m knowledge colIndex =
                     let conAlts = map toConAlt caseAlts
                     return $ mkCoAlgCaseMatchResult df occ ty conAlts defBranch
 
+extendFields :: DataCon -> [Name] -> [Name]
+-- Extend a list of fields by the unmentioned ones in order.
+extendFields dataCon pat_fields =
+    let con_fields = map flSelector $ dataConFieldLabels dataCon
+        mentioned_fields = Set.fromList pat_fields
+        unmentioned_fields = filter (\f -> not (Set.member f mentioned_fields)) con_fields
+    in
+    pat_fields ++ unmentioned_fields
 
+-- Reorders to given id's such that they mirror the order
+-- of the fieldlabels given
+matchFields :: forall a. Outputable a => [a] -> [Name] -> [Name] -> [a]
+matchFields args con_fields pat_fields
+    | not (null pat_fields)     -- Treated specially; cf conArgPats
+    = ASSERT2( con_fields `equalLength` args,
+               ppr con_fields $$ ppr args )
+    map lookup_fld pat_fields
+    | otherwise
+    = args
+    where
+    fld_var_env = mkNameEnv $ zipEqual "get_arg_vars" con_fields args
+    lookup_fld :: Name -> a
+    lookup_fld rpat = lookupNameEnv_NF fld_var_env
+                                        (rpat)
+matchFields _ _ [] = panic "matchTree/matchFields []"
 
-unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
+unpackCon :: Entry PatInfo -> [Id] -> [Name] -> DsM (DsWrapper, [Entry PatInfo])
 -- | Pick apart a constructor returning result suitable to be spliced into
 -- the match matrix
-unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
-    let 
-        arg_pats = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
+{-
+If we deal with a record constructor we might need to pad the patterns by inserting wildcards
+
+We take the vars in the oder defined by the constructor (data T = T a b -> [a,b])
+This is true even if it's a record pattern.
+
+For this reason we have to reorder the given id's
+to match the order of the fields in the pattern.
+
+Then we pad the result with wildcard patterns
+for unmentioned records.
+-}
+unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars pat_fields =
+    let arg_pats 
+            = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
+        isRecord
+            = case pat_args conPat of {RecCon {} -> True; _ -> False}
+        adjusted_vars = if isRecord then matchFields vars conFields pat_fields else vars 
+        normalized_pats --Regular patterns + Wildcards for missing ones
+            = zipWith (\t p -> p t) (map idType adjusted_vars) (map const arg_pats ++ repeat WildPat)
+        conFields
+            = (map flSelector (conLikeFieldLabels . unLoc . pat_con $ conPat))
     in do
-    --dsPrint $ text "pat_arg_types" <+> ppr val_arg_tys
-    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars arg_pats
-    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
-    let entries = zipWith3 mkEntry desugaredPats vars [0..]
+    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 adjusted_vars normalized_pats
+    let mkEntry p occ colOffset
+            = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
+    let entries
+            = zipWith3 mkEntry desugaredPats adjusted_vars [0..]
     return (foldr (.) idDsWrapper wrappers, entries)
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
