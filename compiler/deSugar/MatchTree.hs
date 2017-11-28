@@ -667,7 +667,7 @@ Utility functions to track compatible groups
 -}
 msInsert :: forall k v. (Ord k, Ord v) => Map k (Set v) -> k -> v -> Map k (Set v)
 msInsert m k v =
-    let set = fromMaybe (Set.empty) $ Map.lookup k m :: (Set v)
+    let set = msLookup k m :: (Set v)
         newSet = Set.insert v set
         newMap = Map.insert k newSet m
     in
@@ -675,25 +675,6 @@ msInsert m k v =
 
 msLookup :: forall k v. (Ord k, Ord v) => k -> Map k (Set v) -> (Set v)
 msLookup k m = fromMaybe Set.empty (Map.lookup k m)
-
-
-
-
-{-}
-addGrpEntry :: Eq k => (k,v) -> [(k,[v])] -> [(k,[v])]
-addGrpEntry (k,v) [] 
-    = [(k,[v])]
-addGrpEntry e@(k,v)  ((lk, vs):xs)
-    | k == lk = (lk, v:vs):xs
-    | otherwise = (lk, vs) : addGrpEntry e xs
-
-getGrpEntries :: Eq k => k -> [(k,[v])] -> Maybe [v]
-getGrpEntries k [] = Nothing
-getGrpEntries k ((lk,vs):xs)
-    | k == lk = Just vs
-    | otherwise = getGrpEntries k xs
--}
-
 
 
 
