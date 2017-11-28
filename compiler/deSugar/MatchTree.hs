@@ -1058,7 +1058,7 @@ mkCase heuristic df ty m knowledge colIndex =
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = firstPat
 
-                fields1 = map flSelector (conLikeFieldLabels con1) :: [Name]
+                conFields = map flSelector (conLikeFieldLabels con1) :: [Name]
 
                 entries = getGrpPats grp :: [Entry PatInfo]
                 firstPat = fst . head $ entries :: Pat GhcTc
@@ -1092,7 +1092,7 @@ mkCase heuristic df ty m knowledge colIndex =
 
                     --At this point we reorder the argument id's to match the order of occurence in the PATTERN
 
-                    let adjusted_vars = if isRecord then matchFields vars grpConFields paddedLabels else vars 
+                    let adjusted_vars = if isRecord then matchFields vars conFields paddedLabels else vars 
 
                     --Unpack the constructors
                     (wrappers, entries) <- unzip <$> 
@@ -1125,9 +1125,6 @@ mkCase heuristic df ty m knowledge colIndex =
                         conLabels = map flSelector $ conLikeFieldLabels con :: [Name]
                         patLabels = map (getName . selectorFieldOcc . unLoc . hsRecFieldLbl . unLoc) $ hsPatFields args :: [Name]
                 vanillaFields _ = False
-
-                grpConFields :: [Name]
-                grpConFields = map (getName . selectorFieldOcc) $ getFields firstPat
 
                 getFields :: Pat GhcTc -> [FieldOcc GhcTc]
                 getFields = map (unLoc . hsRecFieldLbl . unLoc) . hsPatFields . pat_args
