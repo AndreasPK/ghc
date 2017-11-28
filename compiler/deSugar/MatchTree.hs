@@ -953,27 +953,27 @@ mkCase heuristic df ty m knowledge colIndex =
         scrutinee = varToCoreExpr occ :: CoreExpr
         occType = (varType occ) :: Type
 
-        groupRows :: DynFlags -> Map PGrp (Set Int)
-        groupRows df = Seq.foldlWithIndex
+
+
+        groupRows :: Map PGrp (Set Int)
+        groupRows = Seq.foldlWithIndex
             (\grps i a -> msInsert grps (getGrp df a) i)
             Map.empty
             column -- :: Map PGrp (Set Int)
 
-        defRows = Set.toList $ msLookup VarGrp $ groupRows df :: [Int]
+        defRows = Set.toList $ msLookup VarGrp $ groupRows :: [Int]
 
-        grps :: DynFlags -> [PGrp] --All Grps
-        grps df = Map.keys $ groupRows df
+        grps :: [PGrp] --All Grps
+        grps = Map.keys $ groupRows
 
-        grpSet :: DynFlags -> Set.Set PGrp
-        grpSet df = Set.fromList $ grps df
+        cgrps :: [PGrp] -- Non default groups
+        cgrps = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) grps
 
-        cgrps :: DynFlags -> [PGrp] -- Non default groups
-        cgrps df = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) $ grps df
-        hasDefaultGroup df = Set.member VarGrp (grpSet df) :: Bool
+        hasDefaultGroup = Map.member VarGrp groupRows :: Bool
 
         -- | If we take the default branch we record the branches NOT taken instead.
-        defaultExcludes :: DynFlags -> [CondValue]
-        defaultExcludes df = mapMaybe grpCond $ cgrps df
+        defaultExcludes :: [CondValue]
+        defaultExcludes = mapMaybe grpCond cgrps
 
         grpCond :: PGrp -> Maybe CondValue
         grpCond (LitGrp lit) =
@@ -987,23 +987,22 @@ mkCase heuristic df ty m knowledge colIndex =
         newEvidence :: PGrp -> DsM (Either [CondValue] CondValue)
         -- Returns evidence gained by selecting this branch/grp
         newEvidence (VarGrp) = do
-            df <- getDynFlags
-            return (Left $ defaultExcludes df)
+            return (Left $ defaultExcludes)
         newEvidence grp =
             return . Right . fromJust . grpCond $ grp
 
-        getGrpRows :: DynFlags -> PGrp -> [Int]
-        getGrpRows df grp = 
-            Set.toList $ msLookup grp $ groupRows df
+        getGrpRows :: PGrp -> [Int]
+        getGrpRows grp = 
+            Set.toList $ msLookup grp $ groupRows
             
         getSubMatrix :: [Int] -> CPM
         getSubMatrix rows =
             fmap fromJust $ Seq.filter isJust $ Seq.mapWithIndex (\i r -> if (i `elem` rows) then Just r else Nothing) m :: CPM
-        getNewMatrix :: DynFlags -> PGrp -> DsM CPM
+        getNewMatrix :: PGrp -> DsM CPM
         -- Since we have to "splice in" the constructor arguments which requires more setup we deal
         -- with Constructor groups in another function
-        getNewMatrix df grp =
-            let rows = getGrpRows df grp :: [Int]
+        getNewMatrix grp =
+            let rows = getGrpRows grp :: [Int]
                 matrix = getSubMatrix rows
             in
             case grp of
@@ -1015,10 +1014,9 @@ mkCase heuristic df ty m knowledge colIndex =
 
         groupExpr :: PGrp -> DsM MatchResult
         groupExpr grp = do
-            df <- getDynFlags
             evidence <- newEvidence grp
             let newKnowledge = (Map.insert occ evidence knowledge)
-            newMatrix <- getNewMatrix df grp 
+            newMatrix <- getNewMatrix grp 
             matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
 
 
@@ -1028,15 +1026,13 @@ mkCase heuristic df ty m knowledge colIndex =
         since if they fail we want to use the default expr if available.
         -}
         defBranchMatchResult = do
-            df <- getDynFlags
-            if hasDefaultGroup df 
+            if hasDefaultGroup
                 then Just <$> (groupExpr VarGrp)
                 else return $ Nothing
 
         isLitCase :: DsM Bool
         isLitCase = do
-            df <- getDynFlags
-            return $ any (\g -> case g of {LitGrp {} -> True; _ -> False}) $ cgrps df
+            return $ any (\g -> case g of {LitGrp {} -> True; _ -> False}) $ cgrps
                                  
 
 
@@ -1055,8 +1051,8 @@ mkCase heuristic df ty m knowledge colIndex =
 
         
 
-        mkConAlt :: HasCallStack => DynFlags -> PGrp -> DsM (CaseAlt AltCon) --(CoreExpr -> DsM CoreAlt, CanItFail)
-        mkConAlt df grp@(ConGrp con) = 
+        mkConAlt :: HasCallStack => PGrp -> DsM (CaseAlt AltCon) --(CoreExpr -> DsM CoreAlt, CanItFail)
+        mkConAlt grp@(ConGrp con) = 
             -- Look at the pattern info from the first pattern.
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
@@ -1064,7 +1060,7 @@ mkCase heuristic df ty m knowledge colIndex =
 
                 fields1 = map flSelector (conLikeFieldLabels con1) :: [Name]
 
-                entries = getGrpPats df grp :: [Entry PatInfo]
+                entries = getGrpPats grp :: [Entry PatInfo]
                 firstPat = fst . head $ entries :: Pat GhcTc
                 firstPatInfo = snd . head $ entries :: PatInfo
                         
@@ -1087,8 +1083,8 @@ mkCase heuristic df ty m knowledge colIndex =
 
                 getNewConMatrix :: PGrp -> [Id] -> DsM CPM
                 getNewConMatrix grp@ConGrp {} vars = do
-                    let conRows = getGrpRows df grp :: [Int]
-                    let varRows = getGrpRows df VarGrp
+                    let conRows = getGrpRows grp :: [Int]
+                    let varRows = getGrpRows VarGrp
                     let rows = sort $ conRows ++ varRows :: [Int]
                     let filteredRows = getSubMatrix rows :: CPM
                     let colEntries = getCol filteredRows colIndex :: PatternColumn PatInfo
@@ -1197,11 +1193,11 @@ mkCase heuristic df ty m knowledge colIndex =
                     , alt_result = adjustMatchResult bodyBuilder mr
                     }
         
-        mkConAlt _ _ = error "mkConAlt - No Constructor Grp"
+        mkConAlt _ = error "mkConAlt - No Constructor Grp"
 
-        getGrpPats :: DynFlags -> PGrp -> [Entry PatInfo]
-        getGrpPats df grp = 
-            let submatrix = getSubMatrix . getGrpRows df $ grp
+        getGrpPats :: PGrp -> [Entry PatInfo]
+        getGrpPats grp = 
+            let submatrix = getSubMatrix . getGrpRows $ grp
                 column = getCol submatrix colIndex :: PatternColumn PatInfo
             in
             F.toList column
@@ -1224,8 +1220,7 @@ mkCase heuristic df ty m knowledge colIndex =
                 , alt_result = mr } 
 
         mkAlt grp@(ConGrp {}) = do
-            df <- getDynFlags
-            mkConAlt df grp 
+            mkConAlt grp 
         mkAlt (VarGrp) = error "mk*CaseMatchResult takes the default result"
             
 
@@ -1233,9 +1228,7 @@ mkCase heuristic df ty m knowledge colIndex =
         {-
         Does not include the default branch
         -}
-        alts = do
-            df <- getDynFlags
-            mapM (mkAlt) (cgrps df)
+        alts = mapM (mkAlt) (cgrps)
 
 
         toLitPair :: CaseAlt AltCon -> (Literal, MatchResult)
@@ -1253,7 +1246,6 @@ mkCase heuristic df ty m knowledge colIndex =
     in do
         --traceM "mkCase"
         caseAlts <- alts :: DsM [CaseAlt AltCon]
-        df <- getDynFlags
 
         isLit <- isLitCase
         defBranch <- defBranchMatchResult :: DsM (Maybe MatchResult)
@@ -1263,7 +1255,7 @@ mkCase heuristic df ty m knowledge colIndex =
         --    else dsPrint $ text "isLit" <+> ppr isLit <+> text "nothingDefault"
         
         case True of
-            _   | null (cgrps df) -> 
+            _   | null (cgrps) -> 
                     return $ 
                         fromMaybe 
                             (error "No branch case not handled yet as") 
