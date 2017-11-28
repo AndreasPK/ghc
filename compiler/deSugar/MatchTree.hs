@@ -506,7 +506,7 @@ leftToRight m
     | rowCount m == 0 = Nothing
     | Just cols <- columnCount m, cols == 0 = Nothing
     | rowCount m == 1 && (fromJust $ columnCount m) > 0 = Just 0
-    | (not . all isStrict) (fmap (fst . flip Seq.index 0. fst) m) = Just 0
+    | all (not . isStrict) (fmap (fst . flip Seq.index 0. fst) m) = Just 0
     | null ss         = Nothing
     | otherwise       = Just $ head ss
     where
