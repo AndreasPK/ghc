@@ -278,20 +278,17 @@ mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
                         -> Maybe MatchResult         -- Default Branch
                         -> MatchResult               -- Literals are all unlifted
 mkCoPrimCaseMatchResult var ty match_alts def_branch
-  = MatchResult fail_flag mk_case
+  = withDefault (MatchResult CanFail mk_case) def_branch
   where
     mk_case fail = do
         alts <- mapM (mk_alt fail) sorted_alts
-        body <- def_body fail
-        return (Case (Var var) var ty ((DEFAULT, [], body) : alts))
+        return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
 
     sorted_alts = sortWith fst match_alts       -- Right order for a Case
     mk_alt fail (lit, MatchResult _ body_fn)
        = ASSERT( not (litIsLifted lit) )
          do body <- body_fn fail
             return (LitAlt lit, [], body)
-
-    MatchResult fail_flag def_body = fromMaybe alwaysFailMatchResult def_branch 
 
 fmapAltPat :: (a -> b) -> CaseAlt a -> CaseAlt b
 fmapAltPat f alt@MkCaseAlt {alt_pat = x} = alt {alt_pat = (f x) }
