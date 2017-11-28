@@ -269,6 +269,9 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
                                      return (mkIfThenElse pred_expr body fail))
 
+withDefault :: MatchResult -> Maybe MatchResult -> MatchResult
+withDefault mr def_branch = combineMatchResults mr (fromMaybe alwaysFailMatchResult def_branch)
+
 mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
                         -> Type                      -- Type of the case
                         -> [(Literal, MatchResult)]  -- Alternatives
@@ -308,12 +311,16 @@ mkCoAlgCaseMatchResult
 mkCoAlgCaseMatchResult dflags var ty match_alts def_branch
   | isNewtype  -- Newtype case; use a let;
   = ASSERT( null (tail match_alts) && null (tail arg_ids1) )
-    mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1
+    withDefault
+      (mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1)
+      def_branch
 
   | isPArrFakeAlts match_alts
-  = mkPArrCase dflags var ty (sort_alts match_alts) def_branch
+  = withDefault
+    (mkPArrCase dflags var ty (sort_alts match_alts))
+    def_branch
   | otherwise
-  = mkDataConCase var ty match_alts def_branch
+  = withDefault (mkDataConCase var ty match_alts) def_branch
   where
     isNewtype = isNewTyCon (dataConTyCon (alt_pat alt1))
 
@@ -382,58 +389,53 @@ mkPatSynCase var ty alt fail = do
     ensure_unstrict cont | needs_void_lam = Lam voidArgId cont
                          | otherwise      = cont
 
-mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> Maybe MatchResult -> MatchResult
-mkDataConCase _   _  []  _                     =
-  pprPanic "mkDataConCase: no alternatives" empty
-mkDataConCase var ty alts@(alt1:_) def_branch  =
-    MatchResult fail_flag mk_case
-    where
-      con1          = alt_pat alt1
-      tycon         = dataConTyCon con1
-      data_cons     = tyConDataCons tycon
-      match_results = map alt_result alts
+mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
+mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
+  where
+    con1          = alt_pat alt1
+    tycon         = dataConTyCon con1
+    data_cons     = tyConDataCons tycon
+    match_results = map alt_result alts
 
-      MatchResult def_fail_flag def_body_fnc =
-          fromMaybe alwaysFailMatchResult def_branch
+    sorted_alts :: [CaseAlt DataCon]
+    sorted_alts  = sort_alts alts
 
-      sorted_alts :: [CaseAlt DataCon]
-      sorted_alts  = sort_alts alts
+    var_ty       = idType var
+    (_, ty_args) = tcSplitTyConApp var_ty -- Don't look through newtypes
+                                          -- (not that splitTyConApp does, these days)
 
-      var_ty       = idType var
-      (_, ty_args) = tcSplitTyConApp var_ty -- Don't look through newtypes
-                                            -- (not that splitTyConApp does, these days)
+    mk_case :: CoreExpr -> DsM CoreExpr
+    mk_case fail = do
+        alts <- mapM (mk_alt fail) sorted_alts
+        return $ mkWildCase (Var var) (idType var) ty (mk_default fail ++ alts)
 
-      mk_case :: CoreExpr -> DsM CoreExpr
-      mk_case fail = do
-          alts <- mapM (mk_alt fail) sorted_alts
-          def_body <- def_body_fnc fail
-          return $ mkWildCase (Var var) (idType var) ty (mk_default def_body ++ alts)
+    mk_alt :: CoreExpr -> CaseAlt DataCon -> DsM CoreAlt
+    mk_alt fail MkCaseAlt{ alt_pat = con,
+                           alt_bndrs = args,
+                           alt_result = MatchResult _ body_fn }
+      = do { body <- body_fn fail
+           ; case dataConBoxer con of {
+                Nothing -> return (DataAlt con, args, body) ;
+                Just (DCB boxer) ->
+        do { us <- newUniqueSupply
+           ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
+           ; return (DataAlt con, rep_ids, mkLets binds body) } } }
 
-      mk_alt :: CoreExpr -> CaseAlt DataCon -> DsM CoreAlt
-      mk_alt fail MkCaseAlt{ alt_pat = con,
-                            alt_bndrs = args,
-                            alt_result = MatchResult _ body_fn }
-        = do { body <- body_fn fail
-            ; case dataConBoxer con of {
-                  Nothing -> return (DataAlt con, args, body) ;
-                  Just (DCB boxer) ->
-          do { us <- newUniqueSupply
-            ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
-            ; return (DataAlt con, rep_ids, mkLets binds body) } } }
+    mk_default :: CoreExpr -> [CoreAlt]
+    mk_default fail | exhaustive_case = []
+                    | otherwise       = [(DEFAULT, [], fail)]
 
-      mk_default :: CoreExpr -> [CoreAlt]
-      mk_default fail | exhaustive_case = []
-                      | otherwise       = [(DEFAULT, [], fail)]
+    fail_flag :: CanItFail
+    fail_flag | exhaustive_case
+              = foldr orFail CantFail [can_it_fail | MatchResult can_it_fail _ <- match_results]
+              | otherwise
+              = CanFail
 
-      fail_flag :: CanItFail
-      fail_flag | exhaustive_case
-                = foldr orFail CantFail [can_it_fail | MatchResult can_it_fail _ <- match_results]
-                | otherwise = def_fail_flag
-
-      mentioned_constructors = mkUniqSet $ map alt_pat alts
-      un_mentioned_constructors
-          = mkUniqSet data_cons `minusUniqSet` mentioned_constructors
-      exhaustive_case = isEmptyUniqSet un_mentioned_constructors
+    mentioned_constructors = mkUniqSet $ map alt_pat alts
+    un_mentioned_constructors
+        = mkUniqSet data_cons `minusUniqSet` mentioned_constructors
+    exhaustive_case = isEmptyUniqSet un_mentioned_constructors
 
 --- Stuff for parallel arrays
 --
@@ -441,16 +443,13 @@ mkDataConCase var ty alts@(alt1:_) def_branch  =
 --   parallel arrays, which are introduced by `tidy1' in the `PArrPat'
 --   case
 --
-mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> Maybe MatchResult ->
-              MatchResult
-mkPArrCase dflags var ty sorted_alts def_branch =
-    MatchResult fail_flag $ (\fail_expr -> do
-      def_body <- def_body_fnc fail_expr :: DsM CoreExpr
+mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkPArrCase dflags var ty sorted_alts =
+    MatchResult CanFail $ (\fail_expr -> do
       lengthP <- dsDPHBuiltin lengthPVar
-      alt <- unboxAlt def_body :: DsM CoreAlt
+      alt <- unboxAlt fail_expr :: DsM CoreAlt
       return (mkWildCase (len lengthP) intTy ty [alt]))
   where
-    MatchResult fail_flag def_body_fnc = fromMaybe alwaysFailMatchResult def_branch
     elemTy      = case splitTyConApp (idType var) of
         (_, [elemTy]) -> elemTy
         _             -> panic panicMsg
