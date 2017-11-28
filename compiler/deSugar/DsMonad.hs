@@ -88,6 +88,7 @@ import UniqFM ( lookupWithDefaultUFM )
 
 import Data.IORef
 import Control.Monad
+import GHC.Stack
 
 {-
 ************************************************************************
@@ -129,7 +130,7 @@ data MatchResult
                         -- failure point(s). The expression should
                         -- be duplicatable!
 
-data CanItFail = CanFail | CantFail
+data CanItFail = CanFail | CantFail deriving (Eq)
 
 orFail :: CanItFail -> CanItFail -> CanItFail
 orFail CantFail CantFail = CantFail
@@ -451,7 +452,7 @@ failWithDs err
   = do  { errDs err
         ; failM }
 
-failDs :: DsM a
+failDs :: HasCallStack => DsM a
 failDs = failM
 
 -- (askNoErrsDs m) runs m
