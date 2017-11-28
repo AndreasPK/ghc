@@ -1071,7 +1071,7 @@ mkCase heuristic df ty m knowledge colIndex =
                 pats = map fst $ entries :: [Pat GhcTc]
 
                 isRecord :: Bool
-                isRecord = any (\p -> case (pat_args p) of {RecCon {} -> True; _ -> False}) pats
+                isRecord = any (\p -> case args1 of {RecCon {} -> True; _ -> False}) pats
 
                 -- Desugar the given patterns and produce a suitable wrapper.
                 desugarPats :: [Pat GhcTc] -> [Id]  -> DsM (DsWrapper, [Pat GhcTc])
@@ -1095,7 +1095,7 @@ mkCase heuristic df ty m knowledge colIndex =
                     let adjusted_vars = if isRecord then matchFields vars conFields paddedLabels else vars 
 
                     --Unpack the constructors
-                    (wrappers, entries) <- unzip <$> 
+                    (wrappers, entries) <- unzip <$>
                                             (mapM 
                                                 (\e -> unpackCon e adjusted_vars)
                                                 (F.toList colEntries)) :: DsM ([DsWrapper], [[Entry PatInfo]])
