@@ -124,7 +124,7 @@ Constraints are the sum of all constraints applicable to a rhs.
 
 data CondValue 
     = LitCond { cv_lit :: Literal }
-    | ConCond { cv_con :: DataCon} --, cv_pat :: Pat GhcTc }
+    | ConCond { cv_con :: DataCon, cv_pat :: Pat GhcTc }
 
 {-TODO:
 We currently just check the Constructor for patterns equality.
@@ -712,7 +712,7 @@ constrainMatrix m =
 
 getConConstraint :: HasCallStack => Pat GhcTc -> DsM (CondValue)
 getConConstraint pat 
-    | (L _ (RealDataCon dcon)) <- (pat_con pat) = return $ ConCond dcon
+    | (L _ (RealDataCon dcon)) <- (pat_con pat) = return $ ConCond dcon pat
     | (L _ (PatSynCon   scon)) <- (pat_con pat) = --warnDs NoReason (ppr "Pat Synonyms not implemented for tree matching") >>
         failDs
 
@@ -981,7 +981,7 @@ mkCase heuristic df ty m knowledge colIndex =
         grpCond (VarGrp) =  
             Nothing
         grpCond (ConGrp dcon) =
-            Just (ConCond dcon)
+            Just (ConCond dcon (error "Evidence patterns should not be checked"))
         grpCond _ = error "Not implemented grpCond"
 
         newEvidence :: PGrp -> DsM (Either [CondValue] CondValue)
@@ -1400,25 +1400,24 @@ mkConstraintCase m ty knowledge constraints =
         The question if it's enought to use wildcard binders or if we have to
         be able to reuse these is also still not clear to me.
         -}
-        condAlt (ConCond dcon) = do
-        {-
+        condAlt (ConCond {cv_con = dcon, cv_pat = pat}) = do
+        
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = pat
 
             --Extract constructor argument types
             let inst_tys   = arg_tys ++ mkTyVarTys tvs1
-            let val_arg_tys = conLikeInstOrigArgTys dcon inst_tys
+            let val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
             arg_vars <- selectConMatchVars val_arg_tys args1
 
             wrapper <- wrapPatBinds tvs1 dicts1 pat
             
             --dsPrint $ text "altCon: " <+> ppr dcon
-            -}
+            
             
             --TODO: We should only have to care about the type of constructor hence no bindings given
-            -- return (\expr -> ((DataAlt dcon), .. bindings .., wrapper expr)) 
-            return (\expr -> ((DataAlt dcon), [], expr)) 
+            return (\expr -> ((DataAlt dcon), tvs1 ++ dicts1 ++ arg_vars, wrapper expr)) 
 
     
     in do
