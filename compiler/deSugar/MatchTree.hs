@@ -1,6 +1,21 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveGeneric, DeriveDataTypeable #-}
+{-# OPTIONS_GHC -fprof-auto #-}
 
+{-
+TODO: 
+* Include wildcard rows in literal/con rows.
+ Ax
+ _y =(B)> y
+ Bz       z
+* Gadt support
+* Mixed Records per group
+* String literals
+* More Heuristics
+* Post bac: PatSynonmys and other extensions   
+
+
+-}
 module MatchTree 
     (match, printmr, tidy1)
 where
@@ -109,7 +124,7 @@ Constraints are the sum of all constraints applicable to a rhs.
 
 data CondValue 
     = LitCond { cv_lit :: Literal }
-    | ConCond { cv_con :: DataCon, cv_pat :: Pat GhcTc }
+    | ConCond { cv_con :: DataCon} --, cv_pat :: Pat GhcTc }
 
 {-TODO:
 We currently just check the Constructor for patterns equality.
@@ -121,9 +136,8 @@ C might differ (Dictionaries and the like)
 instance Eq CondValue where 
     (LitCond {}) == (ConCond {}) = False
     (LitCond lit1) == (LitCond lit2) = lit1 == lit2
-    (ConCond {cv_pat = pat1}) == (ConCond {cv_pat = pat2}) = 
-        unLoc (pat_con pat1)       == unLoc (pat_con pat2)     &&
-        eqTypes (pat_arg_tys pat1)          (pat_arg_tys pat2)
+    (ConCond {cv_con = c1}) == (ConCond {cv_con = c2}) = 
+        c1 == c2
         
         
     
@@ -648,7 +662,9 @@ deleteCol :: HasCallStack => PatternMatrix e rhs -> Int -> PatternMatrix e rhs
 deleteCol m i = fmap (first $ Seq.deleteAt i) m
 
 
-
+{- 
+Utility functions to track compatible groups
+-}
 msInsert :: forall k v. (Ord k, Ord v) => Map k (Set v) -> k -> v -> Map k (Set v)
 msInsert m k v =
     let set = fromMaybe (Set.empty) $ Map.lookup k m :: (Set v)
@@ -656,10 +672,14 @@ msInsert m k v =
         newMap = Map.insert k newSet m
     in
     newMap
-{- 
-Utility functions to track compatible groups
--}
 
+msLookup :: forall k v. (Ord k, Ord v) => k -> Map k (Set v) -> (Set v)
+msLookup k m = fromMaybe Set.empty (Map.lookup k m)
+
+
+
+
+{-}
 addGrpEntry :: Eq k => (k,v) -> [(k,[v])] -> [(k,[v])]
 addGrpEntry (k,v) [] 
     = [(k,[v])]
@@ -672,6 +692,7 @@ getGrpEntries k [] = Nothing
 getGrpEntries k ((lk,vs):xs)
     | k == lk = Just vs
     | otherwise = getGrpEntries k xs
+-}
 
 
 
@@ -710,8 +731,9 @@ constrainMatrix m =
 
 getConConstraint :: HasCallStack => Pat GhcTc -> DsM (CondValue)
 getConConstraint pat 
-    | (L _ (RealDataCon dcon)) <- (pat_con pat) = return $ ConCond dcon pat
-    | (L _ (PatSynCon   scon)) <- (pat_con pat) =  failDs -- warnDs NoReason (ppr "Pat Synonyms not implemented for tree matching") >> failDs -- pprPanic "PatSynCon constraint not implemented" $ ppr scon
+    | (L _ (RealDataCon dcon)) <- (pat_con pat) = return $ ConCond dcon
+    | (L _ (PatSynCon   scon)) <- (pat_con pat) = --warnDs NoReason (ppr "Pat Synonyms not implemented for tree matching") >>
+        failDs
 
 
 
@@ -735,7 +757,7 @@ getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >> 
     return Nothing
 getPatternConstraint (p, info) = 
-    --warnDs NoReason (ppr ("Pat should have been tidied already or not implemented", p)) >>
+    --warnDs NoReason (text "Pat should have been tidied already or not implemented" <+> ppr p)) >>
     failDs
     --traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
 {-
@@ -809,6 +831,7 @@ matchWith heuristic ty m knowledge
 
         --If we match on something like f x = <canFailRhs> we can end up with a match on an empty matrix
         let matchCol = heuristic m :: Maybe Int 
+        df <- getDynFlags
         --liftIO $ putStrLn $ "Matchcol:" ++ show matchCol
         case matchCol of
         {-
@@ -849,7 +872,8 @@ matchWith heuristic ty m knowledge
                     return $ foldr combineMatchResults alwaysFailMatchResult constrainedMatches
 
             Just colIndex -> do
-                mr@(MatchResult cf _) <- mkCase heuristic ty m knowledge colIndex
+                
+                mr@(MatchResult cf _) <- mkCase heuristic df ty m knowledge colIndex
                 --liftIO $ putStrLn $ case cf of { CanFail ->"CanFail"; CantFail -> "CantFail" }
                 return mr
 
@@ -861,7 +885,7 @@ So (Number 1) and (Number 2) would be put into different Groups.
 -}
 data PGrp
     = VarGrp
-    | ConGrp { pgrpCon :: DataCon, pgrpPat :: Pat GhcTc }
+    | ConGrp { pgrpCon :: DataCon}
     | LitGrp (Literal)
     deriving (Data) -- , Show, Ord)
 
@@ -872,8 +896,25 @@ TODO: Also take care of field comparisons when dealing with Record patterns
 instance Eq PGrp where
     VarGrp == VarGrp = True
     LitGrp lit1 == LitGrp lit2 = lit1 == lit2
-    ConGrp con1 pat1 == ConGrp con2 pat2 = con1 == con2
+    ConGrp con1 == ConGrp con2 = con1 == con2
     _ == _ = False
+
+{-
+Comparisons are only valid if all grps are of the same type. 
+-}
+instance Ord PGrp where
+    VarGrp    `compare` VarGrp    = EQ
+    VarGrp    `compare` _         = LT
+    _         `compare` VarGrp    = GT
+    LitGrp l1 `compare` LitGrp l2 = compare l1 l2
+    LitGrp {} `compare` _         = LT
+    _         `compare` LitGrp {} = GT
+    ConGrp d1 `compare` ConGrp d2 =
+        ASSERT (dataConTyCon d1 == dataConTyCon d2)
+        compare (dataConTag d1) (dataConTag d2)
+    _            `compare` _            = panic "Invalid use of sort instance (PGrp)" 
+    
+    
     
 
 getGrp :: HasCallStack => DynFlags -> Entry e -> PGrp
@@ -883,11 +924,10 @@ patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
 -- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
 patGroup df  (BangPat (L _loc p)) = patGroup df p
-patGroup _df (pat@ConPatOut { pat_con = L _ con
-                      , pat_arg_tys = tys })
+patGroup _df (ConPatOut { pat_con = L _ con})
     | PatSynCon psyn <- con                = error "Not implemented" -- gSyn psyn tys
     | RealDataCon dcon <- con              = 
-        ConGrp dcon pat
+        ConGrp dcon
         --Literals
 patGroup df (LitPat lit) = LitGrp $ hsLitKey df lit
 patGroup _ _ = error "Not implemented"
@@ -906,7 +946,7 @@ wrapPatBinds tvs1 dicts1 ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
                 . mkCoreLets ds_bind
                 )
 
-mkCase :: HasCallStack => Heuristic -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
+mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
 The failure story:
 
@@ -924,7 +964,7 @@ We then use this default expression to generate the other alternatives.
 
 -}
 -- TODO: Extend for patSyn and all constructors
-mkCase heuristic ty m knowledge colIndex =
+mkCase heuristic df ty m knowledge colIndex =
     let column = getCol m colIndex
         occ = colOcc column :: Occurrence --What we match on
 
@@ -932,20 +972,23 @@ mkCase heuristic ty m knowledge colIndex =
         scrutinee = varToCoreExpr occ :: CoreExpr
         occType = (varType occ) :: Type
 
-        groupRows :: DynFlags -> [(PGrp,[Int])]
+        groupRows :: DynFlags -> Map PGrp (Set Int)
         groupRows df = Seq.foldlWithIndex
-            (\grps i a -> addGrpEntry ((getGrp df a),i) grps )
-            []
+            (\grps i a -> msInsert grps (getGrp df a) i)
+            Map.empty
             column -- :: Map PGrp (Set Int)
 
-        defRows df = fromMaybe [] $ getGrpEntries VarGrp $ groupRows df :: [Int]
+        defRows = Set.toList $ msLookup VarGrp $ groupRows df :: [Int]
 
         grps :: DynFlags -> [PGrp] --All Grps
-        grps df = map fst $ groupRows df
+        grps df = Map.keys $ groupRows df
+
+        grpSet :: DynFlags -> Set.Set PGrp
+        grpSet df = Set.fromList $ grps df
 
         cgrps :: DynFlags -> [PGrp] -- Non default groups
         cgrps df = P.filter (\g -> case g of {VarGrp -> False; _ -> True}) $ grps df
-        hasDefaultGroup df = elem VarGrp $ map fst $ groupRows df :: Bool
+        hasDefaultGroup df = Set.member VarGrp (grpSet df) :: Bool
 
         -- | If we take the default branch we record the branches NOT taken instead.
         defaultExcludes :: DynFlags -> [CondValue]
@@ -956,8 +999,8 @@ mkCase heuristic ty m knowledge colIndex =
             Just (LitCond lit)
         grpCond (VarGrp) =  
             Nothing
-        grpCond (ConGrp dcon pat) =
-            Just (ConCond dcon pat)
+        grpCond (ConGrp dcon) =
+            Just (ConCond dcon)
         grpCond _ = error "Not implemented grpCond"
 
         newEvidence :: PGrp -> DsM (Either [CondValue] CondValue)
@@ -970,8 +1013,8 @@ mkCase heuristic ty m knowledge colIndex =
 
         getGrpRows :: DynFlags -> PGrp -> [Int]
         getGrpRows df grp = 
-            concatMap snd $ filter (\x -> fst x == grp) $ groupRows df
-     
+            Set.toList $ msLookup grp $ groupRows df
+            
         getSubMatrix :: [Int] -> CPM
         getSubMatrix rows =
             fmap fromJust $ Seq.filter isJust $ Seq.mapWithIndex (\i r -> if (i `elem` rows) then Just r else Nothing) m :: CPM
@@ -985,8 +1028,8 @@ mkCase heuristic ty m knowledge colIndex =
             case grp of
                 VarGrp    -> return $ deleteCol matrix colIndex
                 LitGrp {} -> return $ deleteCol matrix colIndex
-                ConGrp con pat | dataConSourceArity con == 0 -> return $ deleteCol matrix colIndex
-                               | otherwise                   -> error "Constructor group"
+                ConGrp con | dataConSourceArity con == 0 -> return $ deleteCol matrix colIndex
+                           | otherwise                   -> error "Constructor group"
         
 
         groupExpr :: PGrp -> DsM MatchResult
@@ -1007,7 +1050,7 @@ mkCase heuristic ty m knowledge colIndex =
             df <- getDynFlags
             if hasDefaultGroup df 
                 then Just <$> (groupExpr VarGrp)
-                else return Nothing
+                else return $ Nothing
 
         isLitCase :: DsM Bool
         isLitCase = do
@@ -1032,7 +1075,7 @@ mkCase heuristic ty m knowledge colIndex =
         
 
         mkConAlt :: HasCallStack => DynFlags -> PGrp -> DsM (CaseAlt AltCon) --(CoreExpr -> DsM CoreAlt, CanItFail)
-        mkConAlt df grp@(ConGrp con pat) = 
+        mkConAlt df grp@(ConGrp con) = 
             -- Look at the pattern info from the first pattern.
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
@@ -1050,6 +1093,9 @@ mkCase heuristic ty m knowledge colIndex =
                 --All patterns in column
                 pats = map fst $ entries :: [Pat GhcTc]
 
+                isRecord :: Bool
+                isRecord = any (\p -> case (pat_args p) of {RecCon {} -> True; _ -> False}) pats
+
                 -- Desugar the given patterns and produce a suitable wrapper.
                 desugarPats :: [Pat GhcTc] -> [Id]  -> DsM (DsWrapper, [Pat GhcTc])
                 desugarPats pats vars = do
@@ -1060,15 +1106,21 @@ mkCase heuristic ty m knowledge colIndex =
 
                 getNewConMatrix :: PGrp -> [Id] -> DsM CPM
                 getNewConMatrix grp@ConGrp {} vars = do
-                    let rows = getGrpRows df grp :: [Int]
+                    let conRows = getGrpRows df grp :: [Int]
+                    let varRows = getGrpRows df VarGrp
+                    let rows = sort $ conRows ++ varRows :: [Int]
                     let filteredRows = getSubMatrix rows :: CPM
                     let colEntries = getCol filteredRows colIndex :: PatternColumn PatInfo
                     let withoutCol = deleteCol filteredRows colIndex :: CPM
 
+                    --At this point we reorder the argument id's to match the order of occurence in the PATTERN
+
+                    let adjusted_vars = if isRecord then matchFields vars grpConFields paddedLabels else vars 
+
                     --Unpack the constructors
                     (wrappers, entries) <- unzip <$> 
                                             (mapM 
-                                                (\e -> unpackCon e vars paddedLabels)
+                                                (\e -> unpackCon e adjusted_vars)
                                                 (F.toList colEntries)) :: DsM ([DsWrapper], [[Entry PatInfo]])
                     let wrappedMatrix = addRowWrappers withoutCol wrappers
                     --Insert the unpacked entries.
@@ -1097,6 +1149,9 @@ mkCase heuristic ty m knowledge colIndex =
                         patLabels = map (getName . selectorFieldOcc . unLoc . hsRecFieldLbl . unLoc) $ hsPatFields args :: [Name]
                 vanillaFields _ = False
 
+                grpConFields :: [Name]
+                grpConFields = map (getName . selectorFieldOcc) $ getFields firstPat
+
                 getFields :: Pat GhcTc -> [FieldOcc GhcTc]
                 getFields = map (unLoc . hsRecFieldLbl . unLoc) . hsPatFields . pat_args
 
@@ -1118,25 +1173,24 @@ mkCase heuristic ty m knowledge colIndex =
                 Particularly data2 showcases where we miss creating a binder
                 so for now we just use regular matching on these constructors.
                 -}
-                unless (isVanillaDataCon con) failDs
+                unless (isVanillaDataCon con) $ --traceM "fail:NonVanilla" >> 
+                    failDs
 
 
                 {-
-                Check for fields, record patterns are not fully implemented hence we fail on
-                most cases involving them. 
-                We can combine patterns like:
-                f C {p1=_, p2=_, pn=_}
-                f C {}
-                f C {p1=_}
-                However for that we need to create a wildcard patterns for the last two cases
+                If there are incompatible record orders in a pattern we fail.
+
+                TODO: However if we have {x2} {x2,x1} {x2,x1,x3} these are
+                compatible and can be combined. This can be done by:
+                * Make sure every record is a prefix of the longest sequence
+                * Padding them to the longest sequence
+                * Then treat them the same way as vanilla records. (Padding, rearanging ids, ...)
                 -}
 
                 let sameFields = and (map (== head patLabels) patLabels) :: Bool
                 unless (
                     all vanillaFields pats || sameFields ) $ do
                         --traceM "incompatible Patterns"
-                        --dsPrint $ ppr $ hsPatFields args1
-                        --dsPrint $ text "vanilla!" <+> ppr (map vanillaFields pats)
                         failDs
 
                 --TODO: Check if type/dict variables are required for tidying
@@ -1196,8 +1250,7 @@ mkCase heuristic ty m knowledge colIndex =
 
         alts :: DsM [CaseAlt AltCon]
         {-
-        This gathers the failure flag for all branches and a builder for the branches themselves.
-        The actual failure branch if required is added later via mfailAt
+        Does not include the default branch
         -}
         alts = do
             df <- getDynFlags
@@ -1218,12 +1271,15 @@ mkCase heuristic ty m knowledge colIndex =
             
     in do
         --traceM "mkCase"
-        let failExpr = undefined
         caseAlts <- alts :: DsM [CaseAlt AltCon]
         df <- getDynFlags
 
         isLit <- isLitCase
         defBranch <- defBranchMatchResult :: DsM (Maybe MatchResult)
+        --if (isJust defBranch) then do
+        --        let (MatchResult f body) = fromJust defBranch
+        --        dsPrint $ text "isLit" <+> ppr isLit <+> text "canDefaultFail:" <+> ppr (f == CanFail) 
+        --    else dsPrint $ text "isLit" <+> ppr isLit <+> text "nothingDefault"
         
         case True of
             _   | null (cgrps df) -> 
@@ -1264,7 +1320,7 @@ matchFields args con_fields pat_fields
                                         (rpat)
 matchFields _ _ [] = panic "matchTree/matchFields []"
 
-unpackCon :: Entry PatInfo -> [Id] -> [Name] -> DsM (DsWrapper, [Entry PatInfo])
+unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
 -- | Pick apart a constructor returning result suitable to be spliced into
 -- the match matrix
 {-
@@ -1279,22 +1335,23 @@ to match the order of the fields in the pattern.
 Then we pad the result with wildcard patterns
 for unmentioned records.
 -}
-unpackCon (conPat, PatInfo {patOcc = patOcc, patCol = patCol}) vars pat_fields =
+unpackCon (WildPat ty, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+    let wildcards --Generate wildcard patterns for all ids
+            = zipWith (\t p -> p t) (map idType vars) (repeat WildPat)
+    in do
+    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
+    let entries = zipWith3 mkEntry wildcards vars [0..]
+    return (idDsWrapper, entries)
+
+unpackCon (conPat,     PatInfo {patOcc = patOcc, patCol = patCol}) vars =
     let arg_pats 
             = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
-        isRecord
-            = case pat_args conPat of {RecCon {} -> True; _ -> False}
-        adjusted_vars = if isRecord then matchFields vars conFields pat_fields else vars 
         normalized_pats --Regular patterns + Wildcards for missing ones
-            = zipWith (\t p -> p t) (map idType adjusted_vars) (map const arg_pats ++ repeat WildPat)
-        conFields
-            = (map flSelector (conLikeFieldLabels . unLoc . pat_con $ conPat))
+            = zipWith (\t p -> p t) (map idType vars) (map const arg_pats ++ repeat WildPat) :: [Pat GhcTc]
     in do
-    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 adjusted_vars normalized_pats
-    let mkEntry p occ colOffset
-            = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
-    let entries
-            = zipWith3 mkEntry desugaredPats adjusted_vars [0..]
+    (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars normalized_pats
+    let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
+    let entries = zipWith3 mkEntry desugaredPats vars [0..]
     return (foldr (.) idDsWrapper wrappers, entries)
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
@@ -1373,22 +1430,25 @@ mkConstraintCase m ty knowledge constraints =
         The question if it's enought to use wildcard binders or if we have to
         be able to reuse these is also still not clear to me.
         -}
-        condAlt (ConCond dcon pat) = do
+        condAlt (ConCond dcon) = do
+        {-
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = pat
 
             --Extract constructor argument types
             let inst_tys   = arg_tys ++ mkTyVarTys tvs1
-            let val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
+            let val_arg_tys = conLikeInstOrigArgTys dcon inst_tys
             arg_vars <- selectConMatchVars val_arg_tys args1
 
             wrapper <- wrapPatBinds tvs1 dicts1 pat
             
             --dsPrint $ text "altCon: " <+> ppr dcon
+            -}
             
-            --todo: Might require handling of unpacked arguments
-            return (\expr -> ((DataAlt dcon), tvs1 ++ dicts1 ++ arg_vars, wrapper expr)) 
+            --TODO: We should only have to care about the type of constructor hence no bindings given
+            -- return (\expr -> ((DataAlt dcon), .. bindings .., wrapper expr)) 
+            return (\expr -> ((DataAlt dcon), [], expr)) 
 
     
     in do
