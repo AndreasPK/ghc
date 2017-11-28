@@ -134,10 +134,10 @@ f C = 2
 C might differ (Dictionaries and the like)
 -}
 instance Eq CondValue where 
-    (LitCond {}) == (ConCond {}) = False
     (LitCond lit1) == (LitCond lit2) = lit1 == lit2
     (ConCond {cv_con = c1}) == (ConCond {cv_con = c2}) = 
         c1 == c2
+    _              == _              = False  
         
         
     
