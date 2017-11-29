@@ -9,7 +9,7 @@ Pattern-matching literal patterns
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 
 module MatchLit ( dsLit, dsOverLit, dsOverLit', hsLitKey
-                , tidyLitPat, tidyNPat
+                , tidyLitPat, tidyNPat, wrap_str_guard
                 , matchLiterals, matchNPlusKPats, matchNPats
                 , warnAboutIdentities, warnAboutOverflowedLiterals
                 , warnAboutEmptyEnumerations
@@ -354,7 +354,7 @@ matchLiterals (var:vars) ty sub_groups
                 -- a chain of if-then-else
         ; if isStringTy (idType var) then
             do  { eq_str <- dsLookupGlobalId eqStringName
-                ; mrs <- mapM (wrap_str_guard eq_str) alts
+                ; mrs <- mapM (wrap_str_guard var eq_str) alts
                 ; return (foldr1 combineMatchResults mrs) }
           else
             return (mkCoPrimCaseMatchResult var ty alts Nothing)
@@ -367,18 +367,18 @@ matchLiterals (var:vars) ty sub_groups
              match_result <- match vars ty (shiftEqns eqns)
              return (hsLitKey dflags hs_lit, match_result)
 
-    wrap_str_guard :: Id -> (Literal,MatchResult) -> DsM MatchResult
-        -- Equality check for string literals
-    wrap_str_guard eq_str (MachStr s, mr)
-        = do { -- We now have to convert back to FastString. Perhaps there
-               -- should be separate MachBytes and MachStr constructors?
-               let s'  = mkFastStringByteString s
-             ; lit    <- mkStringExprFS s'
-             ; let pred = mkApps (Var eq_str) [Var var, lit]
-             ; return (mkGuardedMatchResult pred mr) }
-    wrap_str_guard _ (l, _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
-
 matchLiterals [] _ _ = panic "matchLiterals []"
+
+wrap_str_guard :: Id -> Id -> (Literal,MatchResult) -> DsM MatchResult
+-- Equality check for string literals
+wrap_str_guard var eq_str (MachStr s, mr)
+  = do  { -- We now have to convert back to FastString. Perhaps there
+          -- should be separate MachBytes and MachStr constructors?
+          let s'  = mkFastStringByteString s
+        ; lit    <- mkStringExprFS s'
+        ; let pred = mkApps (Var eq_str) [Var var, lit]
+        ; return (mkGuardedMatchResult pred mr) }
+wrap_str_guard _ _ (l, _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
 
 ---------------------------
 hsLitKey :: DynFlags -> HsLit -> Literal
