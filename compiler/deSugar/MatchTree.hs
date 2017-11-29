@@ -891,7 +891,7 @@ matchWith heuristic ty m knowledge
                     let constrainedMatch = adjustMatchResultDs constraintWrapper expr :: MatchResult
 
                     return $ combineMatchResults constrainedMatch continuation
-                    return continuation
+                    --return continuation
                 | fromJust (columnCount m) == 0 -> do
                     let rhss = F.toList $ fmap snd m :: [(MatchResult, Constraints)]
                     let (results, constraints) = unzip rhss
@@ -901,7 +901,7 @@ matchWith heuristic ty m knowledge
                     --let constrainedMatches = zipWith adjustMatchResult (repeat id) results :: [MatchResult]
 
                     return $ foldr combineMatchResults alwaysFailMatchResult constrainedMatches
-                    return $ foldr combineMatchResults alwaysFailMatchResult results
+                    --return $ foldr combineMatchResults alwaysFailMatchResult results
                     
 
             Just colIndex -> do
@@ -1094,8 +1094,6 @@ mkCase heuristic df ty m knowledge colIndex =
         isLitCase :: DsM Bool
         isLitCase = do
             return $ any (\g -> case g of {LitGrp {} -> True; _ -> False}) $ cgrps
-                                 
-
 
         {- 
         Generate the alternatives for nested constructors,
@@ -1268,7 +1266,7 @@ mkCase heuristic df ty m knowledge colIndex =
         mkAlt :: PGrp -> DsM (CaseAlt AltCon)
         mkAlt grp@(LitGrp lit) = do
             --TODO: For now fall back to regular matching when strings are involved
-            if isStringTy occType then failDs else return ()
+            --if isStringTy occType then failDs else return ()
             mr <- groupExpr grp
             
             return $ MkCaseAlt 
@@ -1307,7 +1305,12 @@ mkCase heuristic df ty m knowledge colIndex =
                             defBranch
                 | isLit           -> do 
                     let litAlts = map altToLitPair caseAlts
-                    return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
+                    if isStringTy (occType) then
+                        do  { eq_str <- dsLookupGlobalId eqStringName
+                            ; mrs <- mapM (wrap_str_guard occ eq_str) litAlts
+                            ; return (foldr1 combineMatchResults mrs) }
+                        else
+                            return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
                 | otherwise       -> do
                     let conAlts = map altToConAlt caseAlts
                     return $ mkCoAlgCaseMatchResult df occ ty conAlts defBranch
