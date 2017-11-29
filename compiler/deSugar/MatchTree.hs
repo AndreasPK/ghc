@@ -245,7 +245,7 @@ match vars ty eqns = do
     matrix <- (toPatternMatrix vars eqns)
     --traceM "match:"
     --liftIO . putStrLn . showSDocUnsafe $ ppr $ eqns
-    result <- matchWith leftToRight ty matrix (Map.empty)
+    result <- matchWith complexHeuristic ty matrix (Map.empty)
     return result
 
 
@@ -503,14 +503,55 @@ left to right no matter their strictness.
 -}
 leftToRight m 
     | null m = Nothing
-    | rowCount m == 0 = Nothing
-    | Just cols <- columnCount m, cols == 0 = Nothing
-    | rowCount m == 1 && (fromJust $ columnCount m) > 0 = Just 0
+    | rowCount' == 0 = Nothing
+    | colCount' == 0 = Nothing
+    | rowCount' == 1 && colCount' > 0 = Just 0
     | all (not . isStrict) (fmap (fst . flip Seq.index 0. fst) m) = Just 0
     | null ss         = Nothing
     | otherwise       = Just $ head ss
     where
         ss = strictSet m
+        rowCount' = (rowCount m)
+        colCount' = fromMaybe 0 (columnCount m)
+
+complexHeuristic :: EqMatrix -> Maybe Int
+{-
+We select strict columns left to right for one exception:
+If there is just a single row we can process patterns from
+left to right no matter their strictness.
+-}
+complexHeuristic m 
+    | null m                                        = Nothing
+    | rowCount' == 0                                = Nothing
+    | colCount' == 0                                = Nothing
+    | rowCount' == 1 && colCount' > 0               = Just 0
+    | all (not . isStrict) 
+          (fmap (fst . flip Seq.index 0. fst) m)    = Just 0
+    | (0,_) <- longestPrefix                        = Nothing
+    | (_,i) <- longestPrefix                        = Just i
+    where
+        ss = strictSet m
+        rowCount' = (rowCount m)
+        colCount' = fromMaybe 0 (columnCount m)
+        patColumns :: [Seq.Seq (Pat GhcTc)]
+        patColumns = map (fmap fst) columns
+
+        strictPrefixLength :: PatternColumn PatInfo -> Int
+        strictPrefixLength col = 
+            let pats = fmap fst col
+            in plength isStrict $ toList pats
+        
+        columns = getColumns m :: [PatternColumn PatInfo]
+        prefixMap = sortOn (negate . fst) $ zipWith (\c i-> (strictPrefixLength c, i)) columns [0..]
+        longestPrefix = head prefixMap
+        
+
+plength :: (a -> Bool) -> [a] -> Int
+plength f  [] = 0
+plength f (x:xs)
+    | f x = 1 + plength f xs
+    | otherwise   = plength f xs
+
 
 
 -- | Is evaluation of the pattern required
