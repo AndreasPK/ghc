@@ -181,7 +181,7 @@ type CPM = PM PatInfo MatrixRHS
 -}
 type DecompositionKnowledge = Map Occurrence (Either [CondValue] CondValue)
 
-type Heuristic = CPM -> Maybe Int
+type Heuristic = DynFlags -> CPM -> Maybe Int
 
 -- Matrix Types
 type EqMatrix = PM PatInfo MatrixRHS
@@ -495,13 +495,13 @@ strictSet m =
         Nothing -> []
         (Just c) -> L.nub $ c:strictColumns
 
-leftToRight :: EqMatrix -> Maybe Int
+leftToRight :: DynFlags -> EqMatrix -> Maybe Int
 {-
 We select strict columns left to right for one exception:
 If there is just a single row we can process patterns from
 left to right no matter their strictness.
 -}
-leftToRight m 
+leftToRight _df m 
     | null m = Nothing
     | rowCount' == 0 = Nothing
     | colCount' == 0 = Nothing
@@ -514,35 +514,44 @@ leftToRight m
         rowCount' = (rowCount m)
         colCount' = fromMaybe 0 (columnCount m)
 
-complexHeuristic :: EqMatrix -> Maybe Int
+complexHeuristic :: DynFlags -> EqMatrix -> Maybe Int
 {-
 We select strict columns left to right for one exception:
 If there is just a single row we can process patterns from
 left to right no matter their strictness.
 -}
-complexHeuristic m 
+complexHeuristic df m 
     | null m                                        = Nothing
     | rowCount' == 0                                = Nothing
     | colCount' == 0                                = Nothing
     | rowCount' == 1 && colCount' > 0               = Just 0
     | all (not . isStrict) 
           (fmap (fst . flip Seq.index 0. fst) m)    = Just 0
-    | (0,_) <- longestPrefix                        = Nothing
+    | (x,_) <- longestPrefix, head x == 0           = Nothing
     | (_,i) <- longestPrefix                        = Just i
     where
         ss = strictSet m
         rowCount' = (rowCount m)
         colCount' = fromMaybe 0 (columnCount m)
-        patColumns :: [Seq.Seq (Pat GhcTc)]
-        patColumns = map (fmap fst) columns
+        patColumns :: [ [Pat GhcTc]]
+        patColumns = map (toList . fmap fst) columns
 
-        strictPrefixLength :: PatternColumn PatInfo -> Int
-        strictPrefixLength col = 
-            let pats = fmap fst col
-            in plength isStrict $ toList pats
+        strictPrefixLength :: [Pat GhcTc] -> Int
+        strictPrefixLength pats = 
+            plength isStrict pats
+
+        conVariety :: [Pat GhcTc] -> Int
+        conVariety pats = length $ Set.fromList $ map (patGroup df) pats
+
         
         columns = getColumns m :: [PatternColumn PatInfo]
-        prefixMap = sortOn (negate . fst) $ zipWith (\c i-> (strictPrefixLength c, i)) columns [0..]
+        prefixMap = sortOn fst $ 
+            zipWith
+            (\colPats i-> 
+                ([ negate (strictPrefixLength colPats)
+                 , conVariety colPats]
+                , i))
+            patColumns [0..]
         longestPrefix = head prefixMap
         
 
@@ -852,8 +861,8 @@ matchWith heuristic ty m knowledge
         --traceM "Match matrix"
 
         --If we match on something like f x = <canFailRhs> we can end up with a match on an empty matrix
-        let matchCol = heuristic m :: Maybe Int 
         df <- getDynFlags
+        let matchCol = heuristic df m :: Maybe Int 
         --liftIO $ putStrLn $ "Matchcol:" ++ show matchCol
         case matchCol of
         {-
@@ -878,20 +887,22 @@ matchWith heuristic ty m knowledge
                     let (expr, constraints) = getRhs m 0 :: (MatchResult, Constraints)
 
                     continuation <- matchWith heuristic ty (Seq.drop 1 m) knowledge :: DsM MatchResult
-                    constraintWrapper <- (resolveConstraints m ty knowledge constraints) :: DsM DsWrapper
-                    let constrainedMatch = (adjustMatchResult constraintWrapper expr) :: MatchResult
-                    --let constrainedMatch = (adjustMatchResult id expr) :: MatchResult
+                    constraintWrapper <- (resolveConstraints m ty knowledge) constraints -- :: DsM DsWrapper
+                    let constrainedMatch = adjustMatchResultDs constraintWrapper expr :: MatchResult
 
                     return $ combineMatchResults constrainedMatch continuation
+                    return continuation
                 | fromJust (columnCount m) == 0 -> do
                     let rhss = F.toList $ fmap snd m :: [(MatchResult, Constraints)]
                     let (results, constraints) = unzip rhss
                     
-                    constraintWrappers <- mapM (resolveConstraints m ty knowledge) constraints :: DsM [DsWrapper]
-                    let constrainedMatches = zipWith adjustMatchResult constraintWrappers results :: [MatchResult]
+                    constraintWrappers <- mapM (resolveConstraints m ty knowledge) constraints  :: DsM [CoreExpr -> DsM CoreExpr]
+                    let constrainedMatches = zipWith adjustMatchResultDs constraintWrappers results :: [MatchResult]
                     --let constrainedMatches = zipWith adjustMatchResult (repeat id) results :: [MatchResult]
 
                     return $ foldr combineMatchResults alwaysFailMatchResult constrainedMatches
+                    return $ foldr combineMatchResults alwaysFailMatchResult results
+                    
 
             Just colIndex -> do
                 
@@ -968,6 +979,18 @@ wrapPatBinds tvs1 dicts1 ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
                 . mkCoreLets ds_bind
                 )
 
+altToLitPair :: CaseAlt AltCon -> (Literal, MatchResult)
+altToLitPair MkCaseAlt {alt_pat = LitAlt lit, alt_result = mr} 
+    = (lit, mr)
+altToLitPair alt  
+    = pprPanic "Alt not of literal type" $ ppr $ alt_pat alt
+
+altToConAlt :: CaseAlt AltCon -> CaseAlt DataCon
+altToConAlt alt@MkCaseAlt {alt_pat = DataAlt con}
+    = alt {alt_pat = con}
+altToConAlt alt  
+    = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
+
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
 The failure story:
@@ -989,9 +1012,6 @@ We then use this default expression to generate the other alternatives.
 mkCase heuristic df ty m knowledge colIndex =
     let column = getCol m colIndex
         occ = colOcc column :: Occurrence --What we match on
-
-        --Scrutinee for the case expr
-        scrutinee = varToCoreExpr occ :: CoreExpr
         occType = (varType occ) :: Type
 
 
@@ -1267,19 +1287,6 @@ mkCase heuristic df ty m knowledge colIndex =
         Does not include the default branch
         -}
         alts = mapM (mkAlt) (cgrps)
-
-
-        toLitPair :: CaseAlt AltCon -> (Literal, MatchResult)
-        toLitPair MkCaseAlt {alt_pat = LitAlt lit, alt_result = mr} 
-            = (lit, mr)
-        toLitPair alt  
-            = pprPanic "Alt not of literal type" $ ppr $ alt_pat alt
-
-        toConAlt :: CaseAlt AltCon -> CaseAlt DataCon
-        toConAlt alt@MkCaseAlt {alt_pat = DataAlt con}
-            = alt {alt_pat = con}
-        toConAlt alt  
-            = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
             
     in do
         --traceM "mkCase"
@@ -1299,10 +1306,10 @@ mkCase heuristic df ty m knowledge colIndex =
                             (error "No branch case not handled yet as") 
                             defBranch
                 | isLit           -> do 
-                    let litAlts = map toLitPair caseAlts
+                    let litAlts = map altToLitPair caseAlts
                     return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
                 | otherwise       -> do
-                    let conAlts = map toConAlt caseAlts
+                    let conAlts = map altToConAlt caseAlts
                     return $ mkCoAlgCaseMatchResult df occ ty conAlts defBranch
 
 extendFields :: DataCon -> [Name] -> [Name]
@@ -1384,7 +1391,7 @@ matrixOcc :: CPM -> [Occurrence]
 matrixOcc m = F.toList $ fmap (patOcc . snd) $ getRow m 0
 
 
-resolveConstraints :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
+resolveConstraints :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM (CoreExpr -> DsM CoreExpr)
 {- Produces a wrapper which guarantees evaluation of arguments according to Augustsons algorithm.
  a match result to include required evaluation of occurences according to the constraints. -}
 
@@ -1402,14 +1409,14 @@ resolveConstraints m ty knowledge constraints = do
 
     if null simplifiedConstraints
         then --trace "BaseCase" $ 
-            return (\expr -> expr)
+            return $ \e -> return e
         else do--trace "solveCase" 
             (mkConstraintCase m ty knowledge simplifiedConstraints)
 
 dsPrint :: SDoc -> DsM ()
 dsPrint = liftIO . putStrLn . showSDocUnsafe
 
-mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM DsWrapper
+mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM (CoreExpr -> DsM CoreExpr)
 {-
 Resolve at least one constraint by introducing a additional case statement
 There is some bookkeeping not done here which needs to be fixed.
@@ -1418,74 +1425,79 @@ mkConstraintCase m ty knowledge constraints =
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
         --ty = varType occ :: Kind
+        occValues :: [Maybe CondValue]
         occValues = concatMap 
-            (\constraint -> foldMap (\(info, condVal) -> if (patOcc info) == occ then [conVal] else []) constraint) constraints :: [Maybe CondValue]
+            (\constraint -> 
+                foldMap 
+                    (\(info, condVal) -> 
+                        if (patOcc info) == occ then [conVal] else [])
+                    constraint)
+            constraints
         occVals = nub $ catMaybes occValues :: [CondValue]
         newEvidence condVal = Right condVal
 
-        getAltExpr :: CondValue -> DsM (CoreExpr -> CoreExpr)
-        getAltExpr condVal = resolveConstraints m ty (Map.insert occ (newEvidence condVal) knowledge) constraints :: DsM DsWrapper
+        litConstraint = case head occVals of { LitCond {} -> True; _ -> False} 
+
+        getAltResult :: CondValue -> DsM MatchResult
+        getAltResult condVal = do
+            wrapper <- (resolveConstraints m ty (Map.insert occ (newEvidence condVal) knowledge) constraints)
+            return $ adjustMatchResultDs wrapper $ MatchResult CanFail $ \expr -> return expr
 
         defaultEvidence = Left occVals
-        defaultExpr = resolveConstraints m ty (Map.insert occ (defaultEvidence) knowledge) constraints :: DsM DsWrapper
 
-        scrutinee = varToCoreExpr occ :: CoreExpr
+        defaultResult :: DsM MatchResult        
+        defaultResult = do
+            wrapper <- (resolveConstraints m ty (Map.insert occ (defaultEvidence) knowledge) constraints)
+            return $ adjustMatchResultDs wrapper $ MatchResult CanFail $ \expr -> return expr
+                
+        mkConstraintAlt :: CondValue -> DsM (CaseAlt AltCon)
+        mkConstraintAlt cond@(LitCond lit) = do
+            --TODO: For now fall back to regular matching when strings are involved
+            mr <- getAltResult cond
+            
+            return $ MkCaseAlt 
+                { alt_pat = LitAlt lit
+                , alt_bndrs = []
+                , alt_wrapper = WpHole
+                , alt_result = mr } 
 
-        condAlt :: CondValue -> DsM (CoreExpr -> CoreAlt)
-        condAlt (LitCond lit) = do
-            return (\expr -> ((LitAlt lit), [], expr))
-        {- TODO: 
-        Currently if we have constraints ((,) a b) we have no good way to
-        determine the types of a, b or the number of arguments at all.
-
-        The question if it's enought to use wildcard binders or if we have to
-        be able to reuse these is also still not clear to me.
-        -}
-        condAlt (ConCond {cv_con = dcon, cv_pat = pat}) = do
-        
+        mkConstraintAlt cond@(ConCond {cv_con = dcon, cv_pat = pat}) = do
             let ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                     pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1, pat_binds = bind }
                     = pat
-
             --Extract constructor argument types
             let inst_tys   = arg_tys ++ mkTyVarTys tvs1
             let val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
             arg_vars <- selectConMatchVars val_arg_tys args1
-
             wrapper <- wrapPatBinds tvs1 dicts1 pat
+            mr <- getAltResult cond
             
             --dsPrint $ text "altCon: " <+> ppr dcon
-            
-            
-            --TODO: We should only have to care about the type of constructor hence no bindings given
-            return (\expr -> ((DataAlt dcon), tvs1 ++ dicts1 ++ arg_vars, wrapper expr)) 
+                
+            --return (\expr -> ((DataAlt dcon), , wrapper expr)) 
+            return $ MkCaseAlt 
+                { alt_pat = DataAlt dcon
+                , alt_bndrs = tvs1 ++ dicts1 ++ arg_vars
+                , alt_wrapper = WpHole
+                , alt_result = adjustMatchResult wrapper mr } 
+    
+    in do 
+        --traceM ("mkConstraint")
+        --dsPrint $ text "knowledge" <+> ppr knowledge
+        --dsPrint $ text "constraints" <+> ppr constraints
+        df <- getDynFlags
+        defBranch <- Just <$> defaultResult -- :: DsM (Maybe MatchResult)
+        alts <- mapM mkConstraintAlt occVals
+        
+        return $ if litConstraint 
+            then 
+                let MatchResult _ f = mkCoPrimCaseMatchResult occ ty (map altToLitPair alts) defBranch
+                in f
 
-    
-    in do
-    --traceM ("mkConstraint")
-    --dsPrint $ text "knowledge" <+> ppr knowledge
-    --dsPrint $ text "constraints" <+> ppr constraints
-    --dsPrint $ ppr ty
-    def <- defaultExpr :: DsM DsWrapper
-    let defAlt = (\rhs -> (DEFAULT, [], def rhs)) :: CoreExpr -> CoreAlt
-    altBuilders <- mapM (condAlt) occVals :: DsM [CoreExpr -> CoreAlt]
-    altExpressions <- mapM (getAltExpr) occVals :: DsM [CoreExpr -> CoreExpr]
-    let alts = (\rhs ->
-            (defAlt rhs) :
-                (zipWithEqual
-                    "MatchConstraints: expressions /= branches"
-                    (\altWrap exprWrap -> altWrap (exprWrap rhs)) altBuilders altExpressions
-                )
-            ) :: CoreExpr -> [CoreAlt]
-    
-    let caseBuilder = (\rhs ->
-            let appliedAlts = alts rhs
-                sortedAlts = sortOn (\(x,_y,_z) -> x) appliedAlts
-            in
-            Case (Var occ) (mkWildValBinder (idType occ)) ty (sortedAlts)
-            )
-    return caseBuilder
-    
+            else 
+                let MatchResult _ f = mkCoAlgCaseMatchResult df occ ty (map altToConAlt alts) defBranch
+                in f
+            
     
 
 truncateConstraint :: HasCallStack => DecompositionKnowledge -> Constraint -> Constraint
