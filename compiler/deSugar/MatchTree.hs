@@ -12,7 +12,15 @@ TODO:
 * Mixed Records per group
 * String literals
 * More Heuristics
-* Post bac: PatSynonmys and other extensions   
+
+* For a matrix like
+
+A D = 1
+_ E = 2
+C F = 3
+
+* Post bac: PatSynonmys and other extensions
+
 
 
 -}
@@ -149,7 +157,9 @@ instance Outputable CondValue where
 data PatInfo 
     = PatInfo 
     { patCol :: [Int]
-    , patOcc :: !Occurrence }
+    , patOcc :: !Occurrence
+    --, patStrictness :: Bool --TODO: Track strictness during the algorithm and generate evaluations after pattern matching code if neccesary 
+    }
     deriving (Eq, Ord, Data)
 
 instance Outputable PatInfo where
@@ -302,176 +312,6 @@ toMatrixRow vars (EqnInfo pats rhs) = do
 
 
 
-tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
-tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
-    --liftIO $ putStrLn "tidyEntry"
-    (wrapper, newPat) <- tidy1 occ pat
-    --liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan newPat
-    --liftIO . putStrLn $ "newPat"
-    --liftIO $ putStrLn "tidied"
-    return $ (wrapper, (newPat, info))
-
-tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
-      -> Pat GhcTc           -- The pattern against which it is to be matched
-      -> DsM (DsWrapper,     -- Extra bindings to do before the match
-              Pat GhcTc)     -- Equivalent pattern
-
--------------------------------------------------------
---      (pat', mr') = tidy1 v pat mr
--- tidies the *outer level only* of pat, giving pat'
--- It eliminates many pattern forms (as-patterns, variable patterns,
--- list patterns, etc) and returns any created bindings in the wrapper.
-
-tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
-tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
-
-        -- case v of { x -> mr[] }
-        -- = case v of { _ -> let x=v in mr[] }
-tidy1 v (VarPat (L _ var))
-  = return (wrapBind var v, WildPat (idType var))
-
-        -- case v of { x@p -> mr[] }
-        -- = case v of { p -> let x=v in mr[] }
-tidy1 v (AsPat (L _ var) pat)
-  = do  { (wrap, pat') <- tidy1 v (unLoc pat)
-        ; return (wrapBind var v . wrap, pat') }
-
-{- now, here we handle lazy patterns:
-    tidy1 v ~p bs = (v, v1 = case v of p -> v1 :
-                        v2 = case v of p -> v2 : ... : bs )
-    where the v_i's are the binders in the pattern.
-    ToDo: in "v_i = ... -> v_i", are the v_i's really the same thing?
-    The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
--}
-
-tidy1 v (LazyPat pat)
-    -- This is a convenient place to check for unlifted types under a lazy pattern.
-    -- Doing this check during type-checking is unsatisfactory because we may
-    -- not fully know the zonked types yet. We sure do here.
-  = do  { let unlifted_bndrs = filter (isUnliftedType . idType) (collectPatBinders pat)
-        ; unless (null unlifted_bndrs) $
-          putSrcSpanDs (getLoc pat) $
-          errDs (hang (text "A lazy (~) pattern cannot bind variables of unlifted type." $$
-                       text "Unlifted variables:")
-                    2 (vcat (map (\id -> ppr id <+> dcolon <+> ppr (idType id))
-                                 unlifted_bndrs)))
-
-        ; (_,sel_prs) <- mkSelectorBinds [] pat (Var v)
-        ; let sel_binds =  [NonRec b rhs | (b,rhs) <- sel_prs]
-        ; return (mkCoreLets sel_binds, WildPat (idType v)) }
-
-tidy1 _ (ListPat pats ty Nothing)
-  = return (idDsWrapper, unLoc list_ConPat)
-  where
-    list_ConPat = foldr (\ x y -> mkPrefixConPat consDataCon [x, y] [ty])
-                        (mkNilPat ty)
-                        pats
-
--- Introduce fake parallel array constructors to be able to handle parallel
--- arrays with the existing machinery for constructor pattern
-tidy1 _ (PArrPat pats ty)
-  = return (idDsWrapper, unLoc parrConPat)
-  where
-    arity      = length pats
-    parrConPat = mkPrefixConPat (parrFakeCon arity) pats [ty]
-
-tidy1 _ (TuplePat pats boxity tys)
-  = return (idDsWrapper, unLoc tuple_ConPat)
-  where
-    arity = length pats
-    tuple_ConPat = mkPrefixConPat (tupleDataCon boxity arity) pats tys
-
-tidy1 _ (SumPat pat alt arity tys)
-  = return (idDsWrapper, unLoc sum_ConPat)
-  where
-    sum_ConPat = mkPrefixConPat (sumDataCon alt arity) [pat] tys
-
--- LitPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (LitPat lit)
-  = return (idDsWrapper, tidyLitPat lit)
-
--- NPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (NPat (L _ lit) mb_neg eq ty)
-  = return (idDsWrapper, tidyNPat tidyLitPat lit mb_neg eq ty)
-
--- Everything else goes through unchanged...
-
-tidy1 _ non_interesting_pat
-  = return (idDsWrapper, non_interesting_pat)
-
---------------------
-tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
-
--- Discard par/sig under a bang
-tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
-tidy_bang_pat v _ (SigPatOut (L l p) _) = tidy_bang_pat v l p
-
--- Push the bang-pattern inwards, in the hope that
--- it may disappear next time
-tidy_bang_pat v l (AsPat v' p)  = tidy1 v (AsPat v' (L l (BangPat p)))
-tidy_bang_pat v l (CoPat w p t) = tidy1 v (CoPat w (BangPat (L l p)) t)
-
--- Discard bang around strict pattern
-tidy_bang_pat v _ p@(LitPat {})    = tidy1 v p
-tidy_bang_pat v _ p@(ListPat {})   = tidy1 v p
-tidy_bang_pat v _ p@(TuplePat {})  = tidy1 v p
-tidy_bang_pat v _ p@(SumPat {})    = tidy1 v p
-tidy_bang_pat v _ p@(PArrPat {})   = tidy1 v p
-
--- Data/newtype constructors
-tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
-                               , pat_args = args
-                               , pat_arg_tys = arg_tys })
-  -- Newtypes: push bang inwards (Trac #9844)
-  =
-    if isNewTyCon (dataConTyCon dc)
-      then tidy1 v (p { pat_args = push_bang_into_newtype_arg l ty args })
-      else tidy1 v p  -- Data types: discard the bang
-    where
-      (ty:_) = dataConInstArgTys dc arg_tys
-
--------------------
--- Default case, leave the bang there:
---    VarPat,
---    LazyPat,
---    WildPat,
---    ViewPat,
---    pattern synonyms (ConPatOut with PatSynCon)
---    NPat,
---    NPlusKPat
---
--- For LazyPat, remember that it's semantically like a VarPat
---  i.e.  !(~p) is not like ~p, or p!  (Trac #8952)
---
--- NB: SigPatIn, ConPatIn should not happen
-
-tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
-
--------------------
-push_bang_into_newtype_arg :: SrcSpan
-                           -> Type -- The type of the argument we are pushing
-                                   -- onto
-                           -> HsConPatDetails GhcTc -> HsConPatDetails GhcTc
--- See Note [Bang patterns and newtypes]
--- We are transforming   !(N p)   into   (N !p)
-push_bang_into_newtype_arg l _ty (PrefixCon (arg:args))
-  = ASSERT( null args)
-    PrefixCon [L l (BangPat arg)]
-push_bang_into_newtype_arg l _ty (RecCon rf)
-  | HsRecFields { rec_flds = L lf fld : flds } <- rf
-  , HsRecField { hsRecFieldArg = arg } <- fld
-  = ASSERT( null flds)
-    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
-push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
-  | HsRecFields { rec_flds = [] } <- rf
-  = PrefixCon [L l (BangPat (noLoc (WildPat ty)))]
-push_bang_into_newtype_arg _ _ cd
-  = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
-
-
-
 
 
 
@@ -482,8 +322,9 @@ push_bang_into_newtype_arg _ _ cd
 strictColumn :: PatternColumn e -> Bool
 strictColumn = all (isStrict . fst)
 
+-- | Take a matrix and calculate occurences which are always evaluated.
 strictSet :: HasCallStack => EqMatrix -> [Int]
---TODO: Include strict columns with not all patterns
+--TODO: Include strict columns which contain wildcards in some rows
 --      Include patterns which are strict but are currently handled by tidy
 strictSet m = 
     let firstRow = getRow m 0 :: PatternRow PatInfo
@@ -516,43 +357,73 @@ leftToRight _df m
 
 complexHeuristic :: DynFlags -> EqMatrix -> Maybe Int
 {-
-We select strict columns left to right for one exception:
-If there is just a single row we can process patterns from
-left to right no matter their strictness.
+Combine multiple heuristics on columns to pick the best ones.
+
+TODO: Needs a rework before pattern extensions can work.
 -}
 complexHeuristic df m 
     | null m                                        = Nothing
     | rowCount' == 0                                = Nothing
     | colCount' == 0                                = Nothing
     | rowCount' == 1 && colCount' > 0               = Just 0
-    | all (not . isStrict) 
+    | all (not . isStrict)    --No column has a strict constructor
           (fmap (fst . flip Seq.index 0. fst) m)    = Just 0
-    | (x,_) <- longestPrefix, head x == 0           = Nothing
-    | (_,i) <- longestPrefix                        = Just i
+    | null ss                                       = Nothing
+    --First row has no strict entries:
+    | otherwise                                     = Just choice
     where
         ss = strictSet m
         rowCount' = (rowCount m)
         colCount' = fromMaybe 0 (columnCount m)
-        patColumns :: [ [Pat GhcTc]]
+        patColumns :: [ [Pat GhcTc] ]
         patColumns = map (toList . fmap fst) columns
 
+        --We sort on the result of heuristics hence (-max = best, +max = worst)
+
+        --The number of consecutive strict patterns
+        --is a good primary heuristic.
+        --TODO: Without working strict patterns into this it gives the same
+        --results as the strict set.
         strictPrefixLength :: [Pat GhcTc] -> Int
         strictPrefixLength pats = 
-            plength isStrict pats
+            negate $ plength isStrict pats
 
+        --The number of different constructors appearing in a column
+        --is useful to reduce the size of the resulting tree.
+        --Generally prefer columns with many different constructors.
         conVariety :: [Pat GhcTc] -> Int
-        conVariety pats = length $ Set.fromList $ map (patGroup df) pats
+        conVariety pats = 
+            length $ Set.fromList $ map (patGroup df) pats
+
+        --The constructor count can help to pick columns with many (non-consecutive)
+        --patterns first.
+        conCount :: [Pat GhcTc] -> Int
+        conCount pats = 
+            negate . length $ filter isCon pats
+
+        --TODO: The number of strict entries might also be a interesting heuristic
+        -- although I expect it to cover mostly the same cases as conCount
+
+        isCon ConPatOut {} = True
+        isCon LitPat {} = True
+        isCon _ = False
 
         
         columns = getColumns m :: [PatternColumn PatInfo]
-        prefixMap = sortOn fst $ 
+        
+        -- | pairs of (score,colum) with lower scores being better.
+        rankedColumns :: [([Int], Int)]
+        rankedColumns = sortOn fst (
             zipWith
             (\colPats i-> 
-                ([ negate (strictPrefixLength colPats)
-                 , conVariety colPats]
+                ([ --strictPrefixLength colPats
+                  conVariety colPats
+                 , conCount colPats]
                 , i))
-            patColumns [0..]
-        longestPrefix = head prefixMap
+            patColumns [0..])
+        choice :: Int
+        choice = --trace "ss" $ traceShow ss $ traceShow rankedColumns $ trace "done" $
+                snd . head $ filter (\(_p,idx) -> elem idx ss) rankedColumns
         
 
 plength :: (a -> Bool) -> [a] -> Int
@@ -571,6 +442,7 @@ isStrict LitPat {} = True
 isStrict NPat {} = True -- 
 isStrict NPlusKPat {} = True -- ?
 isStrict p = error $ "Should have been tidied already:" ++ (showSDocUnsafe (ppr p)) ++ " " ++ showSDocUnsafe (showAstData BlankSrcSpan p)
+
 
 
 
@@ -853,8 +725,8 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        traceM "matchWith:"
-        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
+        --traceM "matchWith:"
+        --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -991,7 +863,7 @@ altToConAlt alt
     = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
 
 fallBack :: String -> DsM a
-fallBack m = traceM m >> 
+fallBack m = --traceM m >> 
     failDs
 
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
@@ -1288,7 +1160,7 @@ mkCase heuristic df ty m knowledge colIndex =
             
     in do
         when (isStringTy occType) $ fallBack "fallBack:OccType=String "
-        
+
         --traceM "mkCase"
         caseAlts <- alts :: DsM [CaseAlt AltCon]
 
@@ -1568,3 +1440,185 @@ evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
         in match (fromJust cVal)
     where
         cOcc = patOcc cInfo :: Occurrence
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
+tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
+    --liftIO $ putStrLn "tidyEntry"
+    (wrapper, newPat) <- tidy1 occ pat
+    --liftIO . putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan newPat
+    --liftIO . putStrLn $ "newPat"
+    --liftIO $ putStrLn "tidied"
+    return $ (wrapper, (newPat, info))
+
+tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
+      -> Pat GhcTc           -- The pattern against which it is to be matched
+      -> DsM (DsWrapper,     -- Extra bindings to do before the match
+              Pat GhcTc)     -- Equivalent pattern
+
+-------------------------------------------------------
+--      (pat', mr') = tidy1 v pat mr
+-- tidies the *outer level only* of pat, giving pat'
+-- It eliminates many pattern forms (as-patterns, variable patterns,
+-- list patterns, etc) and returns any created bindings in the wrapper.
+
+tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
+tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
+tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
+
+        -- case v of { x -> mr[] }
+        -- = case v of { _ -> let x=v in mr[] }
+tidy1 v (VarPat (L _ var))
+  = return (wrapBind var v, WildPat (idType var))
+
+        -- case v of { x@p -> mr[] }
+        -- = case v of { p -> let x=v in mr[] }
+tidy1 v (AsPat (L _ var) pat)
+  = do  { (wrap, pat') <- tidy1 v (unLoc pat)
+        ; return (wrapBind var v . wrap, pat') }
+
+{- now, here we handle lazy patterns:
+    tidy1 v ~p bs = (v, v1 = case v of p -> v1 :
+                        v2 = case v of p -> v2 : ... : bs )
+    where the v_i's are the binders in the pattern.
+    ToDo: in "v_i = ... -> v_i", are the v_i's really the same thing?
+    The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
+-}
+
+tidy1 v (LazyPat pat)
+    -- This is a convenient place to check for unlifted types under a lazy pattern.
+    -- Doing this check during type-checking is unsatisfactory because we may
+    -- not fully know the zonked types yet. We sure do here.
+  = do  { let unlifted_bndrs = filter (isUnliftedType . idType) (collectPatBinders pat)
+        ; unless (null unlifted_bndrs) $
+          putSrcSpanDs (getLoc pat) $
+          errDs (hang (text "A lazy (~) pattern cannot bind variables of unlifted type." $$
+                       text "Unlifted variables:")
+                    2 (vcat (map (\id -> ppr id <+> dcolon <+> ppr (idType id))
+                                 unlifted_bndrs)))
+
+        ; (_,sel_prs) <- mkSelectorBinds [] pat (Var v)
+        ; let sel_binds =  [NonRec b rhs | (b,rhs) <- sel_prs]
+        ; return (mkCoreLets sel_binds, WildPat (idType v)) }
+
+tidy1 _ (ListPat pats ty Nothing)
+  = return (idDsWrapper, unLoc list_ConPat)
+  where
+    list_ConPat = foldr (\ x y -> mkPrefixConPat consDataCon [x, y] [ty])
+                        (mkNilPat ty)
+                        pats
+
+-- Introduce fake parallel array constructors to be able to handle parallel
+-- arrays with the existing machinery for constructor pattern
+tidy1 _ (PArrPat pats ty)
+  = return (idDsWrapper, unLoc parrConPat)
+  where
+    arity      = length pats
+    parrConPat = mkPrefixConPat (parrFakeCon arity) pats [ty]
+
+tidy1 _ (TuplePat pats boxity tys)
+  = return (idDsWrapper, unLoc tuple_ConPat)
+  where
+    arity = length pats
+    tuple_ConPat = mkPrefixConPat (tupleDataCon boxity arity) pats tys
+
+tidy1 _ (SumPat pat alt arity tys)
+  = return (idDsWrapper, unLoc sum_ConPat)
+  where
+    sum_ConPat = mkPrefixConPat (sumDataCon alt arity) [pat] tys
+
+-- LitPats: we *might* be able to replace these w/ a simpler form
+tidy1 _ (LitPat lit)
+  = return (idDsWrapper, tidyLitPat lit)
+
+-- NPats: we *might* be able to replace these w/ a simpler form
+tidy1 _ (NPat (L _ lit) mb_neg eq ty)
+  = return (idDsWrapper, tidyNPat tidyLitPat lit mb_neg eq ty)
+
+-- Everything else goes through unchanged...
+
+tidy1 _ non_interesting_pat
+  = return (idDsWrapper, non_interesting_pat)
+
+--------------------
+tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
+
+-- Discard par/sig under a bang
+tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
+tidy_bang_pat v _ (SigPatOut (L l p) _) = tidy_bang_pat v l p
+
+-- Push the bang-pattern inwards, in the hope that
+-- it may disappear next time
+tidy_bang_pat v l (AsPat v' p)  = tidy1 v (AsPat v' (L l (BangPat p)))
+tidy_bang_pat v l (CoPat w p t) = tidy1 v (CoPat w (BangPat (L l p)) t)
+
+-- Discard bang around strict pattern
+tidy_bang_pat v _ p@(LitPat {})    = tidy1 v p
+tidy_bang_pat v _ p@(ListPat {})   = tidy1 v p
+tidy_bang_pat v _ p@(TuplePat {})  = tidy1 v p
+tidy_bang_pat v _ p@(SumPat {})    = tidy1 v p
+tidy_bang_pat v _ p@(PArrPat {})   = tidy1 v p
+
+-- Data/newtype constructors
+tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
+                               , pat_args = args
+                               , pat_arg_tys = arg_tys })
+  -- Newtypes: push bang inwards (Trac #9844)
+  =
+    if isNewTyCon (dataConTyCon dc)
+      then tidy1 v (p { pat_args = push_bang_into_newtype_arg l ty args })
+      else tidy1 v p  -- Data types: discard the bang
+    where
+      (ty:_) = dataConInstArgTys dc arg_tys
+
+-------------------
+-- Default case, leave the bang there:
+--    VarPat,
+--    LazyPat,
+--    WildPat,
+--    ViewPat,
+--    pattern synonyms (ConPatOut with PatSynCon)
+--    NPat,
+--    NPlusKPat
+--
+-- For LazyPat, remember that it's semantically like a VarPat
+--  i.e.  !(~p) is not like ~p, or p!  (Trac #8952)
+--
+-- NB: SigPatIn, ConPatIn should not happen
+
+tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
+
+-------------------
+push_bang_into_newtype_arg :: SrcSpan
+                           -> Type -- The type of the argument we are pushing
+                                   -- onto
+                           -> HsConPatDetails GhcTc -> HsConPatDetails GhcTc
+-- See Note [Bang patterns and newtypes]
+-- We are transforming   !(N p)   into   (N !p)
+push_bang_into_newtype_arg l _ty (PrefixCon (arg:args))
+  = ASSERT( null args)
+    PrefixCon [L l (BangPat arg)]
+push_bang_into_newtype_arg l _ty (RecCon rf)
+  | HsRecFields { rec_flds = L lf fld : flds } <- rf
+  , HsRecField { hsRecFieldArg = arg } <- fld
+  = ASSERT( null flds)
+    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
+push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
+  | HsRecFields { rec_flds = [] } <- rf
+  = PrefixCon [L l (BangPat (noLoc (WildPat ty)))]
+push_bang_into_newtype_arg _ _ cd
+  = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
+
