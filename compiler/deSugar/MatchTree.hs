@@ -854,8 +854,8 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        --traceM "matchWith:"
-        --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
+        traceM "matchWith:"
+        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -1305,10 +1305,11 @@ mkCase heuristic df ty m knowledge colIndex =
                             defBranch
                 | isLit           -> do 
                     let litAlts = map altToLitPair caseAlts
-                    if isStringTy (occType) then
-                        do  { eq_str <- dsLookupGlobalId eqStringName
-                            ; mrs <- mapM (wrap_str_guard occ eq_str) litAlts
-                            ; return (foldr1 combineMatchResults mrs) }
+                    if isStringTy (occType) 
+                        then
+                            do  { eq_str <- dsLookupGlobalId eqStringName
+                                ; mrs <- mapM (wrap_str_guard occ eq_str) litAlts
+                                ; return (foldr1 combineMatchResults mrs) }
                         else
                             return $ mkCoPrimCaseMatchResult occ ty litAlts defBranch
                 | otherwise       -> do
