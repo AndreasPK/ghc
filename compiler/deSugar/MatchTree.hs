@@ -764,7 +764,7 @@ getConConstraint :: HasCallStack => Pat GhcTc -> DsM (CondValue)
 getConConstraint pat 
     | (L _ (RealDataCon dcon)) <- (pat_con pat) = return $ ConCond dcon pat
     | (L _ (PatSynCon   scon)) <- (pat_con pat) = --warnDs NoReason (ppr "Pat Synonyms not implemented for tree matching") >>
-        failDs
+        fallBack "PatSyn not supported"
 
 
 
@@ -788,9 +788,8 @@ getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >> 
     return Nothing
 getPatternConstraint (p, info) = 
-    --warnDs NoReason (text "Pat should have been tidied already or not implemented" <+> ppr p)) >>
-    failDs
-    --traceM "Error: getPatternConstraint" >> pprPanic "Pattern not implemented: " (showAstData BlankSrcSpan p)
+    fallBack $ "Pat should have been tidied already or not implemented" ++ showSDocUnsafe (ppr p)
+
 {-
 getPatternConstraint NPat {} occ = 
     error "TODO"
@@ -854,8 +853,8 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        --traceM "matchWith:"
-        --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
+        traceM "matchWith:"
+        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -990,6 +989,10 @@ altToConAlt alt@MkCaseAlt {alt_pat = DataAlt con}
     = alt {alt_pat = con}
 altToConAlt alt  
     = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
+
+fallBack :: String -> DsM a
+fallBack m = traceM m >> 
+    failDs
 
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
@@ -1196,7 +1199,6 @@ mkCase heuristic df ty m knowledge colIndex =
 
 
             in do
-
                 --Arguments to the Constructor
                 arg_vars <- selectConMatchVars val_arg_tys args1
 
@@ -1207,7 +1209,7 @@ mkCase heuristic df ty m knowledge colIndex =
                 so for now we just use regular matching on these constructors.
                 -}
                 unless (isVanillaDataCon con) $ --traceM "fail:NonVanilla" >> 
-                    failDs
+                    fallBack "Non-vanilla data con"
 
 
                 {-
@@ -1223,8 +1225,8 @@ mkCase heuristic df ty m knowledge colIndex =
                 let sameFields = and (map (== head patLabels) patLabels) :: Bool
                 unless (
                     all vanillaFields pats || sameFields ) $ do
-                        --traceM "incompatible Patterns"
-                        failDs
+                        fallBack "incompatible Patterns"
+                        
 
                 --TODO: Check if type/dict variables are required for tidying
                 --Variable etc wrapper
@@ -1265,8 +1267,6 @@ mkCase heuristic df ty m knowledge colIndex =
         --generate the alternative for a entry grp
         mkAlt :: PGrp -> DsM (CaseAlt AltCon)
         mkAlt grp@(LitGrp lit) = do
-            --TODO: For now fall back to regular matching when strings are involved
-            --if isStringTy occType then failDs else return ()
             mr <- groupExpr grp
             
             return $ MkCaseAlt 
@@ -1287,6 +1287,8 @@ mkCase heuristic df ty m knowledge colIndex =
         alts = mapM (mkAlt) (cgrps)
             
     in do
+        when (isStringTy occType) $ fallBack "fallBack:OccType=String "
+        
         --traceM "mkCase"
         caseAlts <- alts :: DsM [CaseAlt AltCon]
 
@@ -1295,7 +1297,7 @@ mkCase heuristic df ty m knowledge colIndex =
             any (\x -> case x of {LitGrp {} -> True; _ -> False}) cgrps)
                 --TODO: A string might be desugard as a list OR as a string literal.
                 --If we counter both in the same column we fail for now.
-                failDs
+                (fallBack "Mix of Lit and Con grps")
 
         isLit <- isLitCase
         defBranch <- defBranchMatchResult :: DsM (Maybe MatchResult)
@@ -1313,7 +1315,7 @@ mkCase heuristic df ty m knowledge colIndex =
                 | isLit           -> do 
                     let litAlts = map altToLitPair caseAlts
                     if isStringTy (occType) 
-                        then
+                        then error "TODO:Fix but not used atm:" $ do
                             do  { eq_str <- dsLookupGlobalId eqStringName
                                 ; mrs <- mapM (wrap_str_guard occ eq_str) litAlts
                                 ; return (foldr1 combineMatchResults mrs) }
