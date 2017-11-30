@@ -854,8 +854,8 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        traceM "matchWith:"
-        liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
+        --traceM "matchWith:"
+        --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -1289,6 +1289,13 @@ mkCase heuristic df ty m knowledge colIndex =
     in do
         --traceM "mkCase"
         caseAlts <- alts :: DsM [CaseAlt AltCon]
+
+        when (
+            any (\x -> case x of {ConGrp {} -> True; _ -> False}) cgrps &&
+            any (\x -> case x of {LitGrp {} -> True; _ -> False}) cgrps)
+                --TODO: A string might be desugard as a list OR as a string literal.
+                --If we counter both in the same column we fail for now.
+                failDs
 
         isLit <- isLitCase
         defBranch <- defBranchMatchResult :: DsM (Maybe MatchResult)
