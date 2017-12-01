@@ -37,6 +37,7 @@ import PrelNames
 
 --import DsExpr
 import DynFlags
+import GHC.LanguageExtensions as LangExt
 import HsSyn
 import TcHsSyn
 import TcEvidence
@@ -153,6 +154,7 @@ instance Eq CondValue where
 instance Outputable CondValue where
     ppr (ConCond {cv_con = con}) = lparen O.<> text "ConVal " O.<> ppr con O.<> rparen
     ppr (LitCond lit) = lparen O.<> text "LitVal " O.<> ppr (lit) O.<> rparen
+    
 
 data PatInfo 
     = PatInfo 
@@ -252,6 +254,7 @@ match vars ty eqns = do
     df <- getDynFlags
     useTreeMatching <- goptM Opt_TreeMatching
     unless useTreeMatching failDs
+    --dsPrint $ text "Tree:match" <+> ppr eqns
     matrix <- (toPatternMatrix vars eqns)
     --traceM "match:"
     --liftIO . putStrLn . showSDocUnsafe $ ppr $ eqns
@@ -355,24 +358,31 @@ leftToRight _df m
         rowCount' = (rowCount m)
         colCount' = fromMaybe 0 (columnCount m)
 
-complexHeuristic :: DynFlags -> EqMatrix -> Maybe Int
+complexHeuristic :: HasCallStack => DynFlags -> EqMatrix -> Maybe Int
 {-
 Combine multiple heuristics on columns to pick the best ones.
 
 TODO: Needs a rework before pattern extensions can work.
 -}
 complexHeuristic df m 
-    | null m                                        = Nothing
-    | rowCount' == 0                                = Nothing
-    | colCount' == 0                                = Nothing
-    | rowCount' == 1 && colCount' > 0               = Just 0
+    | null m                                        = --trace "c1" $ 
+        Nothing
+    | rowCount' == 0                                = --trace "c2" $ 
+        Nothing
+    | colCount' == 0                                = --trace "c3" $ 
+        Nothing
+    | rowCount' == 1 && colCount' > 0               = --trace "c4" $ 
+        Just 0
     | all (not . isStrict)    --No column has a strict constructor
-          (fmap (fst . flip Seq.index 0. fst) m)    = Just 0
-    | null ss                                       = Nothing
+          (fmap (fst . flip Seq.index 0. fst) m)    = --trace "c5" $ 
+            Just 0
+    | null ss                                       = --trace "c6" $ 
+        Nothing
     --First row has no strict entries:
-    | otherwise                                     = Just choice
+    | otherwise                                     = --trace "c7" $ 
+        Just choice
     where
-        ss = strictSet m
+        ss = if xopt LangExt.Strict df then [0..colCount'] else strictSet m
         rowCount' = (rowCount m)
         colCount' = fromMaybe 0 (columnCount m)
         patColumns :: [ [Pat GhcTc] ]
@@ -408,6 +418,16 @@ complexHeuristic df m
         isCon LitPat {} = True
         isCon _ = False
 
+        -- | If a column has the same pattern in all rows pick it first.
+        --   Implied by conVariety anyway
+        {-
+        singleGrp :: [Pat GhcTc] -> Int
+        singleGrp pats = 
+            if all (== patGroup df (head pats)) $ map (patGroup df) pats 
+                then -1
+                else 0
+        -}
+
         
         columns = getColumns m :: [PatternColumn PatInfo]
         
@@ -416,8 +436,9 @@ complexHeuristic df m
         rankedColumns = sortOn fst (
             zipWith
             (\colPats i-> 
-                ([ --strictPrefixLength colPats
-                  conVariety colPats
+                ([ --singleGrp colPats
+                -- , strictPrefixLength colPats
+                   conVariety colPats
                  , conCount colPats]
                 , i))
             patColumns [0..])
@@ -441,6 +462,7 @@ isStrict ConPatOut {} = True
 isStrict LitPat {} = True
 isStrict NPat {} = True -- 
 isStrict NPlusKPat {} = True -- ?
+isStrict BangPat {} = True
 isStrict p = error $ "Should have been tidied already:" ++ (showSDocUnsafe (ppr p)) ++ " " ++ showSDocUnsafe (showAstData BlankSrcSpan p)
 
 
@@ -641,9 +663,13 @@ getConConstraint pat
 
 
 getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
--- | The conditions imposed on the RHS by this pattern.
--- Result can have no condition, just evaluation or impose a condition on the
--- following constraints
+{- | The conditions imposed on the RHS by this pattern.
+-- Result can be:
+* No condition
+* Evaluation -> The occurence requires evaluation (wildcards!) 
+* Constructor -> Evaluation + any following constraints 
+                 only have to be considered if the result matches the constructor.
+-}
 getPatternConstraint ((LitPat lit),info) = do
     df <- getDynFlags :: DsM DynFlags
     return $ Just $ (info, Just (LitCond (hsLitKey df lit)) )
@@ -659,6 +685,11 @@ getPatternConstraint (WildPat {}, info) =
 getPatternConstraint (VarPat {}, info) = 
     --traceM "vp" >> 
     return Nothing
+getPatternConstraint (BangPat (L _ p), info) 
+    | WildPat {} <- p = return $ Just (info, Nothing)
+    | VarPat {} <- p = return $ Just (info, Nothing)
+getPatternConstraint (p@BangPat {}, info) =
+    fallBack $ "Bang patterns should have been stripped of all supported patterns " ++ showSDocUnsafe (ppr p)
 getPatternConstraint (p, info) = 
     fallBack $ "Pat should have been tidied already or not implemented" ++ showSDocUnsafe (ppr p)
 
@@ -826,6 +857,7 @@ getGrp df (p, _e ) = patGroup df p
 
 patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
+--patGroup _df (VarPat {}) = VarGrp
 -- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
 patGroup df  (BangPat (L _loc p)) = patGroup df p
 patGroup _df (ConPatOut { pat_con = L _ con})
@@ -1572,6 +1604,13 @@ tidy_bang_pat v _ p@(TuplePat {})  = tidy1 v p
 tidy_bang_pat v _ p@(SumPat {})    = tidy1 v p
 tidy_bang_pat v _ p@(PArrPat {})   = tidy1 v p
 
+--TODO: Check
+--We keep bang patterns, however we desugar them to wildcards
+--if they are variables. Also properly hande located
+tidy_bang_pat v _ _p@(VarPat (L _ var))   = 
+    return (wrapBind var v, BangPat (mkGeneralLocated "somewhere3245" (WildPat (idType var))))
+
+
 -- Data/newtype constructors
 tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
                                , pat_args = args
@@ -1598,6 +1637,7 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 --  i.e.  !(~p) is not like ~p, or p!  (Trac #8952)
 --
 -- NB: SigPatIn, ConPatIn should not happen
+
 
 tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 
