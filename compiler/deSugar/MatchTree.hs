@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveGeneric, DeriveDataTypeable #-}
+{-# LANGUAGE StandaloneDeriving, FlexibleInstances, DeriveGeneric, DeriveDataTypeable, LambdaCase#-}
 {-# OPTIONS_GHC -fprof-auto #-}
 
 {-
@@ -259,6 +259,8 @@ match vars ty eqns = do
     --traceM "match:"
     --liftIO . putStrLn . showSDocUnsafe $ ppr $ eqns
     result <- matchWith complexHeuristic ty matrix (Map.empty)
+    --result <- matchWith leftToRight ty matrix (Map.empty)
+    
     return result
 
 
@@ -390,13 +392,11 @@ complexHeuristic df m
 
         --We sort on the result of heuristics hence (-max = best, +max = worst)
 
-        --The number of consecutive strict patterns
+        --The number of consecutive constructor patterns
         --is a good primary heuristic.
-        --TODO: Without working strict patterns into this it gives the same
-        --results as the strict set.
-        strictPrefixLength :: [Pat GhcTc] -> Int
-        strictPrefixLength pats = 
-            negate $ plength isStrict pats
+        conPrefixLength :: [Pat GhcTc] -> Int
+        conPrefixLength pats = 
+            negate $ plength isCon pats
 
         --The number of different constructors appearing in a column
         --is useful to reduce the size of the resulting tree.
@@ -436,10 +436,11 @@ complexHeuristic df m
         rankedColumns = sortOn fst (
             zipWith
             (\colPats i-> 
-                ([ --singleGrp colPats
-                -- , strictPrefixLength colPats
-                   conVariety colPats
-                 , conCount colPats]
+                ([ conPrefixLength colPats --length of constructor prefix (more is better)
+                 --, singleGrp colPats
+                 , conVariety colPats --Number of different constructors (less is better)
+                 , conCount colPats --Number of constructors in column (more is better)
+                 ] 
                 , i))
             patColumns [0..])
         choice :: Int
@@ -698,7 +699,7 @@ getPatternConstraint NPat {} occ =
     error "TODO"
 getPatternConstraint NPlusKPat {} occ = 
     error "Not implemented NPK"
-getPatternConstraint ConPatOut {} _ = error "ConPat not done" -}
+-}
 
 
 
@@ -756,7 +757,7 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        --traceM "matchWith:"
+        traceM "matchWith:"
         --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
@@ -793,17 +794,15 @@ matchWith heuristic ty m knowledge
                     let constrainedMatch = adjustMatchResultDs constraintWrapper expr :: MatchResult
 
                     return $ combineMatchResults constrainedMatch continuation
-                    --return continuation
+
                 | fromJust (columnCount m) == 0 -> do
                     let rhss = F.toList $ fmap snd m :: [(MatchResult, Constraints)]
                     let (results, constraints) = unzip rhss
                     
                     constraintWrappers <- mapM (resolveConstraints m ty knowledge) constraints  :: DsM [CoreExpr -> DsM CoreExpr]
                     let constrainedMatches = zipWith adjustMatchResultDs constraintWrappers results :: [MatchResult]
-                    --let constrainedMatches = zipWith adjustMatchResult (repeat id) results :: [MatchResult]
 
                     return $ foldr combineMatchResults alwaysFailMatchResult constrainedMatches
-                    --return $ foldr combineMatchResults alwaysFailMatchResult results
                     
 
             Just colIndex -> do
@@ -895,7 +894,7 @@ altToConAlt alt
     = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
 
 fallBack :: String -> DsM a
-fallBack m = --traceM m >> 
+fallBack m = traceM m >> 
     failDs
 
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
@@ -952,12 +951,17 @@ mkCase heuristic df ty m knowledge colIndex =
             Just (ConCond dcon (error "Evidence patterns should not be checked"))
         grpCond _ = error "Not implemented grpCond"
 
-        newEvidence :: PGrp -> DsM (Either [CondValue] CondValue)
+        newEvidence :: PGrp -> DsM (Maybe (Either [CondValue] CondValue))
         -- Returns evidence gained by selecting this branch/grp
-        newEvidence (VarGrp) = do
-            return (Left $ defaultExcludes)
+        newEvidence (VarGrp) = 
+            --If we have no constructor groups the result won't be a case
+            --but just a deletion of the row. Hence we don't evaluate hence
+            --no new knowledge
+            if null cgrps
+                then return Nothing
+                else return (Just . Left $ defaultExcludes)
         newEvidence grp =
-            return . Right . fromJust . grpCond $ grp
+            return $ Just . Right . fromJust . grpCond $ grp
 
         getGrpRows :: PGrp -> [Int]
         getGrpRows grp = 
@@ -983,7 +987,7 @@ mkCase heuristic df ty m knowledge colIndex =
         groupExpr :: PGrp -> DsM MatchResult
         groupExpr grp = do
             evidence <- newEvidence grp
-            let newKnowledge = (Map.insert occ evidence knowledge)
+            let newKnowledge = maybe knowledge (\evid -> Map.insert occ evid knowledge) evidence
             newMatrix <- getNewMatrix grp 
             matchWith heuristic ty (newMatrix) newKnowledge :: DsM MatchResult
 
@@ -1077,7 +1081,7 @@ mkCase heuristic df ty m knowledge colIndex =
                 conGroupExpr :: PGrp -> [Id] -> DsM MatchResult
                 conGroupExpr grp vars = do
                     evidence <- newEvidence grp
-                    let newKnowledge = (Map.insert occ evidence knowledge)
+                    let newKnowledge = maybe knowledge (\evid -> Map.insert occ evid knowledge) evidence
                     newMatrix <- getNewConMatrix grp vars  
                     matchWith heuristic ty (newMatrix) newKnowledge
 
@@ -1312,7 +1316,10 @@ resolveConstraints :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> C
 {- Produces a wrapper which guarantees evaluation of arguments according to Augustsons algorithm.
  a match result to include required evaluation of occurences according to the constraints. -}
 
-resolveConstraints m ty knowledge constraints = do
+resolveConstraints m ty knowledge constraints = trace "resolve" $ do
+    dsPrint $ text "knowledge" <+> ppr knowledge
+    dsPrint $ text "knowledge" <+> ppr constraints
+    
     -- TODO
     {-
     * Remove satisfied constraints
@@ -1325,9 +1332,10 @@ resolveConstraints m ty knowledge constraints = do
                 map (truncateConstraint knowledge) $ constraints :: Constraints
 
     if null simplifiedConstraints
-        then --trace "BaseCase" $ 
+        then trace "BaseCase" $ 
             return $ \e -> return e
-        else do--trace "solveCase" 
+        else do 
+            traceM "solveCase" 
             (mkConstraintCase m ty knowledge simplifiedConstraints)
 
 dsPrint :: SDoc -> DsM ()
@@ -1338,7 +1346,7 @@ mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Con
 Resolve at least one constraint by introducing a additional case statement
 There is some bookkeeping not done here which needs to be fixed.
 -}
-mkConstraintCase m ty knowledge constraints =
+mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $ 
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
         --ty = varType occ :: Kind
@@ -1358,6 +1366,7 @@ mkConstraintCase m ty knowledge constraints =
         getAltResult :: CondValue -> DsM MatchResult
         getAltResult condVal = do
             wrapper <- (resolveConstraints m ty (Map.insert occ (newEvidence condVal) knowledge) constraints)
+            error "foo"
             return $ adjustMatchResultDs wrapper $ MatchResult CanFail $ \expr -> return expr
 
         defaultEvidence = Left occVals
@@ -1403,17 +1412,24 @@ mkConstraintCase m ty knowledge constraints =
         --dsPrint $ text "knowledge" <+> ppr knowledge
         --dsPrint $ text "constraints" <+> ppr constraints
         df <- getDynFlags
-        defBranch <- Just <$> defaultResult -- :: DsM (Maybe MatchResult)
+        defBranch <- defaultResult -- :: DsM (Maybe MatchResult)
         alts <- mapM mkConstraintAlt occVals
-        
-        return $ if litConstraint 
-            then 
-                let MatchResult _ f = mkCoPrimCaseMatchResult occ ty (map altToLitPair alts) defBranch
-                in f
 
-            else 
-                let MatchResult _ f = mkCoAlgCaseMatchResult df occ ty (map altToConAlt alts) defBranch
-                in f
+
+        let result
+                | null alts
+                , MatchResult _ f <- defBranch = return f
+                | litConstraint =
+                    let MatchResult _ f = mkCoPrimCaseMatchResult occ ty (map altToLitPair alts) $ Just defBranch
+                    in return f
+                | otherwise =
+                    let MatchResult _ f = mkCoAlgCaseMatchResult df occ ty (map altToConAlt alts) $ Just defBranch
+                    in return f
+        
+        result
+
+        
+
             
     
 
