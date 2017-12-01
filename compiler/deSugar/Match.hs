@@ -58,6 +58,7 @@ import Data.Either (isRight)
 import qualified MatchTree
 import Util
 import Debug.Trace
+import HsDumpAst
 import GHC.Stack
 
 {-

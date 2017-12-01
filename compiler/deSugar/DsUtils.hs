@@ -193,10 +193,10 @@ matchCanFail :: MatchResult -> Bool
 matchCanFail (MatchResult CanFail _)  = True
 matchCanFail (MatchResult CantFail _) = False
 
-alwaysFailMatchResult :: MatchResult
+alwaysFailMatchResult :: HasCallStack => MatchResult
 alwaysFailMatchResult = MatchResult CanFail (\fail -> return fail)
 
-cantFailMatchResult :: CoreExpr -> MatchResult
+cantFailMatchResult :: HasCallStack => CoreExpr -> MatchResult
 cantFailMatchResult expr = MatchResult CantFail (\_ -> return expr)
 
 extractMatchResult :: HasCallStack => MatchResult -> CoreExpr -> DsM CoreExpr
@@ -262,15 +262,16 @@ mkEvalMatchResult :: Id -> Type -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
   = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)])
 
-mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
+mkGuardedMatchResult :: HasCallStack => CoreExpr -> MatchResult -> MatchResult
 mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
                                      return (mkIfThenElse pred_expr body fail))
 
-withDefault :: MatchResult -> Maybe MatchResult -> MatchResult
+withDefault :: HasCallStack => MatchResult -> Maybe MatchResult -> MatchResult
 withDefault mr def_branch = combineMatchResults mr (fromMaybe alwaysFailMatchResult def_branch)
 
-mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
+mkCoPrimCaseMatchResult :: HasCallStack 
+                        => Id                        -- Scrutinee
                         -> Type                      -- Type of the case
                         -> [(Literal, MatchResult)]  -- Alternatives
                         -> Maybe MatchResult         -- Default Branch
@@ -288,7 +289,7 @@ mkCoPrimCaseMatchResult var ty match_alts def_branch
          do body <- body_fn fail
             return (LitAlt lit, [], body)
 
-fmapAltPat :: (a -> b) -> CaseAlt a -> CaseAlt b
+fmapAltPat :: HasCallStack => (a -> b) -> CaseAlt a -> CaseAlt b
 fmapAltPat f alt@MkCaseAlt {alt_pat = x} = alt {alt_pat = (f x) }
 
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
@@ -297,7 +298,8 @@ data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_result :: MatchResult }
 
 mkCoAlgCaseMatchResult
-  :: DynFlags
+  :: HasCallStack
+  => DynFlags
   -> Id                 -- Scrutinee
   -> Type               -- Type of exp
   -> [CaseAlt DataCon]  -- Alternatives (bndrs *include* tyvars, dicts)
@@ -384,7 +386,7 @@ mkPatSynCase var ty alt fail = do
     ensure_unstrict cont | needs_void_lam = Lam voidArgId cont
                          | otherwise      = cont
 
-mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
+mkDataConCase :: HasCallStack => Id -> Type -> [CaseAlt DataCon] -> MatchResult
 mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
 mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
   where
