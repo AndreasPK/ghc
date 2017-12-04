@@ -757,7 +757,7 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        traceM "matchWith:"
+        --traceM "matchWith:"
         --liftIO $ putStrLn . showSDocUnsafe $ text "Matrix" <+> (ppr $ fmap fst m)
         --liftIO $ putStrLn . showSDocUnsafe $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
@@ -894,7 +894,7 @@ altToConAlt alt
     = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
 
 fallBack :: String -> DsM a
-fallBack m = traceM m >> 
+fallBack m = --traceM m >> 
     failDs
 
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
@@ -1282,7 +1282,7 @@ unpackCon (WildPat ty, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
     let entries = zipWith3 mkEntry wildcards vars [0..]
     return (idDsWrapper, entries)
 
-unpackCon (conPat,     PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) vars =
     let arg_pats 
             = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
         normalized_pats --Regular patterns + Wildcards for missing ones
@@ -1295,6 +1295,10 @@ unpackCon (conPat,     PatInfo {patOcc = patOcc, patCol = patCol}) vars =
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 } = conPat
+unpackCon (BangPat (L _ p), info) vars = 
+    unpackCon (p, info) vars
+unpackCon (pat, info) _ =
+    error $ "unpackCon failed on:" ++ showSDocUnsafe (ppr pat)
 
 occColIndex :: HasCallStack => forall rhs. HasCallStack => PatternMatrix Occurrence rhs -> Occurrence -> Maybe Int
 occColIndex m occ 
@@ -1316,9 +1320,10 @@ resolveConstraints :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> C
 {- Produces a wrapper which guarantees evaluation of arguments according to Augustsons algorithm.
  a match result to include required evaluation of occurences according to the constraints. -}
 
-resolveConstraints m ty knowledge constraints = trace "resolve" $ do
-    dsPrint $ text "knowledge" <+> ppr knowledge
-    dsPrint $ text "knowledge" <+> ppr constraints
+resolveConstraints m ty knowledge constraints = do
+    --traceM "resolve" 
+    --dsPrint $ text "knowledge" <+> ppr knowledge
+    --dsPrint $ text "knowledge" <+> ppr constraints
     
     -- TODO
     {-
@@ -1332,10 +1337,10 @@ resolveConstraints m ty knowledge constraints = trace "resolve" $ do
                 map (truncateConstraint knowledge) $ constraints :: Constraints
 
     if null simplifiedConstraints
-        then trace "BaseCase" $ 
+        then --trace "BaseCase" $ 
             return $ \e -> return e
         else do 
-            traceM "solveCase" 
+            --traceM "solveCase" 
             (mkConstraintCase m ty knowledge simplifiedConstraints)
 
 dsPrint :: SDoc -> DsM ()
@@ -1346,7 +1351,7 @@ mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Con
 Resolve at least one constraint by introducing a additional case statement
 There is some bookkeeping not done here which needs to be fixed.
 -}
-mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $ 
+mkConstraintCase m ty knowledge constraints = --trace "mkConstraintCase" $ 
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
         occType = varType occ
@@ -1367,7 +1372,6 @@ mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $
         getAltResult :: CondValue -> DsM MatchResult
         getAltResult condVal = do
             wrapper <- (resolveConstraints m ty (Map.insert occ (newEvidence condVal) knowledge) constraints)
-            error "foo"
             return $ adjustMatchResultDs wrapper $ MatchResult CanFail $ \expr -> return expr
 
         defaultEvidence :: (Either [CondValue] CondValue)
