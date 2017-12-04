@@ -1349,6 +1349,7 @@ There is some bookkeeping not done here which needs to be fixed.
 mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $ 
     let cond@(info,conVal) = head . head $ constraints :: Condition
         occ = patOcc info :: Occurrence
+        occType = varType occ
         --ty = varType occ :: Kind
         occValues :: [Maybe CondValue]
         occValues = concatMap 
@@ -1369,6 +1370,7 @@ mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $
             error "foo"
             return $ adjustMatchResultDs wrapper $ MatchResult CanFail $ \expr -> return expr
 
+        defaultEvidence :: (Either [CondValue] CondValue)
         defaultEvidence = Left occVals
 
         defaultResult :: DsM MatchResult        
@@ -1405,7 +1407,10 @@ mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $
                 { alt_pat = DataAlt dcon
                 , alt_bndrs = tvs1 ++ dicts1 ++ arg_vars
                 , alt_wrapper = WpHole
-                , alt_result = adjustMatchResult wrapper mr } 
+                , alt_result = adjustMatchResult wrapper mr }
+        
+        mkEvalCase expr = 
+            Case (varToCoreExpr occ) (mkWildValBinder occType) ty [(DEFAULT, [], expr)]
     
     in do 
         --traceM ("mkConstraint")
@@ -1414,21 +1419,16 @@ mkConstraintCase m ty knowledge constraints = trace "mkConstraintCase" $
         df <- getDynFlags
         defBranch <- defaultResult -- :: DsM (Maybe MatchResult)
         alts <- mapM mkConstraintAlt occVals
-
-
+        
         let result
-                | null alts
-                , MatchResult _ f <- defBranch = return f
+                | null alts, MatchResult _ f <- adjustMatchResult mkEvalCase defBranch = return f
                 | litConstraint =
                     let MatchResult _ f = mkCoPrimCaseMatchResult occ ty (map altToLitPair alts) $ Just defBranch
                     in return f
                 | otherwise =
                     let MatchResult _ f = mkCoAlgCaseMatchResult df occ ty (map altToConAlt alts) $ Just defBranch
                     in return f
-        
         result
-
-        
 
             
     
