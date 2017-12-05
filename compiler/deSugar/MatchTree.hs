@@ -1052,6 +1052,8 @@ mkCase heuristic df ty m knowledge colIndex =
 
 
                 getNewConMatrix :: PGrp -> [Id] -> DsM CPM
+                -- Take a pattern group and the list of id's resulting from 
+                -- Constructor alternative
                 getNewConMatrix grp@ConGrp {} vars = do
                     let conRows = getGrpRows grp :: [Int]
                     let varRows = getGrpRows VarGrp
@@ -1060,14 +1062,20 @@ mkCase heuristic df ty m knowledge colIndex =
                     let colEntries = getCol filteredRows colIndex :: PatternColumn PatInfo
                     let withoutCol = deleteCol filteredRows colIndex :: CPM
 
-                    --At this point we reorder the argument id's to match the order of occurence in the PATTERN
+                    --Determine strictness of the Constructor arguments
+                    let bangs = dataConImplBangs con :: [HsImplBang]
 
-                    let adjusted_vars = if isRecord then matchFields vars conFields paddedLabels else vars 
+                    let arg_info = zip vars bangs
+
+                    --At this point we reorder the given ids to match the order of the written record.
+                    let adjusted_arg_info = unzip $ if isRecord then matchFields arg_info conFields paddedLabels else arg_info
+
+                     
 
                     --Unpack the constructors
                     (wrappers, entries) <- unzip <$>
                                             (mapM 
-                                                (\e -> unpackCon e adjusted_vars)
+                                                (\e -> unpackCon e adjusted_arg_info)
                                                 (F.toList colEntries)) :: DsM ([DsWrapper], [[Entry PatInfo]])
                     let wrappedMatrix = addRowWrappers withoutCol wrappers
                     --Insert the unpacked entries.
@@ -1259,34 +1267,45 @@ matchFields args con_fields pat_fields
                                         (rpat)
 matchFields _ _ [] = panic "matchTree/matchFields []"
 
-unpackCon :: Entry PatInfo -> [Id] -> DsM (DsWrapper, [Entry PatInfo])
+
+
+
+unpackCon :: Entry PatInfo -> ([Id],[HsImplBang]) -> DsM (DsWrapper, [Entry PatInfo])
 -- | Pick apart a constructor returning result suitable to be spliced into
 -- the match matrix
 {-
 If we deal with a record constructor we might need to pad the patterns by inserting wildcards
 
-We take the vars in the oder defined by the constructor (data T = T a b -> [a,b])
-This is true even if it's a record pattern.
+We take the vars in the oder defined by the Pattern.
 
-For this reason we have to reorder the given id's
-to match the order of the fields in the pattern.
-
-Then we pad the result with wildcard patterns
-for unmentioned records.
+In the case of records we might have fewer patterns than the constructor has arguments.
+In that case we fill these slots with wildcard patterns.
 -}
-unpackCon (WildPat ty, PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+unpackCon (WildPat ty, PatInfo {patOcc = patOcc, patCol = patCol}) (vars, bangs) =
     let wildcards --Generate wildcard patterns for all ids
-            = zipWith (\t p -> p t) (map idType vars) (repeat WildPat)
+            = zipWith3 (\t bang pat -> 
+                            if isBanged bang 
+                                then unLoc . addBang $ (L (error "Not looked at") (pat t))
+                                else (pat t))
+                (map idType vars) 
+                bangs 
+                (repeat WildPat)
     in do
     let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
     let entries = zipWith3 mkEntry wildcards vars [0..]
     return (idDsWrapper, entries)
 
-unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) vars =
+unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) (vars, bangs) =
     let arg_pats 
             = map unLoc $ hsConPatArgs args1 :: [Pat GhcTc]
         normalized_pats --Regular patterns + Wildcards for missing ones
-            = zipWith (\t p -> p t) (map idType vars) (map const arg_pats ++ repeat WildPat) :: [Pat GhcTc]
+            = zipWith3 (\t bang pat -> 
+                            if isBanged bang 
+                                then unLoc . addBang $ (L (error "Not looked at") (pat t))
+                                else (pat t))
+                        (map idType vars)
+                        bangs
+                        (map const arg_pats ++ repeat WildPat) :: [Pat GhcTc]
     in do
     (wrappers, desugaredPats) <- unzip <$> zipWithM tidy1 vars normalized_pats
     let mkEntry p occ colOffset = (p, PatInfo {patOcc = occ, patCol = patCol ++ [colOffset]}) 
@@ -1295,8 +1314,8 @@ unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) 
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 } = conPat
-unpackCon (BangPat (L _ p), info) vars = 
-    unpackCon (p, info) vars
+unpackCon (BangPat (L _ p), info) (vars, bangs) = 
+    unpackCon (p, info) (vars, bangs)
 unpackCon (pat, info) _ =
     error $ "unpackCon failed on:" ++ showSDocUnsafe (ppr pat)
 
