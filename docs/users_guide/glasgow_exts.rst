@@ -13161,7 +13161,7 @@ optionally had by adding ``!`` in front of a variable.
 
    Turning patterns into irrefutable ones requires ``~(~p)`` or ``(~ ~p)`` when ``Strict`` is enabled.
 
-
+   
 
 -  **Let/where bindings**
 
