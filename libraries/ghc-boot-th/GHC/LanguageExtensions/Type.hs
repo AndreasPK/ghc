@@ -128,6 +128,7 @@ data Extension
    | NamedWildCards
    | StaticPointers
    | TypeApplications
+   | TreeMatching
    | Strict
    | StrictData
    | MonadFailDesugaring

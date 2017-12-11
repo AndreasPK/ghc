@@ -3969,6 +3969,7 @@ xFlagsDeps = [
   flagSpec "StaticPointers"                   LangExt.StaticPointers,
   flagSpec "Strict"                           LangExt.Strict,
   flagSpec "StrictData"                       LangExt.StrictData,
+  flagSpec "TreeMatching"                     LangExt.TreeMatching,
   flagSpec' "TemplateHaskell"                 LangExt.TemplateHaskell
                                               checkTemplateHaskellOk,
   flagSpec "TemplateHaskellQuotes"            LangExt.TemplateHaskellQuotes,
