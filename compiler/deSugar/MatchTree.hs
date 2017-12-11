@@ -252,7 +252,7 @@ match :: HasCallStack => [MatchId]        -- Variables rep\'ing the exprs we\'re
 match vars ty eqns = do
     --dsPrint $ text "matchType:" O.<> ppr ty
     df <- getDynFlags
-    useTreeMatching <- goptM Opt_TreeMatching
+    let useTreeMatching = xopt LangExt.TreeMatching df || gopt Opt_TreeMatching df
     unless useTreeMatching failDs
     --dsPrint $ text "Tree:match" <+> ppr eqns
     matrix <- (toPatternMatrix vars eqns)
