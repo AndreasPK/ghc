@@ -79,15 +79,19 @@ For numeric literals, we try to detect there use at a standard type
 See also below where we look for @DictApps@ for \tr{plusInt}, etc.
 -}
 
-dsLit :: HsLit GhcRn -> DsM CoreExpr
+
+
+--dsLit :: HsLit GhcRn -> DsM CoreExpr
 dsLit (HsStringPrim _ s) = return (Lit (MachStr s))
-dsLit (HsCharPrim   _ c) = return (Lit (MachChar c))
-dsLit (HsIntPrim    _ i) = return (Lit (MachInt i))
-dsLit (HsWordPrim   _ w) = return (Lit (MachWord w))
-dsLit (HsInt64Prim  _ i) = return (Lit (MachInt64 i))
-dsLit (HsWord64Prim _ w) = return (Lit (MachWord64 w))
-dsLit (HsFloatPrim  _ f) = return (Lit (MachFloat (fl_value f)))
-dsLit (HsDoublePrim _ d) = return (Lit (MachDouble (fl_value d)))
+dsLit (HsCharPrim   _ c) = return (Lit (mkMachChar c))
+dsLit (HsIntPrim    _ i) = do df <- getDynFlags
+                              return (Lit (mkMachIntWrap df i))
+dsLit (HsWordPrim   _ w) = do df <- getDynFlags
+                              return (Lit (mkMachWordWrap df w))
+dsLit (HsInt64Prim  _ i) = return (Lit (mkMachInt64Wrap i))
+dsLit (HsWord64Prim _ w) = return (Lit (mkMachWord64Wrap w))
+dsLit (HsFloatPrim  f)   = return (Lit (mkMachFloat (fl_value f)))
+dsLit (HsDoublePrim d)   = return (Lit (mkMachDouble (fl_value d)))
 dsLit (HsChar _ c)       = return (mkCharExpr c)
 dsLit (HsString _ str)   = mkStringExprFS str
 dsLit (HsInteger _ i _)  = mkIntegerExpr i

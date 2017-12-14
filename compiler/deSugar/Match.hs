@@ -44,7 +44,7 @@ import TyCon( isNewTyCon )
 import TysWiredIn
 import SrcLoc
 import Maybes
-import Util
+import Util hiding (HasCallStack)
 import Name
 import Outputable
 import BasicTypes ( isGenerated, il_value, fl_value )
@@ -58,10 +58,11 @@ import Data.List (groupBy)
 
 import Data.Either (isRight)
 import qualified MatchTree
-import Util
 import Debug.Trace
 import HsDumpAst
 import GHC.Stack
+
+type GhcTc = Id
 
 {-
 ************************************************************************
