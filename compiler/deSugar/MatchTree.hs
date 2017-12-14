@@ -32,7 +32,7 @@ import {-#SOURCE#-} DsExpr (dsLExpr, dsSyntaxExpr)
 
 #include "HsVersions.h"
 
-import GhcPrelude
+--import GhcPrelude
 import PrelNames
 
 --import DsExpr
@@ -69,7 +69,7 @@ import Maybes
 import Util
 import Name
 import Outputable
-import BasicTypes ( isGenerated, fl_value, FractionalLit(..), il_value)
+import BasicTypes ( isGenerated, fl_value, FractionalLit(..))
 import FastString
 import Unique
 import UniqDFM
@@ -112,6 +112,8 @@ import RdrName
 type MatchId = Id   -- See Note [Match Ids]
 
 type Occurrence = MatchId
+
+type GhcTc = Id
 
 --Also defined in MatchCon
 type ConArgPats = HsConDetails (LPat GhcTc) (HsRecFields GhcTc (LPat GhcTc))
@@ -464,7 +466,7 @@ isStrict LitPat {} = True
 isStrict NPat {} = True -- 
 isStrict NPlusKPat {} = True -- ?
 isStrict BangPat {} = True
-isStrict p = error $ "Should have been tidied already:" ++ (showSDocUnsafe (ppr p)) ++ " " ++ showSDocUnsafe (showAstData BlankSrcSpan p)
+isStrict p = error $ "Should have been tidied already:" ++ (showSDocUnsafe (ppr p)) ++ " " ++ (showAstData BlankSrcSpan p)
 
 
 
@@ -891,7 +893,7 @@ altToConAlt :: CaseAlt AltCon -> CaseAlt DataCon
 altToConAlt alt@MkCaseAlt {alt_pat = DataAlt con}
     = alt {alt_pat = con}
 altToConAlt alt  
-    = pprPanic "Alt not of constructor type" $ showAstData NoBlankSrcSpan $ alt_pat alt
+    = pprPanic "Alt not of constructor type" $ ppr $ showAstData NoBlankSrcSpan $ alt_pat alt
 
 fallBack :: String -> DsM a
 fallBack m = --traceM m >> 

@@ -6,7 +6,7 @@ import CoreSyn  ( CoreExpr )
 import HsSyn    ( LPat, HsMatchContext, MatchGroup, LHsExpr )
 import HsPat    ( Pat )
 import Name     ( Name )
-import HsExtension ( GhcTc )
+-- import HsExtension ( Id )
 import Util (HasCallStack)
 
 match   :: HasCallStack => [Id]
@@ -17,8 +17,8 @@ match   :: HasCallStack => [Id]
 matchWrapper
         :: HasCallStack
         => HsMatchContext Name
-        -> Maybe (LHsExpr GhcTc)
-        -> MatchGroup GhcTc (LHsExpr GhcTc)
+        -> Maybe (LHsExpr Id)
+        -> MatchGroup Id (LHsExpr Id)
         -> DsM ([Id], CoreExpr)
 
 matchSimply
