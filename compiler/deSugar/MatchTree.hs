@@ -401,11 +401,10 @@ complexHeuristic df m
     | rowCount' == 1 && colCount' > 0               = --trace "c4" $ 
         Just 0
     | all (not . isStrict)    --No column has a strict constructor
-          (fmap (fst . flip Seq.index 0. fst) m)    = --trace "c5" $ 
+          (fmap (fst . flip Seq.index 0 . fst) m)    = --trace "c5" $ 
             Just 0
     | null ss                                       = --trace "c6" $ 
         Nothing
-    --First row has no strict entries:
     | otherwise                                     = --trace "c7" $ 
         Just choice
     where
@@ -428,7 +427,7 @@ complexHeuristic df m
         --Generally prefer columns with many different constructors.
         conVariety :: [Pat GhcTc] -> Int
         conVariety pats = 
-            length $ Set.fromList $ map (patGroup df) pats
+            length $ Set.filter (/= VarGrp) $ Set.fromList $ map (patGroup df) pats
 
         --The constructor count can help to pick columns with many (non-consecutive)
         --patterns first.
@@ -439,6 +438,7 @@ complexHeuristic df m
         --TODO: The number of strict entries might also be a interesting heuristic
         -- although I expect it to cover mostly the same cases as conCount
 
+        isCon :: Pat GhcTc -> Bool
         isCon ConPatOut {} = True
         isCon LitPat {} = True
         isCon _ = False
@@ -477,7 +477,7 @@ plength :: (a -> Bool) -> [a] -> Int
 plength f  [] = 0
 plength f (x:xs)
     | f x = 1 + plength f xs
-    | otherwise   = plength f xs
+    | otherwise   = 0
 
 
 
@@ -813,9 +813,9 @@ matchWith heuristic ty m knowledge
         --traceM "nullMatrix"
         return $ alwaysFailMatchResult
     | otherwise = do 
-        dsPrint $ text "matchWith:"
-        dsPrint $ text "Matrix" <+> (ppr $ fmap fst m)
-        dsPrint $ text "Constraints" <+> (ppr $ fmap (snd . snd) m)
+        --dsPrint $ text "matchWith:"
+        --dsPrint $ text "Matrix" <+> (ppr $ fmap fst m)
+        --dsPrint $ text "Constraints" <+> (ppr $ fmap (snd . snd) m)
         --dsPrint $ showAstData BlankSrcSpan $ fmap fst m
         --liftIO $ putStrLn . showSDocUnsafe $ text "Type:" O.<> ppr ty
         --traceM "Match matrix"
@@ -823,7 +823,7 @@ matchWith heuristic ty m knowledge
         --If we match on something like f x = <canFailRhs> we can end up with a match on an empty matrix
         df <- getDynFlags
         let matchCol = heuristic df m :: Maybe Int 
-        dsPrint $ text "Matchcol:" <+> ppr matchCol
+        --dsPrint $ text "Matchcol:" <+> ppr matchCol
         case matchCol of
         {-
 
@@ -1453,7 +1453,9 @@ resolveConstraints m ty knowledge constraints = do
             (mkConstraintCase m ty knowledge simplifiedConstraints)
 
 dsPrint :: SDoc -> DsM ()
-dsPrint = liftIO . putStrLn . showSDocUnsafe
+dsPrint doc = 
+    --liftIO . putStrLn . showSDocUnsafe >>
+    return ()
 
 mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM (CoreExpr -> DsM CoreExpr)
 {-
