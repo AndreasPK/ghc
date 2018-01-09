@@ -251,6 +251,56 @@ data SwitchPlan
 --     findSingleValues
 --  5. The thus collected pieces are assembled to a balanced binary tree.
 
+{-
+  Note [Two alts + default]
+  ~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Discussion and a bit more info at #14644
+
+When dealing with a switch of the form:
+switch(e) {
+  case 1: goto l1;
+  case 3000: goto l2;
+  default: goto ldef;
+}
+
+If we treat it as a sparse jump table we would generate:
+
+if (e > 3000) //Check if value is outside of the jump table.
+    goto ldef;
+else {
+    if (e < 3000) { //Compare to upper value
+        if(e != 1) //Compare to remaining value
+            goto ldef;
+          else
+            goto l2;
+    }
+    else
+        goto l1;
+}
+
+Instead we special case this to :
+
+if (e==1) goto l1;
+else if (e==3000) goto l2;
+else goto l3;
+
+This means we have:
+* Less comparisons for: 1,<3000
+* Unchanged for 3000
+* One more for >3000
+
+Since we remove one comparison the code gets smaller
+and is better when chache size matters.
+It seems that this outweighs the cost even when all values are >3000.
+
+Besides the obvious advantage for the other cases it also helps if it's
+not predictable if e>3000.
+If we have a large range and most values result in the default both jumps
+can be predicted making them cheap even when we can't predict if e>3000.
+
+-}
+
 
 -- | Does the target support switch out of the box? Then leave this to the
 -- target!
@@ -272,6 +322,7 @@ createSwitchPlan (SwitchTargets _signed (lo,hi) Nothing m)
     --Checking If |range| = 2 is enough if we have two unique literals
     , hi - lo == 1
     = IfEqual x1 l1 (Unconditionally l2)
+-- See Note [Two alts + default]
 createSwitchPlan (SwitchTargets _signed _range (Just defLabel) m)
     | [(x1, l1), (x2,l2)] <- M.toAscList m
     = IfEqual x1 l1 (IfEqual x2 l2 (Unconditionally defLabel))
