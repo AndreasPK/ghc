@@ -299,6 +299,12 @@ not predictable if e>3000.
 If we have a large range and most values result in the default both jumps
 can be predicted making them cheap even when we can't predict if e>3000.
 
+This makes running a match in an inner loop cheaper by 10-20% depending on
+the data.
+In nofib this improves wheel-sieve1 by 4-9% depending on problem
+size.
+
+
 -}
 
 
