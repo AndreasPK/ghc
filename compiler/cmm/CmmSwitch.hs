@@ -290,21 +290,27 @@ This means we have:
 * Unchanged for 3000
 * One more for >3000
 
-Since we remove one comparison the code gets smaller
-and is better when chache size matters.
-It seems that this outweighs the cost even when all values are >3000.
+This improves code in a few ways:
+* One comparison less means smaller code which helps with cache.
+* It exchanges a taken jump for two jumps no taken in the >range case.
+  Jumps not taken are cheaper (See Agner guides) making this about as fast.
+* For all other cases the first range check is removed making it faster.
 
-Besides the obvious advantage for the other cases it also helps if it's
-not predictable if e>3000.
-If we have a large range and most values result in the default both jumps
-can be predicted making them cheap even when we can't predict if e>3000.
+The end result is that the change is not measurably slower for the case
+>3000 and faster for the other cases.
 
-This makes running a match in an inner loop cheaper by 10-20% depending on
-the data.
+This makes running this kind of match in an inner loop cheaper by 10-20%
+depending on the data.
 In nofib this improves wheel-sieve1 by 4-9% depending on problem
 size.
 
-
+We could also add a second conditional jump after the comparison to
+keep the range check like this:
+    cmp 3000, rArgument
+    jg <default>
+    je <branch 2>
+While this is fairly cheap it made no big difference for the >3000 case
+and slowed down all other cases making it not worthwhile.
 -}
 
 
