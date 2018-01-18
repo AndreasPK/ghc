@@ -500,6 +500,10 @@ data GeneralFlag
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
    | Opt_NumConstantFolding
+   | Opt_UnlikelyBottoms    -- ^ Assume bottoming alternatives are not taken.
+   | Opt_LikelyRecursion    -- ^ Assume branches which represent an recursive
+                            --   case are likely to be taken.
+   | Opt_WeightBalanceAlts  -- ^ Split trees by branch weight where applicable.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
@@ -4083,6 +4087,7 @@ fFlagsDeps = [
   flagSpec "late-dmd-anal"                    Opt_LateDmdAnal,
   flagSpec "late-specialise"                  Opt_LateSpecialise,
   flagSpec "liberate-case"                    Opt_LiberateCase,
+  flagSpec "likely-recursion"                 Opt_LikelyRecursion,
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
   flagSpec "loopification"                    Opt_Loopification,
@@ -4136,7 +4141,9 @@ fFlagsDeps = [
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
-  flagSpec "keep-cafs"                        Opt_KeepCAFs
+  flagSpec "keep-cafs"                        Opt_KeepCAFs,
+  flagSpec "unlikely-bottoms"                 Opt_UnlikelyBottoms,
+  flagSpec "weight-balance-alts"              Opt_WeightBalanceAlts
   ]
   ++ fHoleFlags
 
@@ -4591,6 +4598,10 @@ optLevelFlags -- see Note [Documenting optimisation flags]
 
     , ([2],     Opt_LiberateCase)
     , ([2],     Opt_SpecConstr)
+    , ([1,2],   Opt_UnlikelyBottoms)
+    , ([2],     Opt_LikelyRecursion)
+    , ([1,2],   Opt_WeightBalanceAlts)
+
 --  , ([2],     Opt_RegsGraph)
 --   RegsGraph suffers performance regression. See #7679
 --  , ([2],     Opt_StaticArgumentTransformation)

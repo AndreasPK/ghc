@@ -74,6 +74,7 @@ seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
 seqTickish SourceNote{} = ()
+seqTickish (WeightHint w) = w `seq` ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b | isTyVar b = seqType (tyVarKind b)

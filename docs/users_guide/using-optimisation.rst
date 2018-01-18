@@ -721,6 +721,37 @@ by saying ``-fno-wombat``.
     a case expression, which is good for performance, but bad if you are
     using ``seq`` on partial applications.
 
+.. ghc-flag:: -funlikely-bottoms
+    :shortdesc: Marks bottom expressions as unlikely in the backend.
+        Implied by :ghc-flag:`-O`.
+    :type: dynamic
+    :reverse: -fno-unlikely-bottoms
+    :category:
+
+    :default: off
+
+    This information is used by some backends to generate faster code by
+    taking the hot path into account.
+
+    It recognizes functions like `error`, `undefined` and some functions
+    which are guaranteed to raise an exception. This includes the generated
+    failure branch on incomplete pattern matches.
+
+.. ghc-flag:: -flikely-recursion
+    :shortdesc: Tries to mark recursive case alternatives as more likely
+    to be taken which can result in better code.
+        Implied by :ghc-flag:`-O2`.
+    :type: dynamic
+    :reverse: -fno-likely-recursion
+    :category:
+
+    :default: off
+
+    For code like `f x = if .. then x else f (... x ... )` we try to detect
+    that we will more often then not end up going into the else branch.
+
+    This leads to better code layout in some cases.
+
 .. ghc-flag:: -fregs-graph
     :shortdesc: Use the graph colouring register allocator for register
         allocation in the native code generator. Implied by :ghc-flag:`-O2`.

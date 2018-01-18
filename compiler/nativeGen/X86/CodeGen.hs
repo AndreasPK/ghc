@@ -2996,8 +2996,10 @@ genSwitch dflags expr targets
                  ]
         return code
   where
-    (offset, blockIds) = switchTargetsToTable targets
-    ids = map (fmap DestBlockId) blockIds
+    (offset, lblInfos) = switchTargetsToTable targets
+    -- lblInfos contains branch weights too,
+    -- but for the jump table we use only the labels.
+    ids = map (fmap (DestBlockId . liLbl)) lblInfos
 
 generateJumpTableForInstr :: DynFlags -> Instr -> Maybe (NatCmmDecl (Alignment, CmmStatics) Instr)
 generateJumpTableForInstr dflags (JMP_TBL _ ids section lbl)

@@ -59,6 +59,7 @@ module StgSyn (
 
 import GhcPrelude
 
+import BasicTypes  (BranchWeight)
 import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
@@ -545,7 +546,7 @@ rhsHasCafRefs (StgRhsCon _ _ args)
   = any stgArgHasCafRefs args
 
 altHasCafRefs :: GenStgAlt pass -> Bool
-altHasCafRefs (_, _, rhs) = exprHasCafRefs rhs
+altHasCafRefs (_, _, rhs, _) = exprHasCafRefs rhs
 
 stgArgHasCafRefs :: StgArg -> Bool
 stgArgHasCafRefs (StgVarArg id)
@@ -582,7 +583,9 @@ rather than from the scrutinee type.
 type GenStgAlt pass
   = (AltCon,          -- alts: data constructor,
      [BinderP pass],  -- constructor's parameters,
-     GenStgExpr pass) -- ...right-hand side.
+     GenStgExpr pass, -- ...right-hand side.
+     BranchWeight)    -- relative chance to take this alt, see
+                      -- Note [Branch weights] in BasicTypes
 
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
@@ -834,8 +837,9 @@ pprStgExpr (StgCase expr bndr alt_type alts)
            char '}']
 
 pprStgAlt :: OutputablePass pass => GenStgAlt pass -> SDoc
-pprStgAlt (con, params, expr)
-  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), text "->"])
+pprStgAlt (con, params, expr, f)
+  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params),
+                parens (text "likely:" <> ppr f), text "->"])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc

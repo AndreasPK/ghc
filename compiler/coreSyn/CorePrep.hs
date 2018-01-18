@@ -65,6 +65,8 @@ import Control.Monad
 import CostCentre       ( CostCentre, ccFromThisModule )
 import qualified Data.Set as S
 
+import HotCode
+
 {-
 -- ---------------------------------------------------------------------------
 -- Note [CorePrep Overview]
@@ -178,41 +180,57 @@ type CpeRhs  = CoreExpr    -- Non-terminal 'rhs'
 
 corePrepPgm :: HscEnv -> Module -> ModLocation -> CoreProgram -> [TyCon]
             -> IO (CoreProgram, S.Set CostCentre)
-corePrepPgm hsc_env this_mod mod_loc binds data_tycons =
-    withTiming (pure dflags)
-               (text "CorePrep"<+>brackets (ppr this_mod))
-               (const ()) $ do
-    us <- mkSplitUniqSupply 's'
-    initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
+corePrepPgm hsc_env this_mod mod_loc binds data_tycons = do
+    (binds_out, cost_centres) <- withTiming (pure dflags)
+                (text "CorePrep"<+>brackets (ppr this_mod))
+                (const ()) $ do
+      us <- mkSplitUniqSupply 's'
+      initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
 
-    let cost_centres
-          | WayProf `elem` ways dflags
-          = collectCostCentres this_mod binds
-          | otherwise
-          = S.empty
+      let cost_centres
+            | WayProf `elem` ways dflags
+            = collectCostCentres this_mod binds
+            | otherwise
+            = S.empty
 
-        implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
-            -- NB: we must feed mkImplicitBinds through corePrep too
-            -- so that they are suitably cloned and eta-expanded
+          implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
+              -- NB: we must feed mkImplicitBinds through corePrep too
+              -- so that they are suitably cloned and eta-expanded
 
-        binds_out = initUs_ us $ do
-                      floats1 <- corePrepTopBinds initialCorePrepEnv binds
-                      floats2 <- corePrepTopBinds initialCorePrepEnv implicit_binds
-                      return (deFloatTop (floats1 `appendFloats` floats2))
+          binds_out = initUs_ us $ do
+                        floats1 <- corePrepTopBinds initialCorePrepEnv binds
+                        floats2 <- corePrepTopBinds initialCorePrepEnv implicit_binds
+                        return (deFloatTop (floats1 `appendFloats` floats2))
 
-    endPassIO hsc_env alwaysQualify CorePrep binds_out []
-    return (binds_out, cost_centres)
+      endPassIO hsc_env alwaysQualify CorePrep binds_out []
+      return (binds_out, cost_centres)
+      --TODO: This does not belong here!
+    withTiming (pure dflags) (text "LikelyRecursion [Pgm]") (const ()) $ do
+      let x = map likelyRecursionBndr binds_out :: [CoreBind]
+      if gopt Opt_LikelyRecursion dflags
+        then return (x, cost_centres)
+        else return (binds_out, cost_centres)
+
+
+
   where
     dflags = hsc_dflags hsc_env
 
 corePrepExpr :: DynFlags -> HscEnv -> CoreExpr -> IO CoreExpr
-corePrepExpr dflags hsc_env expr =
+corePrepExpr dflags hsc_env expr = do
+    --TODO: This does not belong here!
+    expr <- withTiming (pure dflags) (text "LikelyRecursion [expr]") (const ()) (
+      if gopt Opt_LikelyRecursion dflags
+        then (return $ likelyRecursion expr)
+        else return expr)
+
+
     withTiming (pure dflags) (text "CorePrep [expr]") (const ()) $ do
-    us <- mkSplitUniqSupply 's'
-    initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
-    let new_expr = initUs_ us (cpeBodyNF initialCorePrepEnv expr)
-    dumpIfSet_dyn dflags Opt_D_dump_prep "CorePrep" (ppr new_expr)
-    return new_expr
+      us <- mkSplitUniqSupply 's'
+      initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
+      let new_expr = initUs_ us (cpeBodyNF initialCorePrepEnv expr)
+      dumpIfSet_dyn dflags Opt_D_dump_prep "CorePrep" (ppr new_expr)
+      return new_expr
 
 corePrepTopBinds :: CorePrepEnv -> [CoreBind] -> UniqSM Floats
 -- Note [Floating out of top level bindings]

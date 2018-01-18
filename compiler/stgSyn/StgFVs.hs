@@ -123,7 +123,7 @@ rhs env (StgRhsClosure _ ccs uf bndrs body)
 rhs env (StgRhsCon ccs dc as) = (StgRhsCon ccs dc as, args env as)
 
 alt :: Env -> StgAlt -> (CgStgAlt, DIdSet)
-alt env (con, bndrs, e) = ((con, bndrs, e'), fvs)
+alt env (con, bndrs, e, f) = ((con, bndrs, e', f), fvs)
   where
     -- See Note [Tacking local binders]
     (e', rhs_fvs) = expr (addLocals bndrs env) e

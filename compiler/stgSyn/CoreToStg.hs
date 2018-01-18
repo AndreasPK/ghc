@@ -18,8 +18,8 @@ module CoreToStg ( coreToStg ) where
 import GhcPrelude
 
 import CoreSyn
-import CoreUtils        ( exprType, findDefault, isJoinBind
-                        , exprIsTickedString_maybe )
+import CoreUtils        ( exprType, findDefault, isJoinBind, exprIsBottom
+                        , exprIsTickedString_maybe, hasWeight )
 import CoreArity        ( manifestArity )
 import StgSyn
 
@@ -35,7 +35,7 @@ import VarEnv
 import Module
 import Name             ( isExternalName, nameOccName, nameModule_maybe )
 import OccName          ( occNameFS )
-import BasicTypes       ( Arity )
+import BasicTypes       ( Arity, neverFreq, defFreq, BranchWeight(..) )
 import TysWiredIn       ( unboxedUnitDataCon, unitDataConId )
 import Literal
 import Outputable
@@ -323,8 +323,7 @@ coreToTopStgRhs
         -> CtsM (StgRhs, CollectedCCs)
 
 coreToTopStgRhs dflags ccs this_mod (bndr, rhs)
-  = do { new_rhs <- coreToStgExpr rhs
-
+  = do { new_rhs <- coreToStgExpr dflags rhs
        ; let (stg_rhs, ccs') =
                mkTopStgRhs dflags this_mod ccs bndr new_rhs
              stg_arity =
@@ -357,7 +356,7 @@ coreToTopStgRhs dflags ccs this_mod (bndr, rhs)
 -- ---------------------------------------------------------------------------
 
 coreToStgExpr
-        :: CoreExpr
+        :: DynFlags -> CoreExpr
         -> CtsM StgExpr
 
 -- The second and third components can be derived in a simple bottom up pass, not
@@ -368,51 +367,54 @@ coreToStgExpr
 
 -- No LitInteger's or LitNatural's should be left by the time this is called.
 -- CorePrep should have converted them all to a real core representation.
-coreToStgExpr (Lit (LitNumber LitNumInteger _ _)) = panic "coreToStgExpr: LitInteger"
-coreToStgExpr (Lit (LitNumber LitNumNatural _ _)) = panic "coreToStgExpr: LitNatural"
-coreToStgExpr (Lit l)      = return (StgLit l)
-coreToStgExpr (App (Lit LitRubbish) _some_unlifted_type)
-  -- We lower 'LitRubbish' to @()@ here, which is much easier than doing it in
-  -- a STG to Cmm pass.
-  = coreToStgExpr (Var unitDataConId)
-coreToStgExpr (Var v)      = coreToStgApp Nothing v               [] []
-coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId [] []
 
-coreToStgExpr expr@(App _ _)
-  = coreToStgApp Nothing f args ticks
+
+coreToStgExpr _  (Lit (LitNumber LitNumInteger _ _)) = panic "coreToStgExpr: LitInteger"
+coreToStgExpr _  (Lit (LitNumber LitNumNatural _ _)) = panic "coreToStgExpr: LitNatural"
+coreToStgExpr _  (Lit l)      = return (StgLit l)
+coreToStgExpr df (App (Lit LitRubbish) _some_unlifted_type)
+  -- We lower 'RubbishLit' to @()@ here, which is much easier than doing it in
+  -- a STG to Cmm pass.
+  = coreToStgExpr df (Var unitDataConId)
+coreToStgExpr df (Var v)      = coreToStgApp df Nothing v               [] []
+coreToStgExpr df (Coercion _) = coreToStgApp df Nothing coercionTokenId [] []
+coreToStgExpr df expr@(App _ _)
+  = coreToStgApp df Nothing f args ticks
   where
     (f, args, ticks) = myCollectArgs expr
 
-coreToStgExpr expr@(Lam _ _)
+coreToStgExpr df expr@(Lam _ _)
   = let
         (args, body) = myCollectBinders expr
         args'        = filterStgBinders args
     in
     extendVarEnvCts [ (a, LambdaBound) | a <- args' ] $ do
-    body' <- coreToStgExpr body
+    body <- coreToStgExpr df body
     let
         result_expr = case nonEmpty args' of
-          Nothing     -> body'
-          Just args'' -> StgLam args'' body'
+          Nothing     -> body
+          Just args'' -> StgLam args'' body
 
     return result_expr
 
-coreToStgExpr (Tick tick expr)
+--We check for branch weights when transforming the case itself.
+coreToStgExpr df (Tick tick expr)
   = do case tick of
-         HpcTick{}    -> return ()
-         ProfNote{}   -> return ()
-         SourceNote{} -> return ()
-         Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
-       expr2 <- coreToStgExpr expr
+         HpcTick{}      -> return ()
+         ProfNote{}     -> return ()
+         SourceNote{}   -> return ()
+         WeightHint{} -> return ()
+         Breakpoint{}   -> panic "coreToStgExpr: breakpoint should not happen"
+       expr2 <- coreToStgExpr df expr
        return (StgTick tick expr2)
 
-coreToStgExpr (Cast expr _)
-  = coreToStgExpr expr
+coreToStgExpr df (Cast expr _)
+  = coreToStgExpr df expr
 
 -- Cases require a little more real work.
 
-coreToStgExpr (Case scrut _ _ [])
-  = coreToStgExpr scrut
+coreToStgExpr df (Case scrut _ _ [])
+  = coreToStgExpr df scrut
     -- See Note [Empty case alternatives] in CoreSyn If the case
     -- alternatives are empty, the scrutinee must diverge or raise an
     -- exception, so we can just dive into it.
@@ -423,31 +425,54 @@ coreToStgExpr (Case scrut _ _ [])
     -- runtime system error function.
 
 
-coreToStgExpr (Case scrut bndr _ alts) = do
+coreToStgExpr df (Case scrut bndr _ alts) = do
     alts2 <- extendVarEnvCts [(bndr, LambdaBound)] (mapM vars_alt alts)
-    scrut2 <- coreToStgExpr scrut
+    scrut2 <- coreToStgExpr df scrut
     return (StgCase scrut2 bndr (mkStgAltType bndr alts) alts2)
   where
+    {- Stg Alternatives also carry branch weight information.
+      This information currently comes from two sources:
+      * Checking if a expression is bottom (see Note [Branch weights])
+      * Weight hints from Tickish
+      We calculate both here.
+    -}
+    get_freq :: CoreExpr -> (BasicTypes.BranchWeight, CoreExpr)
+    get_freq rhs
+      | gopt Opt_UnlikelyBottoms df
+      , exprIsBottom rhs
+      = -- If a expression is bottom we can safely assume it's
+        -- alternative is rarely taken. Hence we set the
+        -- branch weight to zero/never.
+        -- For details see Note [Branch weights] in BasicTypes
+        (neverFreq, rhs)
+      | Just (weight,rhs') <- hasWeight rhs
+      = -- If there are weight hints on the alternative use them.
+        (weight,rhs')
+      | otherwise = (defFreq,rhs)
+
+    --vars_alt :: CoreAlt -> CtsM (StgAlt, FreeVarsInfo)
     vars_alt (con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon
       = -- This case is a bit smelly.
         -- See Note [Nullary unboxed tuple] in Type.hs
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
-        do { rhs2 <- coreToStgExpr rhs
-           ; return (DEFAULT, [], rhs2)  }
+        do { let (freq,rhs2) = get_freq rhs
+           ; rhs3 <- coreToStgExpr df rhs2
+           ; return (DEFAULT, [], rhs3, freq)  }
       | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
         extendVarEnvCts [(b, LambdaBound) | b <- binders'] $ do
-        rhs2 <- coreToStgExpr rhs
-        return (con, binders', rhs2)
+        let (freq,rhs2) = get_freq rhs
+        rhs3 <- coreToStgExpr df rhs2
+        return ( (con, binders', rhs3, freq))
 
-coreToStgExpr (Let bind body) = do
-    coreToStgLet bind body
+coreToStgExpr df (Let bind body) = do
+    coreToStgLet df bind body
 
-coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
+coreToStgExpr _ e = pprPanic "coreToStgExpr" (ppr e)
 
 mkStgAltType :: Id -> [CoreAlt] -> AltType
 mkStgAltType bndr alts
@@ -494,7 +519,8 @@ mkStgAltType bndr alts
 -- ---------------------------------------------------------------------------
 
 coreToStgApp
-         :: Maybe UpdateFlag            -- Just upd <=> this application is
+         :: DynFlags
+         -> Maybe UpdateFlag            -- Just upd <=> this application is
                                         -- the rhs of a thunk binding
                                         --      x = [...] \upd [] -> the_app
                                         -- with specified update flag
@@ -504,8 +530,8 @@ coreToStgApp
         -> CtsM StgExpr
 
 
-coreToStgApp _ f args ticks = do
-    (args', ticks') <- coreToStgArgs args
+coreToStgApp df _ f args ticks = do
+    (args', ticks') <- coreToStgArgs df args
     how_bound <- lookupVarCts f
 
     let
@@ -555,26 +581,27 @@ coreToStgApp _ f args ticks = do
 -- This is the guy that turns applications into A-normal form
 -- ---------------------------------------------------------------------------
 
-coreToStgArgs :: [CoreArg] -> CtsM ([StgArg], [Tickish Id])
-coreToStgArgs []
+coreToStgArgs :: DynFlags -> [CoreArg]
+              -> CtsM ([StgArg], [Tickish Id])
+coreToStgArgs _ []
   = return ([], [])
 
-coreToStgArgs (Type _ : args) = do     -- Type argument
-    (args', ts) <- coreToStgArgs args
+coreToStgArgs df (Type _ : args) = do     -- Type argument
+    (args', ts) <- coreToStgArgs df args
     return (args', ts)
 
-coreToStgArgs (Coercion _ : args)  -- Coercion argument; replace with place holder
-  = do { (args', ts) <- coreToStgArgs args
+coreToStgArgs df (Coercion _ : args)  -- Coercion argument; replace with place holder
+  = do { (args', ts) <- coreToStgArgs df args
        ; return (StgVarArg coercionTokenId : args', ts) }
 
-coreToStgArgs (Tick t e : args)
+coreToStgArgs df (Tick t e : args)
   = ASSERT( not (tickishIsCode t) )
-    do { (args', ts) <- coreToStgArgs (e : args)
+    do { (args', ts) <- coreToStgArgs df (e : args)
        ; return (args', t:ts) }
 
-coreToStgArgs (arg : args) = do         -- Non-type argument
-    (stg_args, ticks) <- coreToStgArgs args
-    arg' <- coreToStgExpr arg
+coreToStgArgs df (arg : args) = do         -- Non-type argument
+    (stg_args, ticks) <- coreToStgArgs df args
+    arg' <- coreToStgExpr df arg
     let
         (aticks, arg'') = stripStgTicksTop tickishFloatable arg'
         stg_arg = case arg'' of
@@ -612,11 +639,12 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
 -- ---------------------------------------------------------------------------
 
 coreToStgLet
-         :: CoreBind     -- bindings
-         -> CoreExpr     -- body
-         -> CtsM StgExpr -- new let
+         :: DynFlags
+         -> CoreBind    -- bindings
+         -> CoreExpr    -- body
+         -> CtsM StgExpr
 
-coreToStgLet bind body = do
+coreToStgLet df bind body = do
     (bind2, body2)
        <- do
 
@@ -625,7 +653,7 @@ coreToStgLet bind body = do
 
           -- Do the body
           extendVarEnvCts env_ext $ do
-             body2 <- coreToStgExpr body
+             body2 <- coreToStgExpr df body
 
              return (bind2, body2)
 
@@ -644,7 +672,7 @@ coreToStgLet bind body = do
                        [(Id, HowBound)])  -- extension to environment
 
     vars_bind (NonRec binder rhs) = do
-        rhs2 <- coreToStgRhs (binder,rhs)
+        rhs2 <- coreToStgRhs df (binder,rhs)
         let
             env_ext_item = mk_binding binder rhs
 
@@ -657,14 +685,14 @@ coreToStgLet bind body = do
                           | (b,rhs) <- pairs ]
            in
            extendVarEnvCts env_ext $ do
-              rhss2 <- mapM coreToStgRhs pairs
+              rhss2 <- mapM (coreToStgRhs df) pairs
               return (StgRec (binders `zip` rhss2), env_ext)
 
-coreToStgRhs :: (Id,CoreExpr)
+coreToStgRhs :: DynFlags -> (Id,CoreExpr)
              -> CtsM StgRhs
 
-coreToStgRhs (bndr, rhs) = do
-    new_rhs <- coreToStgExpr rhs
+coreToStgRhs df (bndr, rhs) = do
+    new_rhs <- coreToStgExpr df rhs
     return (mkStgRhs bndr new_rhs)
 
 -- Generate a top-level RHS. Any new cost centres generated for CAFs will be
