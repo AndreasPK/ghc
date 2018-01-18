@@ -379,7 +379,7 @@ calls to nonVoidIds in various places.  So we must not look up
 
 cgCase (StgApp v []) _ (PrimAlt _) alts
   | isVoidRep (idPrimRep v)  -- See Note [Scrutinising VoidRep]
-  , [(DEFAULT, _, rhs)] <- alts
+  , [(DEFAULT, _, rhs, _)] <- alts --TODOF: Check! Is this called after generating other alternatives?
   = cgExpr rhs
 
 {- Note [Dodgy unsafeCoerce 1]
@@ -561,7 +561,7 @@ chooseReturnBndrs :: Id -> AltType -> [StgAlt] -> [NonVoid Id]
 chooseReturnBndrs bndr (PrimAlt _) _alts
   = assertNonVoidIds [bndr]
 
-chooseReturnBndrs _bndr (MultiValAlt n) [(_, ids, _)]
+chooseReturnBndrs _bndr (MultiValAlt n) [(_, ids, _, _)]
   = ASSERT2(ids `lengthIs` n, ppr n $$ ppr ids $$ ppr _bndr)
     assertNonVoidIds ids     -- 'bndr' is not assigned!
 
@@ -578,10 +578,10 @@ chooseReturnBndrs _ _ _ = panic "chooseReturnBndrs"
 cgAlts :: (GcPlan,ReturnKind) -> NonVoid Id -> AltType -> [StgAlt]
        -> FCode ReturnKind
 -- At this point the result of the case are in the binders
-cgAlts gc_plan _bndr PolyAlt [(_, _, rhs)]
+cgAlts gc_plan _bndr PolyAlt [(_, _, rhs, freq)] --TODOF: Check
   = maybeAltHeapCheck gc_plan (cgExpr rhs)
 
-cgAlts gc_plan _bndr (MultiValAlt _) [(_, _, rhs)]
+cgAlts gc_plan _bndr (MultiValAlt _) [(_, _, rhs, freq)]
   = maybeAltHeapCheck gc_plan (cgExpr rhs)
         -- Here bndrs are *already* in scope, so don't rebind them
 
@@ -677,7 +677,7 @@ cgAltRhss gc_plan bndr alts = do
   let
     base_reg = idToReg dflags bndr
     cg_alt :: StgAlt -> FCode (AltCon, CmmAGraphScoped)
-    cg_alt (con, bndrs, rhs)
+    cg_alt (con, bndrs, rhs, freq) --TODOF: Check!
       = getCodeScoped             $
         maybeAltHeapCheck gc_plan $
         do { _ <- bindConArgs con base_reg (assertNonVoidIds bndrs)

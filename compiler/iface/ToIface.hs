@@ -493,9 +493,9 @@ toIfaceBind (NonRec b r) = IfaceNonRec (toIfaceLetBndr b) (toIfaceExpr r)
 toIfaceBind (Rec prs)    = IfaceRec [(toIfaceLetBndr b, toIfaceExpr r) | (b,r) <- prs]
 
 ---------------------
-toIfaceAlt :: (AltCon, [Var], CoreExpr)
-           -> (IfaceConAlt, [FastString], IfaceExpr)
-toIfaceAlt (c,bs,r) = (toIfaceCon c, map getOccFS bs, toIfaceExpr r)
+toIfaceAlt :: (AltCon, [Var], CoreExpr, Freq)
+           -> (IfaceConAlt, [FastString], IfaceExpr, Freq)
+toIfaceAlt (c,bs,r,f) = (toIfaceCon c, map getOccFS bs, toIfaceExpr r, f)
 
 ---------------------
 toIfaceCon :: AltCon -> IfaceConAlt

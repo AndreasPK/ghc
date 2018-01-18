@@ -15,7 +15,9 @@ module StgSyn (
         GenStgArg(..),
 
         GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
-        GenStgAlt, AltType(..),
+        GenStgAlt, AltType(..), StgFreq,
+
+        module CoreSyn, --TODOF: Seperate stg type? Move to basic types?
 
         UpdateFlag(..), isUpdatable,
 
@@ -47,7 +49,7 @@ module StgSyn (
 
 import GhcPrelude
 
-import CoreSyn     ( AltCon, Tickish )
+import CoreSyn     ( AltCon, Tickish, Freq )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
 import Data.List   ( intersperse )
@@ -82,6 +84,8 @@ are the boring things [except note the @GenStgRhs@], parameterised
 with respect to binder and occurrence information (just as in
 @CoreSyn@):
 -}
+
+type StgFreq = Freq
 
 -- | A top-level binding.
 data GenStgTopBinding bndr occ
@@ -479,7 +483,7 @@ rhsHasCafRefs (StgRhsCon _ _ args)
   = any stgArgHasCafRefs args
 
 altHasCafRefs :: GenStgAlt bndr Id -> Bool
-altHasCafRefs (_, _, rhs) = exprHasCafRefs rhs
+altHasCafRefs (_, _, rhs, _) = exprHasCafRefs rhs
 
 stgArgHasCafRefs :: GenStgArg Id -> Bool
 stgArgHasCafRefs (StgVarArg id)
@@ -543,7 +547,8 @@ rather than from the scrutinee type.
 type GenStgAlt bndr occ
   = (AltCon,            -- alts: data constructor,
      [bndr],            -- constructor's parameters,
-     GenStgExpr bndr occ)       -- ...right-hand side.
+     GenStgExpr bndr occ, -- ..right-hand side,
+     Freq)              -- relative chance to take this alt.
 
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
@@ -783,8 +788,9 @@ pprStgExpr (StgCase expr bndr alt_type alts)
 
 pprStgAlt :: (OutputableBndr bndr, Outputable occ, Ord occ)
           => GenStgAlt bndr occ -> SDoc
-pprStgAlt (con, params, expr)
-  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), text "->"])
+pprStgAlt (con, params, expr, f)
+--TODOF: Tidy
+  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), (text "likely:" <> ppr f) , text "->"])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc

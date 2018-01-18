@@ -47,6 +47,7 @@ import IfaceType
 import BinFingerprint
 import CoreSyn( IsOrphan, isOrphan )
 import PprCore()            -- Printing DFunArgs
+import CoreSyn(Freq)
 import Demand
 import Class
 import FieldLabel
@@ -497,7 +498,8 @@ data IfaceTickish
   | IfaceSource  RealSrcSpan String        -- from SourceNote
   -- no breakpoints: we never export these into interface files
 
-type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr)
+--TODOF: Introduce proper iface type
+type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr, Freq)
         -- Note: IfLclName, not IfaceBndr (and same with the case binder)
         -- We reconstruct the kind/type of the thing from the context
         -- thus saving bulk in interface files
@@ -1159,7 +1161,8 @@ pprIfaceExpr add_par (IfaceECase scrut ty)
                  , text "ret_ty" <+> pprParendIfaceType ty
                  , text "of {}" ])
 
-pprIfaceExpr add_par (IfaceCase scrut bndr [(con, bs, rhs)])
+--TODOF: Print
+pprIfaceExpr add_par (IfaceCase scrut bndr [(con, bs, rhs, _freq)])
   = add_par (sep [text "case"
                         <+> pprIfaceExpr noParens scrut <+> text "of"
                         <+> ppr bndr <+> char '{' <+> ppr_con_bs con bs <+> arrow,
@@ -1191,8 +1194,9 @@ pprIfaceExpr add_par (IfaceLet (IfaceRec pairs) body)
 pprIfaceExpr add_par (IfaceTick tickish e)
   = add_par (pprIfaceTickish tickish <+> pprIfaceExpr noParens e)
 
-ppr_alt :: (IfaceConAlt, [IfLclName], IfaceExpr) -> SDoc
-ppr_alt (con, bs, rhs) = sep [ppr_con_bs con bs,
+--TODOF: Print
+ppr_alt :: (IfaceConAlt, [IfLclName], IfaceExpr, Freq) -> SDoc
+ppr_alt (con, bs, rhs, _f) = sep [ppr_con_bs con bs,
                          arrow <+> pprIfaceExpr noParens rhs]
 
 ppr_con_bs :: IfaceConAlt -> [IfLclName] -> SDoc
@@ -1523,14 +1527,14 @@ freeNamesIfExpr (IfaceECase e ty)     = freeNamesIfExpr e &&& freeNamesIfType ty
 freeNamesIfExpr (IfaceCase s _ alts)
   = freeNamesIfExpr s &&& fnList fn_alt alts &&& fn_cons alts
   where
-    fn_alt (_con,_bs,r) = freeNamesIfExpr r
+    fn_alt (_con,_bs,r,_) = freeNamesIfExpr r
 
     -- Depend on the data constructors.  Just one will do!
     -- Note [Tracking data constructors]
-    fn_cons []                            = emptyNameSet
-    fn_cons ((IfaceDefault    ,_,_) : xs) = fn_cons xs
-    fn_cons ((IfaceDataAlt con,_,_) : _ ) = unitNameSet con
-    fn_cons (_                      : _ ) = emptyNameSet
+    fn_cons []                              = emptyNameSet
+    fn_cons ((IfaceDefault    ,_,_,_) : xs) = fn_cons xs
+    fn_cons ((IfaceDataAlt con,_,_,_) : _ ) = unitNameSet con
+    fn_cons (_                      : _ )   = emptyNameSet
 
 freeNamesIfExpr (IfaceLet (IfaceNonRec bndr rhs) body)
   = freeNamesIfLetBndr bndr &&& freeNamesIfExpr rhs &&& freeNamesIfExpr body

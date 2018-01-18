@@ -151,12 +151,12 @@ unboxArg arg
        prim_arg <- newSysLocalDs intPrimTy
        return (Var prim_arg,
               \ body -> Case (mkWildCase arg arg_ty intPrimTy
-                                       [(DataAlt falseDataCon,[],mkIntLit dflags 0),
-                                        (DataAlt trueDataCon, [],mkIntLit dflags 1)])
+                                       [(DataAlt falseDataCon,[],mkIntLit dflags 0,defFreq),
+                                        (DataAlt trueDataCon, [],mkIntLit dflags 1,defFreq)])
                                         -- In increasing tag order!
                              prim_arg
                              (exprType body)
-                             [(DEFAULT,[],body)])
+                             [(DEFAULT,[],body,defFreq)])
 
   -- Data types with a single constructor, which has a single, primitive-typed arg
   -- This deals with Int, Float etc; also Ptr, ForeignPtr
@@ -166,7 +166,7 @@ unboxArg arg
     do case_bndr <- newSysLocalDs arg_ty
        prim_arg <- newSysLocalDs data_con_arg_ty1
        return (Var prim_arg,
-               \ body -> Case arg case_bndr (exprType body) [(DataAlt data_con,[prim_arg],body)]
+               \ body -> Case arg case_bndr (exprType body) [(DataAlt data_con,[prim_arg],body, defFreq)]
               )
 
   -- Byte-arrays, both mutable and otherwise; hack warning
@@ -181,7 +181,7 @@ unboxArg arg
   = do case_bndr <- newSysLocalDs arg_ty
        vars@[_l_var, _r_var, arr_cts_var] <- newSysLocalsDs data_con_arg_tys
        return (Var arr_cts_var,
-               \ body -> Case arg case_bndr (exprType body) [(DataAlt data_con,vars,body)]
+               \ body -> Case arg case_bndr (exprType body) [(DataAlt data_con,vars,body,defFreq)]
               )
 
   | otherwise
@@ -271,7 +271,9 @@ boxResult result_ty
 
 mk_alt :: (Expr Var -> [Expr Var] -> Expr Var)
        -> (Maybe Type, Expr Var -> Expr Var)
-       -> DsM (Type, (AltCon, [Id], Expr Var))
+       -> DsM (Type, (AltCon, [Id], Expr Var, Freq))
+
+--TODOF: Should probably take a freq value
 mk_alt return_result (Nothing, wrap_result)
   = do -- The ccall returns ()
        state_id <- newSysLocalDs realWorldStatePrimTy
@@ -280,7 +282,7 @@ mk_alt return_result (Nothing, wrap_result)
                                      [wrap_result (panic "boxResult")]
 
              ccall_res_ty = mkTupleTy Unboxed [realWorldStatePrimTy]
-             the_alt      = (DataAlt (tupleDataCon Unboxed 1), [state_id], the_rhs)
+             the_alt      = (DataAlt (tupleDataCon Unboxed 1), [state_id], the_rhs, defFreq)
 
        return (ccall_res_ty, the_alt)
 
@@ -293,7 +295,7 @@ mk_alt return_result (Just prim_res_ty, wrap_result)
        ; let the_rhs = return_result (Var state_id)
                                 [wrap_result (Var result_id)]
              ccall_res_ty = mkTupleTy Unboxed [realWorldStatePrimTy, prim_res_ty]
-             the_alt      = (DataAlt (tupleDataCon Unboxed 2), [state_id, result_id], the_rhs)
+             the_alt      = (DataAlt (tupleDataCon Unboxed 2), [state_id, result_id], the_rhs, defFreq)
        ; return (ccall_res_ty, the_alt) }
 
 
@@ -327,8 +329,8 @@ resultWrapper result_ty
   = do { dflags <- getDynFlags
        ; let marshal_bool e
                = mkWildCase e intPrimTy boolTy
-                   [ (DEFAULT                    ,[],Var trueDataConId )
-                   , (LitAlt (mkMachInt dflags 0),[],Var falseDataConId)]
+                   [ (DEFAULT                    ,[],Var trueDataConId, defFreq ) --TODOF: Check
+                   , (LitAlt (mkMachInt dflags 0),[],Var falseDataConId, defFreq)]
        ; return (Just intPrimTy, marshal_bool) }
 
   -- Newtypes

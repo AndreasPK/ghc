@@ -212,7 +212,7 @@ pprCoreExprShort (Cast e _) = pprCoreExprShort e <+> text "`cast` T"
 pprCoreExprShort e = pprCoreExpr e
 
 pprCoreAltShort :: CoreAlt -> SDoc
-pprCoreAltShort (con, args, expr) = ppr con <+> sep (map ppr args) <+> text "->" <+> pprCoreExprShort expr
+pprCoreAltShort (con, args, expr, freq) = ppr con <+> sep (map ppr args) <+> parens (ppr freq) <+> text "->" <+> pprCoreExprShort expr
 
 instance Outputable BCInstr where
    ppr (STKCHECK n)          = text "STKCHECK" <+> ppr n

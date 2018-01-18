@@ -1514,33 +1514,35 @@ tcIfaceLit (LitInteger i _)
        return (mkLitInteger i (mkTyConTy t))
 tcIfaceLit lit = return lit
 
+--TODOF: Check
 -------------------------
 tcIfaceAlt :: CoreExpr -> (TyCon, [Type])
-           -> (IfaceConAlt, [FastString], IfaceExpr)
-           -> IfL (AltCon, [TyVar], CoreExpr)
-tcIfaceAlt _ _ (IfaceDefault, names, rhs)
+           -> (IfaceConAlt, [FastString], IfaceExpr, Freq)
+           -> IfL (AltCon, [TyVar], CoreExpr, Freq)
+tcIfaceAlt _ _ (IfaceDefault, names, rhs, freq)
   = ASSERT( null names ) do
     rhs' <- tcIfaceExpr rhs
-    return (DEFAULT, [], rhs')
+    return (DEFAULT, [], rhs', freq)
 
-tcIfaceAlt _ _ (IfaceLitAlt lit, names, rhs)
+tcIfaceAlt _ _ (IfaceLitAlt lit, names, rhs, freq)
   = ASSERT( null names ) do
     lit' <- tcIfaceLit lit
     rhs' <- tcIfaceExpr rhs
-    return (LitAlt lit', [], rhs')
+    return (LitAlt lit', [], rhs', freq)
 
 -- A case alternative is made quite a bit more complicated
 -- by the fact that we omit type annotations because we can
 -- work them out.  True enough, but its not that easy!
-tcIfaceAlt scrut (tycon, inst_tys) (IfaceDataAlt data_occ, arg_strs, rhs)
+--TODOF: Check
+tcIfaceAlt scrut (tycon, inst_tys) (IfaceDataAlt data_occ, arg_strs, rhs, freq)
   = do  { con <- tcIfaceDataCon data_occ
         ; when (debugIsOn && not (con `elem` tyConDataCons tycon))
                (failIfM (ppr scrut $$ ppr con $$ ppr tycon $$ ppr (tyConDataCons tycon)))
-        ; tcIfaceDataAlt con inst_tys arg_strs rhs }
+        ; tcIfaceDataAlt con inst_tys arg_strs rhs freq}
 
-tcIfaceDataAlt :: DataCon -> [Type] -> [FastString] -> IfaceExpr
-               -> IfL (AltCon, [TyVar], CoreExpr)
-tcIfaceDataAlt con inst_tys arg_strs rhs
+tcIfaceDataAlt :: DataCon -> [Type] -> [FastString] -> IfaceExpr -> Freq
+               -> IfL (AltCon, [TyVar], CoreExpr, Freq)
+tcIfaceDataAlt con inst_tys arg_strs rhs freq
   = do  { us <- newUniqueSupply
         ; let uniqs = uniqsFromSupply us
         ; let (ex_tvs, arg_ids)
@@ -1549,7 +1551,7 @@ tcIfaceDataAlt con inst_tys arg_strs rhs
         ; rhs' <- extendIfaceEnvs  ex_tvs       $
                   extendIfaceIdEnv arg_ids      $
                   tcIfaceExpr rhs
-        ; return (DataAlt con, ex_tvs ++ arg_ids, rhs') }
+        ; return (DataAlt con, ex_tvs ++ arg_ids, rhs', freq) }
 
 {-
 ************************************************************************

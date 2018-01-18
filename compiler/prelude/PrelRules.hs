@@ -498,8 +498,8 @@ litEq is_eq = msum
     do_lit_eq dflags lit expr = do
       guard (not (litIsLifted lit))
       return (mkWildCase expr (literalType lit) intPrimTy
-                    [(DEFAULT,    [], val_if_neq),
-                     (LitAlt lit, [], val_if_eq)])
+                    [(DEFAULT,    [], val_if_neq, defFreq),
+                     (LitAlt lit, [], val_if_eq,  defFreq)])
       where
         val_if_eq  | is_eq     = trueValInt  dflags
                    | otherwise = falseValInt dflags

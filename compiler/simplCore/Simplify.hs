@@ -1078,7 +1078,7 @@ simplTick env tickish expr cont
          tickScrut e    = foldr mkTick e ticks
          -- Alternatives get annotated with all ticks that scope in some way,
          -- but we don't want to count entries.
-         tickAlt (c,bs,e) = (c,bs, foldr mkTick e ts_scope)
+         tickAlt (c,bs,e,f) = (c,bs, foldr mkTick e ts_scope,f)
          ts_scope         = map mkNoCount $
                             filter (not . (`tickishScopesLike` NoScope)) ticks
 
@@ -2280,7 +2280,7 @@ rebuildCase env scrut case_bndr alts cont
   = do  { tick (KnownBranch case_bndr)
         ; case findAlt (LitAlt lit) alts of
             Nothing           -> missingAlt env case_bndr alts cont
-            Just (_, bs, rhs) -> simple_rhs bs rhs }
+            Just (_, bs, rhs,_) -> simple_rhs bs rhs }
 
   | Just (con, ty_args, other_args) <- exprIsConApp_maybe (getUnfoldingInRuleMatch env) scrut
         -- Works when the scrutinee is a variable with a known unfolding
@@ -2288,8 +2288,8 @@ rebuildCase env scrut case_bndr alts cont
   = do  { tick (KnownBranch case_bndr)
         ; case findAlt (DataAlt con) alts of
             Nothing  -> missingAlt env case_bndr alts cont
-            Just (DEFAULT, bs, rhs) -> simple_rhs bs rhs
-            Just (_, bs, rhs)       -> knownCon env scrut con ty_args other_args
+            Just (DEFAULT, bs, rhs, _) -> simple_rhs bs rhs
+            Just (_, bs, rhs, _)       -> knownCon env scrut con ty_args other_args
                                                 case_bndr bs rhs cont
         }
   where
@@ -2305,7 +2305,7 @@ rebuildCase env scrut case_bndr alts cont
 --      2. Eliminate the case if scrutinee is evaluated
 --------------------------------------------------
 
-rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
+rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs,_f)] cont
   -- See if we can get rid of the case altogether
   -- See Note [Case elimination]
   -- mkCase made sure that if all the alternatives are equal,
@@ -2492,7 +2492,7 @@ improveSeq :: (FamInstEnv, FamInstEnv) -> SimplEnv
            -> OutExpr -> InId -> OutId -> [InAlt]
            -> SimplM (SimplEnv, OutExpr, OutId)
 -- Note [Improving seq]
-improveSeq fam_envs env scrut case_bndr case_bndr1 [(DEFAULT,_,_)]
+improveSeq fam_envs env scrut case_bndr case_bndr1 [(DEFAULT,_,_,_)]
   | Just (co, ty2) <- topNormaliseType_maybe fam_envs (idType case_bndr1)
   = do { case_bndr2 <- newId (fsLit "nt") ty2
         ; let rhs  = DoneEx (Var case_bndr2 `Cast` mkSymCo co) Nothing
@@ -2512,22 +2512,22 @@ simplAlt :: SimplEnv
          -> SimplCont
          -> InAlt
          -> SimplM OutAlt
-
-simplAlt env _ imposs_deflt_cons case_bndr' cont' (DEFAULT, bndrs, rhs)
+--TODOF: Check
+simplAlt env _ imposs_deflt_cons case_bndr' cont' (DEFAULT, bndrs, rhs, freq)
   = ASSERT( null bndrs )
     do  { let env' = addBinderUnfolding env case_bndr'
                                         (mkOtherCon imposs_deflt_cons)
                 -- Record the constructors that the case-binder *can't* be.
         ; rhs' <- simplExprC env' rhs cont'
-        ; return (DEFAULT, [], rhs') }
+        ; return (DEFAULT, [], rhs', freq) }
 
-simplAlt env scrut' _ case_bndr' cont' (LitAlt lit, bndrs, rhs)
+simplAlt env scrut' _ case_bndr' cont' (LitAlt lit, bndrs, rhs, freq)
   = ASSERT( null bndrs )
     do  { env' <- addAltUnfoldings env scrut' case_bndr' (Lit lit)
         ; rhs' <- simplExprC env' rhs cont'
-        ; return (LitAlt lit, [], rhs') }
+        ; return (LitAlt lit, [], rhs', freq) }
 
-simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs)
+simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs, freq)
   = do  {       -- Deal with the pattern-bound variables
                 -- Mark the ones that are in ! positions in the
                 -- data constructor as certainly-evaluated.
@@ -2542,7 +2542,7 @@ simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs)
 
         ; env'' <- addAltUnfoldings env' scrut' case_bndr' con_app
         ; rhs' <- simplExprC env'' rhs cont'
-        ; return (DataAlt con, vs', rhs') }
+        ; return (DataAlt con, vs', rhs', freq) }
   where
         -- add_evals records the evaluated-ness of the bound variables of
         -- a case pattern.  This is *important*.  Consider
@@ -2810,7 +2810,7 @@ altsWouldDup (alt:alts)
   | is_bot_alt alt = altsWouldDup alts
   | otherwise      = not (all is_bot_alt alts)
   where
-    is_bot_alt (_,_,rhs) = exprIsBottom rhs
+    is_bot_alt (_,_,rhs,_) = exprIsBottom rhs
 
 -------------------------
 mkDupableCont :: SimplEnv -> SimplCont
@@ -2942,12 +2942,13 @@ mkDupableCont env (Select { sc_bndr = case_bndr, sc_alts = alts
                                       -- See Note [StaticEnv invariant] in SimplUtils
                           , sc_cont = mkBoringStop (contResultType cont) } ) }
 
+--TODOF: Check
 mkDupableAlt :: DynFlags -> OutId
              -> JoinFloats -> OutAlt
              -> SimplM (JoinFloats, OutAlt)
-mkDupableAlt dflags case_bndr jfloats (con, bndrs', rhs')
+mkDupableAlt dflags case_bndr jfloats (con, bndrs', rhs', freq)
   | exprIsDupable dflags rhs'  -- Note [Small alternative rhs]
-  = return (jfloats, (con, bndrs', rhs'))
+  = return (jfloats, (con, bndrs', rhs', freq))
 
   | otherwise
   = do  { let rhs_ty'  = exprType rhs'
@@ -2990,7 +2991,7 @@ mkDupableAlt dflags case_bndr jfloats (con, bndrs', rhs')
         ; join_bndr <- newJoinId final_bndrs' rhs_ty'
 
         ; let join_call = mkApps (Var join_bndr) final_args
-              alt'      = (con, bndrs', join_call)
+              alt'      = (con, bndrs', join_call, freq)
 
         ; return ( jfloats `addJoinFlts` unitJoinFloat (NonRec join_bndr join_rhs)
                  , alt') }

@@ -166,9 +166,9 @@ stgMassageForProfiling dflags mod_name _us stg_binds
         alts' <- mapM do_alt alts
         return (StgCase expr' bndr alt_type alts')
       where
-        do_alt (id, bs, e) = do
+        do_alt (id, bs, e, f) = do
             e' <- do_expr e
-            return (id, bs, e')
+            return (id, bs, e', f)
 
     do_expr (StgLet b e) = do
           (b,e) <- do_let b e
