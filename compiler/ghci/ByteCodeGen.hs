@@ -201,7 +201,7 @@ simpleFreeVars = go . freeVars
     go' (AnnType ty)                 = AnnType ty
     go' (AnnCoercion co)             = AnnCoercion co
 
-    go_alt (con, args, expr) = (con, args, go expr)
+    go_alt (con, args, expr, f) = (con, args, go expr, f)
 
     go_bind (AnnNonRec bndr rhs) = AnnNonRec bndr (go rhs)
     go_bind (AnnRec pairs)       = AnnRec (map (second go) pairs)
@@ -642,7 +642,7 @@ schemeE d s p (AnnTick _ (_, rhs)) = schemeE d s p rhs
 schemeE d s p (AnnCase (_,scrut) _ _ []) = schemeE d s p scrut
         -- no alts: scrut is guaranteed to diverge
 
-schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1, bind2], rhs)])
+schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1, bind2], rhs, _f)])
    | isUnboxedTupleCon dc -- handles pairs with one void argument (e.g. state token)
         -- Convert
         --      case .... of x { (# V'd-thing, a #) -> ... }
@@ -654,18 +654,18 @@ schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1, bind2], rhs)])
         -- envt (it won't be bound now) because we never look such things up.
    , Just res <- case (typePrimRep (idType bind1), typePrimRep (idType bind2)) of
                    ([], [_])
-                     -> Just $ doCase d s p scrut bind2 [(DEFAULT, [], rhs)] (Just bndr)
+                     -> Just $ doCase d s p scrut bind2 [(DEFAULT, [], rhs, defFreq)] (Just bndr)
                    ([_], [])
-                     -> Just $ doCase d s p scrut bind1 [(DEFAULT, [], rhs)] (Just bndr)
+                     -> Just $ doCase d s p scrut bind1 [(DEFAULT, [], rhs, defFreq)] (Just bndr)
                    _ -> Nothing
    = res
 
-schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1], rhs)])
+schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1], rhs, f)])
    | isUnboxedTupleCon dc
    , typePrimRep (idType bndr) `lengthAtMost` 1 -- handles unit tuples
-   = doCase d s p scrut bind1 [(DEFAULT, [], rhs)] (Just bndr)
+   = doCase d s p scrut bind1 [(DEFAULT, [], rhs, f)] (Just bndr)
 
-schemeE d s p (AnnCase scrut bndr _ alt@[(DEFAULT, [], _)])
+schemeE d s p (AnnCase scrut bndr _ alt@[(DEFAULT, [], _, _f)])
    | isUnboxedTupleType (idType bndr)
    , Just ty <- case typePrimRep (idType bndr) of
        [_]  -> Just (unwrapType (idType bndr))
@@ -953,11 +953,11 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
         isAlgCase = not (isUnliftedType bndr_ty) && isNothing is_unboxed_tuple
 
         -- given an alt, return a discr and code for it.
-        codeAlt (DEFAULT, _, (_,rhs))
+        codeAlt (DEFAULT, _, (_,rhs), _)
            = do rhs_code <- schemeE d_alts s p_alts rhs
                 return (NoDiscr, rhs_code)
 
-        codeAlt alt@(_, bndrs, (_,rhs))
+        codeAlt alt@(_, bndrs, (_,rhs), _)
            -- primitive or nullary constructor alt: no need to UNPACK
            | null real_bndrs = do
                 rhs_code <- schemeE d_alts s p_alts rhs
@@ -991,13 +991,13 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
            where
              real_bndrs = filterOut isTyVar bndrs
 
-        my_discr (DEFAULT, _, _) = NoDiscr {-shouldn't really happen-}
-        my_discr (DataAlt dc, _, _)
+        my_discr (DEFAULT, _, _, _) = NoDiscr {-shouldn't really happen-}
+        my_discr (DataAlt dc, _, _, _)
            | isUnboxedTupleCon dc || isUnboxedSumCon dc
            = multiValException
            | otherwise
            = DiscrP (fromIntegral (dataConTag dc - fIRST_TAG))
-        my_discr (LitAlt l, _, _)
+        my_discr (LitAlt l, _, _, _)
            = case l of MachInt i     -> DiscrI (fromInteger i)
                        MachWord w    -> DiscrW (fromInteger w)
                        MachFloat r   -> DiscrF (fromRational r)
@@ -1008,7 +1008,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
         maybe_ncons
            | not isAlgCase = Nothing
            | otherwise
-           = case [dc | (DataAlt dc, _, _) <- alts] of
+           = case [dc | (DataAlt dc, _, _, _) <- alts] of
                 []     -> Nothing
                 (dc:_) -> Just (tyConFamilySize (dataConTyCon dc))
 

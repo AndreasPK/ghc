@@ -125,4 +125,4 @@ vCaseDEFAULT (vscrut, lscrut) (vbndr, lbndr) vty lty (vbody, lbody)
   = (Case vscrut vbndr vty (mkDEFAULT vbody),
      Case lscrut lbndr lty (mkDEFAULT lbody))
   where
-    mkDEFAULT e = [(DEFAULT, [], e)]
+    mkDEFAULT e = [(DEFAULT, [], e, defFreq)]

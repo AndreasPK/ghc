@@ -627,9 +627,10 @@ rnIfaceTvBndr (fs, kind) = (,) fs <$> rnIfaceType kind
 rnIfaceTyConBinder :: Rename IfaceTyConBinder
 rnIfaceTyConBinder (TvBndr tv vis) = TvBndr <$> rnIfaceTvBndr tv <*> pure vis
 
+--TODOF: Check!
 rnIfaceAlt :: Rename IfaceAlt
-rnIfaceAlt (conalt, names, rhs)
-     = (,,) <$> rnIfaceConAlt conalt <*> pure names <*> rnIfaceExpr rhs
+rnIfaceAlt (conalt, names, rhs, f)
+     = (,,,) <$> rnIfaceConAlt conalt <*> pure names <*> rnIfaceExpr rhs <*> pure f
 
 rnIfaceConAlt :: Rename IfaceConAlt
 rnIfaceConAlt (IfaceDataAlt data_occ) = IfaceDataAlt <$> rnIfaceGlobal data_occ

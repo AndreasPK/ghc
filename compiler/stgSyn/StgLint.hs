@@ -223,7 +223,7 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
 lintStgAlts :: [StgAlt]
             -> Type               -- Type of scrutinee
             -> LintM (Maybe Type) -- Just ty => type is accurage
-
+--TODOF: Check sum of frequencies maybe?
 lintStgAlts alts scrut_ty = do
     maybe_result_tys <- mapM (lintAlt scrut_ty) alts
 
@@ -238,15 +238,15 @@ lintStgAlts alts scrut_ty = do
           -- We can't check that the alternatives have the
           -- same type, because they don't, with unsafeCoerce#
 
-lintAlt :: Type -> (AltCon, [Id], StgExpr) -> LintM (Maybe Type)
-lintAlt _ (DEFAULT, _, rhs)
+lintAlt :: Type -> (AltCon, [Id], StgExpr, StgFreq) -> LintM (Maybe Type)
+lintAlt _ (DEFAULT, _, rhs, _)
  = lintStgExpr rhs
 
-lintAlt scrut_ty (LitAlt lit, _, rhs) = do
+lintAlt scrut_ty (LitAlt lit, _, rhs, _) = do
    checkTys (literalType lit) scrut_ty (mkAltMsg1 scrut_ty)
    lintStgExpr rhs
 
-lintAlt scrut_ty (DataAlt con, args, rhs) = do
+lintAlt scrut_ty (DataAlt con, args, rhs, _) = do
     case splitTyConApp_maybe scrut_ty of
       Just (tycon, tys_applied) | isAlgTyCon tycon &&
                                   not (isNewTyCon tycon) -> do

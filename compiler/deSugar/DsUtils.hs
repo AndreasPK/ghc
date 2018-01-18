@@ -237,7 +237,7 @@ wrapBind new old body   -- NB: this function must deal with term
 
 seqVar :: Var -> CoreExpr -> CoreExpr
 seqVar var body = Case (Var var) var (exprType body)
-                        [(DEFAULT, [], body)]
+                        [(DEFAULT, [], body, defFreq)]
 
 mkCoLetMatchResult :: CoreBind -> MatchResult -> MatchResult
 mkCoLetMatchResult bind = adjustMatchResult (mkCoreLet bind)
@@ -250,7 +250,7 @@ mkViewMatchResult var' viewExpr =
 
 mkEvalMatchResult :: Id -> Type -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
-  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)])
+  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e, defFreq)])
 
 mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
 mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
@@ -265,14 +265,14 @@ mkCoPrimCaseMatchResult var ty match_alts
   = MatchResult CanFail mk_case
   where
     mk_case fail = do
-        alts <- mapM (mk_alt fail) sorted_alts
-        return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
+        alts <- mapM (mk_alt fail) sorted_alts 
+        return (Case (Var var) var ty ((DEFAULT, [], fail, defFreq) : alts)) --TODOF: Check
 
     sorted_alts = sortWith fst match_alts       -- Right order for a Case
     mk_alt fail (lit, MatchResult _ body_fn)
        = ASSERT( not (litIsLifted lit) )
          do body <- body_fn fail
-            return (LitAlt lit, [], body)
+            return (LitAlt lit, [], body, defFreq) --TODOF: Check
 
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_bndrs :: [Var],
@@ -384,20 +384,21 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
         return $ mkWildCase (Var var) (idType var) ty (mk_default fail ++ alts)
 
     mk_alt :: CoreExpr -> CaseAlt DataCon -> DsM CoreAlt
+    --TODOF: !!!Consider setting a value in casealt
     mk_alt fail MkCaseAlt{ alt_pat = con,
                            alt_bndrs = args,
                            alt_result = MatchResult _ body_fn }
       = do { body <- body_fn fail
            ; case dataConBoxer con of {
-                Nothing -> return (DataAlt con, args, body) ;
+                Nothing -> return (DataAlt con, args, body, defFreq) ;
                 Just (DCB boxer) ->
         do { us <- newUniqueSupply
            ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
-           ; return (DataAlt con, rep_ids, mkLets binds body) } } }
+           ; return (DataAlt con, rep_ids, mkLets binds body, defFreq) } } }
 
     mk_default :: CoreExpr -> [CoreAlt]
     mk_default fail | exhaustive_case = []
-                    | otherwise       = [(DEFAULT, [], fail)]
+                    | otherwise       = [(DEFAULT, [], fail, -1000)]
 
     fail_flag :: CanItFail
     fail_flag | exhaustive_case
@@ -416,6 +417,7 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
 --   parallel arrays, which are introduced by `tidy1' in the `PArrPat'
 --   case
 --
+--TODOF: Check! Not used atm but consider freq values
 mkPArrCase :: DynFlags -> Id -> Type -> [CaseAlt DataCon] -> CoreExpr
            -> DsM CoreExpr
 mkPArrCase dflags var ty sorted_alts fail = do
@@ -433,9 +435,9 @@ mkPArrCase dflags var ty sorted_alts fail = do
         l      <- newSysLocalDs intPrimTy
         indexP <- dsDPHBuiltin indexPVar
         alts   <- mapM (mkAlt indexP) sorted_alts
-        return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
+        return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts), defFreq)
       where
-        dft  = (DEFAULT, [], fail)
+        dft  = (DEFAULT, [], fail, defFreq) --TODOF: Check
 
     --
     -- each alternative matches one array length (corresponding to one
@@ -446,7 +448,7 @@ mkPArrCase dflags var ty sorted_alts fail = do
     --
     mkAlt indexP alt@MkCaseAlt{alt_result = MatchResult _ bodyFun} = do
         body <- bodyFun fail
-        return (LitAlt lit, [], mkCoreLets binds body)
+        return (LitAlt lit, [], mkCoreLets binds body, defFreq)
       where
         lit   = MachInt $ toInteger (dataConSourceArity (alt_pat alt))
         binds = [NonRec arg (indexExpr i) | (i, arg) <- zip [1..] (alt_bndrs alt)]
@@ -547,7 +549,7 @@ which stupidly tries to bind the datacon 'True'.
 mkCoreAppDs  :: SDoc -> CoreExpr -> CoreExpr -> CoreExpr
 mkCoreAppDs _ (Var f `App` Type ty1 `App` Type ty2 `App` arg1) arg2
   | f `hasKey` seqIdKey            -- Note [Desugaring seq (1), (2)]
-  = Case arg1 case_bndr ty2 [(DEFAULT,[],arg2)]
+  = Case arg1 case_bndr ty2 [(DEFAULT,[],arg2, defFreq)] --TODOF: Check
   where
     case_bndr = case arg1 of
                    Var v1 | isInternalName (idName v1)
@@ -967,8 +969,8 @@ mkBinaryTickBox ixT ixF e = do
            trueBox  = Tick (HpcTick this_mod ixT) (Var trueDataConId)
        --
        return $ Case e bndr1 boolTy
-                       [ (DataAlt falseDataCon, [], falseBox)
-                       , (DataAlt trueDataCon,  [], trueBox)
+                       [ (DataAlt falseDataCon, [], falseBox, defFreq)
+                       , (DataAlt trueDataCon,  [], trueBox, defFreq) --TODOF: Check
                        ]
 
 

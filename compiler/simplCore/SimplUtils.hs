@@ -2020,15 +2020,16 @@ mkCase, mkCase1, mkCase2, mkCase3
 --      1. Merge Nested Cases
 --------------------------------------------------
 
-mkCase dflags scrut outer_bndr alts_ty ((DEFAULT, _, deflt_rhs) : outer_alts)
+--TODOF: We have to split the priority of the default with the inner branches
+mkCase dflags scrut outer_bndr alts_ty ((DEFAULT, _, deflt_rhs, _dfreq) : outer_alts)
   | gopt Opt_CaseMerge dflags
   , (ticks, Case (Var inner_scrut_var) inner_bndr _ inner_alts)
        <- stripTicksTop tickishFloatable deflt_rhs
   , inner_scrut_var == outer_bndr
   = do  { tick (CaseMerge outer_bndr)
 
-        ; let wrap_alt (con, args, rhs) = ASSERT( outer_bndr `notElem` args )
-                                          (con, args, wrap_rhs rhs)
+        ; let wrap_alt (con, args, rhs, freq) = ASSERT( outer_bndr `notElem` args )
+                                          (con, args, wrap_rhs rhs, freq)
                 -- Simplifier's no-shadowing invariant should ensure
                 -- that outer_bndr is not shadowed by the inner patterns
               wrap_rhs rhs = Let (NonRec inner_bndr (Var outer_bndr)) rhs
@@ -2062,13 +2063,14 @@ mkCase dflags scrut bndr alts_ty alts = mkCase1 dflags scrut bndr alts_ty alts
 --      2. Eliminate Identity Case
 --------------------------------------------------
 
-mkCase1 _dflags scrut case_bndr _ alts@((_,_,rhs1) : _)      -- Identity case
+--TODOF: Check (probably ok?)
+mkCase1 _dflags scrut case_bndr _ alts@((_,_,rhs1,_f1) : _)      -- Identity case
   | all identity_alt alts
   = do { tick (CaseIdentity case_bndr)
        ; return (mkTicks ticks $ re_cast scrut rhs1) }
   where
-    ticks = concatMap (stripTicksT tickishFloatable . thdOf3) (tail alts)
-    identity_alt (con, args, rhs) = check_eq rhs con args
+    ticks = concatMap (stripTicksT tickishFloatable . (\(_,_,e,_) -> e)) (tail alts)
+    identity_alt (con, args, rhs,_f) = check_eq rhs con args
 
     check_eq (Cast rhs co) con args        -- See Note [RHS casts]
       = not (any (`elemVarSet` tyCoVarsOfCo co) args) && check_eq rhs con args
@@ -2110,8 +2112,8 @@ mkCase1 dflags scrut bndr alts_ty alts = mkCase2 dflags scrut bndr alts_ty alts
 mkCase2 dflags scrut bndr alts_ty alts
   | -- See Note [Scrutinee Constant Folding]
     case alts of  -- Not if there is just a DEFAULT alternative
-      [(DEFAULT,_,_)] -> False
-      _               -> True
+      [(DEFAULT,_,_,_)] -> False
+      _                 -> True
   , gopt Opt_CaseFolding dflags
   , Just (scrut', tx_con, mk_orig) <- caseRules dflags scrut
   = do { bndr' <- newId (fsLit "lwild") (exprType scrut')
@@ -2139,16 +2141,16 @@ mkCase2 dflags scrut bndr alts_ty alts
     -- to construct an expression equivalent to the original one, for use
     -- in the DEFAULT case
 
-    tx_alt tx_con mk_orig new_bndr (con, bs, rhs)
+    tx_alt tx_con mk_orig new_bndr (con, bs, rhs, f)
       | DataAlt dc <- con', not (isNullaryRepDataCon dc)
       = -- For non-nullary data cons we must invent some fake binders
         -- See Note [caseRules for dataToTag] in PrelRules
         do { us <- getUniquesM
            ; let (ex_tvs, arg_ids) = dataConRepInstPat us dc
                                          (tyConAppArgs (idType new_bndr))
-           ; return (con', ex_tvs ++ arg_ids, rhs') }
+           ; return (con', ex_tvs ++ arg_ids, rhs', f) }
       | otherwise
-      = return (con', [], rhs')
+      = return (con', [], rhs', f)
       where
         con' = tx_con con
 
@@ -2163,12 +2165,13 @@ mkCase2 dflags scrut bndr alts_ty alts
 
     re_sort :: [CoreAlt] -> [CoreAlt]  -- Re-sort the alternatives to
     re_sort alts = sortBy cmpAlt alts  -- preserve the #case_invariants#
-
+    
+    --TODO: Isn't there a function for this already
     add_default :: [CoreAlt] -> [CoreAlt]
     -- TagToEnum may change a boolean True/False set of alternatives
     -- to LitAlt 0#/1# alternatives.  But literal alternatives always
     -- have a DEFAULT (I think).  So add it.
-    add_default ((LitAlt {}, bs, rhs) : alts) = (DEFAULT, bs, rhs) : alts
+    add_default ((LitAlt {}, bs, rhs, f) : alts) = (DEFAULT, bs, rhs, f) : alts
     add_default alts                          = alts
 
 --------------------------------------------------

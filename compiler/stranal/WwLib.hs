@@ -803,7 +803,7 @@ mkWWcpr_help (data_con, inst_tys, arg_tys, co)
              con_app   = mkConApp2 data_con inst_tys [arg] `mkCast` mkSymCo co
 
        ; return ( True
-                , \ wkr_call -> Case wkr_call arg (exprType con_app) [(DEFAULT, [], con_app)]
+                , \ wkr_call -> Case wkr_call arg (exprType con_app) [(DEFAULT, [], con_app, defFreq)]
                 , \ body     -> mkUnpackCase body co work_uniq data_con [arg] (varToCoreExpr arg)
                                 -- varToCoreExpr important here: arg can be a coercion
                                 -- Lacking this caused Trac #10658
@@ -820,7 +820,7 @@ mkWWcpr_help (data_con, inst_tys, arg_tys, co)
              con_app     = mkConApp2 data_con inst_tys args `mkCast` mkSymCo co
 
        ; return (True
-                , \ wkr_call -> Case wkr_call wrap_wild (exprType con_app)  [(DataAlt (tupleDataCon Unboxed (length arg_tys)), args, con_app)]
+                , \ wkr_call -> Case wkr_call wrap_wild (exprType con_app)  [(DataAlt (tupleDataCon Unboxed (length arg_tys)), args, con_app, defFreq)] --TODOF: Check
                 , \ body     -> mkUnpackCase body co work_uniq data_con args ubx_tup_app
                 , ubx_tup_ty ) }
 
@@ -833,7 +833,7 @@ mkUnpackCase (Tick tickish e) co uniq con args body   -- See Note [Profiling and
   = Tick tickish (mkUnpackCase e co uniq con args body)
 mkUnpackCase scrut co uniq boxing_con unpk_args body
   = Case casted_scrut bndr (exprType body)
-         [(DataAlt boxing_con, unpk_args, body)]
+         [(DataAlt boxing_con, unpk_args, body, defFreq)] --TODOF: Check
   where
     casted_scrut = scrut `mkCast` co
     bndr = mk_ww_local uniq (exprType casted_scrut, MarkedStrict)
@@ -944,7 +944,7 @@ mk_absent_let dflags arg
               -- See also Note [Unique Determinism] in Unique
 
 mk_seq_case :: Id -> CoreExpr -> CoreExpr
-mk_seq_case arg body = Case (Var arg) (sanitiseCaseBndr arg) (exprType body) [(DEFAULT, [], body)]
+mk_seq_case arg body = Case (Var arg) (sanitiseCaseBndr arg) (exprType body) [(DEFAULT, [], body, defFreq)] --TODOF: Check
 
 sanitiseCaseBndr :: Id -> Id
 -- The argument we are scrutinising has the right type to be

@@ -499,33 +499,34 @@ cseCase env scrut bndr ty alts
 
     -- Given case x of { K y z -> ...K y z... }
     -- CSE K y z into x...
-    cse_alt (DataAlt con, args, rhs)
+    cse_alt (DataAlt con, args, rhs, freq)
         | not (null args)
                 -- ... but don't try CSE if there are no args; it just increases the number
                 -- of live vars.  E.g.
                 --      case x of { True -> ....True.... }
                 -- Don't replace True by x!
                 -- Hence the 'null args', which also deal with literals and DEFAULT
-        = (DataAlt con, args', tryForCSE new_env rhs)
+        = (DataAlt con, args', tryForCSE new_env rhs, freq)
         where
           (env', args') = addBinders alt_env args
           new_env       = extendCSEnv env' con_expr con_target
           con_expr      = mkAltExpr (DataAlt con) args' arg_tys
 
-    cse_alt (con, args, rhs)
-        = (con, args', tryForCSE env' rhs)
+    cse_alt (con, args, rhs, freq)
+        = (con, args', tryForCSE env' rhs, freq)
         where
           (env', args') = addBinders alt_env args
 
+--TODOF: Check this!
 combineAlts :: CSEnv -> [InAlt] -> [InAlt]
 -- See Note [Combine case alternatives]
-combineAlts env ((_,bndrs1,rhs1) : rest_alts)
+combineAlts env ((_,bndrs1,rhs1,freq1) : rest_alts)
   | all isDeadBinder bndrs1
-  = (DEFAULT, [], rhs1) : filtered_alts
+  = (DEFAULT, [], rhs1, freq1) : filtered_alts
   where
     in_scope = substInScope (csEnvSubst env)
     filtered_alts = filterOut identical rest_alts
-    identical (_con, bndrs, rhs) = all ok bndrs && eqExpr in_scope rhs1 rhs
+    identical (_con, bndrs, rhs, _) = all ok bndrs && eqExpr in_scope rhs1 rhs
     ok bndr = isDeadBinder bndr || not (bndr `elemInScopeSet` in_scope)
 
 combineAlts _ alts = alts  -- Default case

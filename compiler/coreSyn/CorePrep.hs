@@ -654,10 +654,10 @@ cpeRhsE env (Case scrut bndr ty alts)
        ; alts'' <- mapM (sat_alt env') alts'
        ; return (floats, Case scrut' bndr2 ty alts'') }
   where
-    sat_alt env (con, bs, rhs)
+    sat_alt env (con, bs, rhs, freq)
        = do { (env2, bs') <- cpCloneBndrs env bs
             ; rhs' <- cpeBodyNF env2 rhs
-            ; return (con, bs', rhs') }
+            ; return (con, bs', rhs', freq) }
 
 cvtLitInteger :: DynFlags -> Id -> Maybe DataCon -> Integer -> CoreExpr
 -- Here we convert a literal Integer to the low-level
@@ -1065,7 +1065,7 @@ saturateDataToTag sat_expr
         = do { arg_id <- newVar (exprType arg)
              ; let arg_id1 = setIdUnfolding arg_id evaldUnfolding
              ; return (Case arg arg_id1 (exprType app)
-                            [(DEFAULT, [], fun `App` Var arg_id1)]) }
+                            [(DEFAULT, [], fun `App` Var arg_id1, defFreq)]) } --TODOF: Check
 
     eval_data2tag_arg (Tick t app)    -- Scc notes can appear
         = do { app' <- eval_data2tag_arg app
@@ -1276,7 +1276,7 @@ wrapBinds :: Floats -> CpeBody -> CpeBody
 wrapBinds (Floats _ binds) body
   = foldrOL mk_bind body binds
   where
-    mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
+    mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT, [], body, defFreq)]
     mk_bind (FloatLet bind)        body = Let bind body
     mk_bind (FloatTick tickish)    body = mkTick tickish body
 

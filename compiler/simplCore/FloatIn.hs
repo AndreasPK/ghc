@@ -432,7 +432,7 @@ bindings are:
 
 -}
 
-fiExpr dflags to_drop (_, AnnCase scrut case_bndr _ [(con,alt_bndrs,rhs)])
+fiExpr dflags to_drop (_, AnnCase scrut case_bndr _ [(con,alt_bndrs,rhs,_f)]) --TODOF: Check!
   | isUnliftedType (idType case_bndr)
   , exprOkForSideEffects (deAnnotate scrut)
       -- See Note [Floating primops]
@@ -470,12 +470,12 @@ fiExpr dflags to_drop (_, AnnCase scrut case_bndr ty alts)
     scrut_fvs    = freeVarsOf scrut
     alts_fvs     = map alt_fvs alts
     all_alts_fvs = unionDVarSets alts_fvs
-    alt_fvs (_con, args, rhs)
+    alt_fvs (_con, args, rhs, _f)
       = foldl delDVarSet (freeVarsOf rhs) (case_bndr:args)
            -- Delete case_bndr and args from free vars of rhs
            -- to get free vars of alt
 
-    fi_alt to_drop (con, args, rhs) = (con, args, fiExpr dflags to_drop rhs)
+    fi_alt to_drop (con, args, rhs, f) = (con, args, fiExpr dflags to_drop rhs, f)
 
 ------------------
 fiBind :: DynFlags

@@ -647,7 +647,7 @@ sizeExpr dflags bOMB_OUT_SIZE top_args expr
            _                -> funSize dflags top_args fun (length val_args) voids
 
     ------------
-    size_up_alt (_con, _bndrs, rhs) = size_up rhs `addSizeN` 10
+    size_up_alt (_con, _bndrs, rhs, _freq) = size_up rhs `addSizeN` 10
         -- Don't charge for args, so that wrappers look cheap
         -- (See comments about wrappers with Case)
         --

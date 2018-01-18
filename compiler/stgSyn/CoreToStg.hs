@@ -435,21 +435,21 @@ coreToStgExpr (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
-    vars_alt (con, binders, rhs)
+    vars_alt (con, binders, rhs, freq)
       | DataAlt c <- con, c == unboxedUnitDataCon
       = -- This case is a bit smelly.
         -- See Note [Nullary unboxed tuple] in Type.hs
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
         do { (rhs2, rhs_fvs) <- coreToStgExpr rhs
-           ; return ((DEFAULT, [], rhs2), rhs_fvs) }
+           ; return ((DEFAULT, [], rhs2, freq), rhs_fvs) }
       | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
         extendVarEnvCts [(b, LambdaBound) | b <- binders'] $ do
         (rhs2, rhs_fvs) <- coreToStgExpr rhs
-        return ( (con, binders', rhs2),
+        return ( (con, binders', rhs2, freq),
                  binders' `minusFVBinders` rhs_fvs )
 
 coreToStgExpr (Let bind body) = do
@@ -489,7 +489,7 @@ mkStgAltType bndr alts
    -- grabbing the one from a constructor alternative
    -- if one exists.
    look_for_better_tycon
-        | ((DataAlt con, _, _) : _) <- data_alts =
+        | ((DataAlt con, _, _, _) : _) <- data_alts =
                 AlgAlt (dataConTyCon con)
         | otherwise =
                 ASSERT(null data_alts)
