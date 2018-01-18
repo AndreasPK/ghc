@@ -1328,7 +1328,7 @@ repE (HsCase _ e (MG { mg_alts = (dL->L _ ms) }))
                                ; ms2 <- mapM repMatchTup ms
                                ; core_ms2 <- coreList matchQTyConName ms2
                                ; repCaseE arg core_ms2 }
-repE (HsIf _ _ x y z)       = do
+repE (HsIf _ _ x y z _)     = do  --TODO: Weight support in TH
                               a <- repLE x
                               b <- repLE y
                               c <- repLE z
@@ -1448,7 +1448,7 @@ repClauseTup (dL->L _ (Match _ _ _ (XGRHSs _))) = panic "repClauseTup"
 repClauseTup _ = panic "repClauseTup"
 
 repGuards ::  [LGRHS GhcRn (LHsExpr GhcRn)] ->  DsM (Core TH.BodyQ)
-repGuards [dL->L _ (GRHS _ [] e)]
+repGuards [dL->L _ (GRHS _ [] e _weight)] --TODO
   = do {a <- repLE e; repNormal a }
 repGuards other
   = do { zs <- mapM repLGRHS other
@@ -1458,10 +1458,10 @@ repGuards other
 
 repLGRHS :: LGRHS GhcRn (LHsExpr GhcRn)
          -> DsM ([GenSymBind], (Core (TH.Q (TH.Guard, TH.Exp))))
-repLGRHS (dL->L _ (GRHS _ [dL->L _ (BodyStmt _ e1 _ _)] e2))
+repLGRHS (dL->L _ (GRHS _ [dL->L _ (BodyStmt _ e1 _ _)] e2 _weight)) --TODO
   = do { guarded <- repLNormalGE e1 e2
        ; return ([], guarded) }
-repLGRHS (dL->L _ (GRHS _ ss rhs))
+repLGRHS (dL->L _ (GRHS _ ss rhs _weight)) --TODO
   = do { (gs, ss') <- repLSts ss
        ; rhs' <- addBinds gs $ repLE rhs
        ; guarded <- repPatGE (nonEmptyCoreList ss') rhs'
@@ -1796,7 +1796,7 @@ repExplBidirPatSynDir (MkC cls) = rep2 explBidirPatSynName [cls]
 
 repLambda :: LMatch GhcRn (LHsExpr GhcRn) -> DsM (Core TH.ExpQ)
 repLambda (dL->L _ (Match { m_pats = ps
-                          , m_grhss = GRHSs _ [dL->L _ (GRHS _ [] e)]
+                          , m_grhss = GRHSs _ [dL->L _ (GRHS _ [] e _weight)] --TODO
                                               (dL->L _ (EmptyLocalBinds _)) } ))
  = do { let bndrs = collectPatsBinders ps ;
       ; ss  <- mkGenSyms bndrs

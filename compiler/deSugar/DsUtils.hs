@@ -84,6 +84,7 @@ import qualified GHC.LanguageExtensions as LangExt
 import TcEvidence
 
 import Control.Monad    ( zipWithM )
+import Data.Maybe (fromMaybe)
 
 {-
 ************************************************************************
@@ -244,7 +245,7 @@ wrapBind new old body   -- NB: this function must deal with term
 
 seqVar :: Var -> CoreExpr -> CoreExpr
 seqVar var body = Case (Var var) var (exprType body)
-                        [(DEFAULT, [], body)]
+                        [(DEFAULT alwaysFreq, [], body)]
 
 mkCoLetMatchResult :: CoreBind -> MatchResult -> MatchResult
 mkCoLetMatchResult bind = adjustMatchResult (mkCoreLet bind)
@@ -257,47 +258,61 @@ mkViewMatchResult var' viewExpr =
 
 mkEvalMatchResult :: Id -> Type -> MatchResult -> MatchResult
 mkEvalMatchResult var ty
-  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT, [], e)])
+  = adjustMatchResult (\e -> Case (Var var) var ty [(DEFAULT alwaysFreq, [], e)])
 
-mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
-mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
-  = MatchResult CanFail (\fail -> do body <- body_fn fail
-                                     return (mkIfThenElse pred_expr body fail))
+mkGuardedMatchResult :: CoreExpr -> MatchResult
+                     -> Maybe (BranchWeight, BranchWeight)
+                     -> MatchResult
+mkGuardedMatchResult pred_expr (MatchResult _ body_fn) weights
+  = MatchResult CanFail
+                (\fail -> do body <- body_fn fail --TODOW: Should we consider weights here?
+                             return (mkIfThenElse pred_expr body fail weights))
 
-mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
-                        -> Type                      -- Type of the case
-                        -> [(Literal, MatchResult)]  -- Alternatives
-                        -> MatchResult               -- Literals are all unlifted
-mkCoPrimCaseMatchResult var ty match_alts
+mkCoPrimCaseMatchResult :: Id                -- ^ Scrutinee
+                        -> Type              -- ^ Type of the case
+                        -> [(Literal, Maybe BranchWeight, MatchResult)]  -- ^ Alternatives
+                        -> Maybe BranchWeight -- ^ Weight for match failure
+                        -> MatchResult        -- ^ Literals are all unlifted
+mkCoPrimCaseMatchResult var ty match_alts fail_weight
   = MatchResult CanFail mk_case
   where
+
     mk_case fail = do
         alts <- mapM (mk_alt fail) sorted_alts
-        return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
+        let def_weight = fromMaybe defaultFreq fail_weight
+        return (Case (Var var) var ty
+                  ((DEFAULT def_weight, [], fail) : alts)) --TODOW: Freq?
 
-    sorted_alts = sortWith fst match_alts       -- Right order for a Case
-    mk_alt fail (lit, MatchResult _ body_fn)
+    sorted_alts = sortWith fstOf3 match_alts       -- Right order for a Case
+    mk_alt fail (lit, weight, MatchResult _ body_fn)
        = ASSERT( not (litIsLifted lit) )
          do body <- body_fn fail
-            return (LitAlt lit, [], body)
+            return (LitAlt lit (fromMaybe defaultFreq weight), [], body)
 
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_bndrs :: [Var],
                             alt_wrapper :: HsWrapper,
-                            alt_result :: MatchResult }
+                            alt_result :: MatchResult,
+                            alt_weight :: Maybe BranchWeight }
+
+instance Outputable a => Outputable (CaseAlt a) where
+  ppr (MkCaseAlt p bndr _wrap _res w) =
+    parens $ text "MkCase" <+> ppr p <+> ppr bndr <+> ppr w
 
 mkCoAlgCaseMatchResult
   :: Id                 -- Scrutinee
   -> Type               -- Type of exp
   -> [CaseAlt DataCon]  -- Alternatives (bndrs *include* tyvars, dicts)
+  -> Maybe BranchWeight -- Likelyhood for default alternative
   -> MatchResult
-mkCoAlgCaseMatchResult var ty match_alts
+mkCoAlgCaseMatchResult var ty match_alts fail_weight
   | isNewtype  -- Newtype case; use a let
   = ASSERT( null (tail match_alts) && null (tail arg_ids1) )
     mkCoLetMatchResult (NonRec arg_id1 newtype_rhs) match_result1
 
   | otherwise
-  = mkDataConCase var ty match_alts
+  = -- pprTrace "mkCoCalg-alts" (ppr match_alts) $
+    mkDataConCase var ty match_alts fail_weight
   where
     isNewtype = isNewTyCon (dataConTyCon (alt_pat alt1))
 
@@ -338,9 +353,11 @@ mkPatSynCase var ty alt fail = do
     ensure_unstrict cont | needs_void_lam = Lam voidArgId cont
                          | otherwise      = cont
 
-mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> MatchResult
-mkDataConCase _   _  []            = panic "mkDataConCase: no alternatives"
-mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
+mkDataConCase :: Id -> Type -> [CaseAlt DataCon] -> Maybe BranchWeight
+              -> MatchResult
+mkDataConCase _   _  []            _ = panic "mkDataConCase: no alternatives"
+mkDataConCase var ty alts@(alt1:_) fail_weight =
+    MatchResult fail_flag mk_case
   where
     con1          = alt_pat alt1
     tycon         = dataConTyCon con1
@@ -362,18 +379,24 @@ mkDataConCase var ty alts@(alt1:_) = MatchResult fail_flag mk_case
     mk_alt :: CoreExpr -> CaseAlt DataCon -> DsM CoreAlt
     mk_alt fail MkCaseAlt{ alt_pat = con,
                            alt_bndrs = args,
-                           alt_result = MatchResult _ body_fn }
+                           alt_result = MatchResult _ body_fn,
+                           alt_weight = weight }
       = do { body <- body_fn fail
            ; case dataConBoxer con of {
-                Nothing -> return (DataAlt con, args, body) ;
+                Nothing -> return (DataAlt con conWeight, args, body) ;
                 Just (DCB boxer) ->
         do { us <- newUniqueSupply
            ; let (rep_ids, binds) = initUs_ us (boxer ty_args args)
-           ; return (DataAlt con, rep_ids, mkLets binds body) } } }
+            --TODO: If a case does not match all constructors, then the default
+            --      should probably add up the the sum of the missing constructor defaults.
+           ; return (DataAlt con conWeight, rep_ids, mkLets binds body) } } } --TODO: Freq?
+      where
+        conWeight = fromMaybe (fromMaybe defaultFreq $ dataConWeight con)  weight
 
     mk_default :: CoreExpr -> [CoreAlt]
     mk_default fail | exhaustive_case = []
-                    | otherwise       = [(DEFAULT, [], fail)]
+                    | otherwise       =
+                      [(DEFAULT (fromMaybe defaultFreq fail_weight), [], fail)]
 
     fail_flag :: CanItFail
     fail_flag | exhaustive_case
@@ -480,7 +503,7 @@ which stupidly tries to bind the datacon 'True'.
 mkCoreAppDs  :: SDoc -> CoreExpr -> CoreExpr -> CoreExpr
 mkCoreAppDs _ (Var f `App` Type ty1 `App` Type ty2 `App` arg1) arg2
   | f `hasKey` seqIdKey            -- Note [Desugaring seq (1), (2)]
-  = Case arg1 case_bndr ty2 [(DEFAULT,[],arg2)]
+  = Case arg1 case_bndr ty2 [(DEFAULT alwaysFreq,[],arg2)]
   where
     case_bndr = case arg1 of
                    Var v1 | isInternalName (idName v1)
@@ -682,6 +705,7 @@ mkSelectorBinds ticks pat val_expr
                = do { rhs_expr <- matchSimply (Var val_var) PatBindRhs pat'
                                        (Var bndr_var)
                                        (Var bndr_var)  -- Neat hack
+                                       Nothing
                       -- Neat hack: since 'pat' can't fail, the
                       -- "fail-expr" passed to matchSimply is not
                       -- used. But it /is/ used for its type, and for
@@ -695,7 +719,7 @@ mkSelectorBinds ticks pat val_expr
   = do { tuple_var  <- newSysLocalDs tuple_ty
        ; error_expr <- mkErrorAppDs pAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
-                                   local_tuple error_expr
+                                   local_tuple error_expr Nothing
        ; let mk_tup_bind tick binder
                = (binder, mkOptTickBox tick $
                           mkTupleSelector1 local_binders binder
@@ -901,8 +925,8 @@ mkBinaryTickBox ixT ixF e = do
            trueBox  = Tick (HpcTick this_mod ixT) (Var trueDataConId)
        --
        return $ Case e bndr1 boolTy
-                       [ (DataAlt falseDataCon, [], falseBox)
-                       , (DataAlt trueDataCon,  [], trueBox)
+                       [ (DataAlt falseDataCon defaultFreq, [], falseBox)
+                       , (DataAlt trueDataCon defaultFreq,  [], trueBox)
                        ]
 
 

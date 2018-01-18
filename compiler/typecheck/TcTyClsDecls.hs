@@ -1091,7 +1091,7 @@ kcConDecl (ConDeclGADT { con_names = names
        ; _ <- tcHsOpenType res_ty
        ; return () }
 kcConDecl (XConDecl _) = panic "kcConDecl"
-kcConDecl (ConDeclGADT _ _ _ (XLHsQTyVars _) _ _ _ _) = panic "kcConDecl"
+kcConDecl (ConDeclGADT _ _ _ (XLHsQTyVars _) _ _ _ _ _) = panic "kcConDecl"
 
 {-
 Note [Recursion and promoting data constructors]
@@ -2118,7 +2118,8 @@ tcConDecl rep_tycon tag_map tmpl_bndrs res_tmpl
           (ConDeclH98 { con_name = name
                       , con_ex_tvs = explicit_tkv_nms
                       , con_mb_cxt = hs_ctxt
-                      , con_args = hs_args })
+                      , con_args = hs_args
+                      , con_weight = weight })
   = addErrCtxt (dataConCtxtName [name]) $
     do { -- NB: the tyvars from the declaration header are in scope
 
@@ -2185,7 +2186,7 @@ tcConDecl rep_tycon tag_map tmpl_bndrs res_tmpl
                             stricts Nothing field_lbls
                             univ_tvs ex_tvs user_tvbs
                             [{- no eq_preds -}] ctxt arg_tys
-                            res_tmpl rep_tycon tag_map
+                            res_tmpl rep_tycon tag_map weight
                   -- NB:  we put data_tc, the type constructor gotten from the
                   --      constructor type signature into the data constructor;
                   --      that way checkValidDataCon can complain if it's wrong.
@@ -2198,7 +2199,8 @@ tcConDecl rep_tycon tag_map tmpl_bndrs res_tmpl
           (ConDeclGADT { con_names = names
                        , con_qvars = qtvs
                        , con_mb_cxt = cxt, con_args = hs_args
-                       , con_res_ty = hs_res_ty })
+                       , con_res_ty = hs_res_ty
+                       , con_weight = weight })
   | HsQTvs { hsq_ext = HsQTvsRn { hsq_implicit = implicit_tkv_nms }
            , hsq_explicit = explicit_tkv_nms } <- qtvs
   = addErrCtxt (dataConCtxtName names) $
@@ -2264,7 +2266,7 @@ tcConDecl rep_tycon tag_map tmpl_bndrs res_tmpl
                             rep_nm
                             stricts Nothing field_lbls
                             univ_tvs ex_tvs all_user_bndrs eq_preds
-                            ctxt' arg_tys' res_ty' rep_tycon tag_map
+                            ctxt' arg_tys' res_ty' rep_tycon tag_map weight
                   -- NB:  we put data_tc, the type constructor gotten from the
                   --      constructor type signature into the data constructor;
                   --      that way checkValidDataCon can complain if it's wrong.
@@ -2272,7 +2274,7 @@ tcConDecl rep_tycon tag_map tmpl_bndrs res_tmpl
        ; traceTc "tcConDecl 2" (ppr names)
        ; mapM buildOneDataCon names
        }
-tcConDecl _ _ _ _ (ConDeclGADT _ _ _ (XLHsQTyVars _) _ _ _ _)
+tcConDecl _ _ _ _ (ConDeclGADT _ _ _ (XLHsQTyVars _) _ _ _ _ _)
   = panic "tcConDecl"
 tcConDecl _ _ _ _ (XConDecl _) = panic "tcConDecl"
 

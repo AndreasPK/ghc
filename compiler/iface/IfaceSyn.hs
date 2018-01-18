@@ -259,7 +259,8 @@ data IfaceConDecl
           -- Empty (meaning all lazy),
           -- or 1-1 corresp with arg tys
           -- See Note [Bangs on imported data constructors] in MkId
-        ifConSrcStricts :: [IfaceSrcBang] } -- empty meaning no src stricts
+        ifConSrcStricts :: [IfaceSrcBang],  -- ^ empty meaning no src stricts
+        ifConWeight  :: Maybe BranchWeight }
 
 type IfaceEqSpec = [(IfLclName,IfaceType)]
 
@@ -505,9 +506,11 @@ type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr)
         -- We reconstruct the kind/type of the thing from the context
         -- thus saving bulk in interface files
 
-data IfaceConAlt = IfaceDefault
-                 | IfaceDataAlt IfExtName
-                 | IfaceLitAlt Literal
+--TODO: IfaceBranchWeight
+
+data IfaceConAlt = IfaceDefault BranchWeight
+                 | IfaceDataAlt IfExtName BranchWeight
+                 | IfaceLitAlt Literal BranchWeight
 
 data IfaceBinding
   = IfaceNonRec IfaceLetBndr IfaceExpr
@@ -1276,9 +1279,9 @@ pprIfaceApp fun                args = sep (pprParendIfaceExpr fun : args)
 
 ------------------
 instance Outputable IfaceConAlt where
-    ppr IfaceDefault      = text "DEFAULT"
-    ppr (IfaceLitAlt l)   = ppr l
-    ppr (IfaceDataAlt d)  = ppr d
+    ppr (IfaceDefault w)   = text "DEFAULT" <+> ppr w --TODOW:Check - Format
+    ppr (IfaceLitAlt l w)  = ppr l  <+> ppr w
+    ppr (IfaceDataAlt d w) = ppr d  <+> ppr w
 
 ------------------
 instance Outputable IfaceIdDetails where
@@ -1586,10 +1589,10 @@ freeNamesIfExpr (IfaceCase s _ alts)
 
     -- Depend on the data constructors.  Just one will do!
     -- Note [Tracking data constructors]
-    fn_cons []                            = emptyNameSet
-    fn_cons ((IfaceDefault    ,_,_) : xs) = fn_cons xs
-    fn_cons ((IfaceDataAlt con,_,_) : _ ) = unitNameSet con
-    fn_cons (_                      : _ ) = emptyNameSet
+    fn_cons []                              = emptyNameSet
+    fn_cons ((IfaceDefault     _,_,_) : xs) = fn_cons xs
+    fn_cons ((IfaceDataAlt con _,_,_) : _ ) = unitNameSet con
+    fn_cons (_                      : _ )   = emptyNameSet
 
 freeNamesIfExpr (IfaceLet (IfaceNonRec bndr rhs) body)
   = freeNamesIfLetBndr bndr &&& freeNamesIfExpr rhs &&& freeNamesIfExpr body
@@ -1937,7 +1940,7 @@ instance Binary IfaceConDecls where
             _ -> error "Binary(IfaceConDecls).get: Invalid IfaceConDecls"
 
 instance Binary IfaceConDecl where
-    put_ bh (IfCon a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11) = do
+    put_ bh (IfCon a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12) = do
         putIfaceTopBndr bh a1
         put_ bh a2
         put_ bh a3
@@ -1950,6 +1953,7 @@ instance Binary IfaceConDecl where
         mapM_ (put_ bh) a9
         put_ bh a10
         put_ bh a11
+        put_ bh a12
     get bh = do
         a1 <- getIfaceTopBndr bh
         a2 <- get bh
@@ -1963,7 +1967,8 @@ instance Binary IfaceConDecl where
         a9 <- replicateM n_fields (get bh)
         a10 <- get bh
         a11 <- get bh
-        return (IfCon a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+        a12 <- get bh
+        return (IfCon a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
 
 instance Binary IfaceBang where
     put_ bh IfNoBang        = putByte bh 0
@@ -2262,15 +2267,30 @@ instance Binary IfaceTickish where
             _ -> panic ("get IfaceTickish " ++ show h)
 
 instance Binary IfaceConAlt where
-    put_ bh IfaceDefault      = putByte bh 0
-    put_ bh (IfaceDataAlt aa) = putByte bh 1 >> put_ bh aa
-    put_ bh (IfaceLitAlt ac)  = putByte bh 2 >> put_ bh ac
+    put_ bh (IfaceDefault w)    = putByte bh 0 >> put_ bh w
+    put_ bh (IfaceDataAlt aa w) = putByte bh 1 >> put_ bh aa >> put_ bh w
+    put_ bh (IfaceLitAlt ac w)  = putByte bh 2 >> put_ bh ac >> put_ bh w
     get bh = do
         h <- getByte bh
         case h of
-            0 -> return IfaceDefault
-            1 -> liftM IfaceDataAlt $ get bh
-            _ -> liftM IfaceLitAlt  $ get bh
+            0 -> liftM IfaceDefault $ get bh
+            1 -> pure IfaceDataAlt <*> get bh <*> get bh
+            _ -> pure IfaceLitAlt  <*> get bh <*> get bh
+
+--TODOW: Properly do this
+instance Binary BranchWeight where
+  put_ bh UnknownWeight = putByte bh 0
+  put_ bh (CompilerDefault w) = putByte bh 1 >> put_ bh w
+  put_ bh (ConDefaultWeight w) = putByte bh 2 >> put_ bh w
+  put_ bh (UserWeight w) = putByte bh 3 >> put_ bh w
+
+  get bh = do
+    h <- getByte bh
+    case h of
+      0 -> return UnknownWeight
+      1 -> pure CompilerDefault <*> get bh
+      2 -> pure ConDefaultWeight <*> get bh
+      3 -> pure UserWeight <*> get bh
 
 instance Binary IfaceBinding where
     put_ bh (IfaceNonRec aa ab) = putByte bh 0 >> put_ bh aa >> put_ bh ab

@@ -322,12 +322,12 @@ rnExpr (ExprWithTySig _ expr pty)
                              rnLExpr expr
         ; return (ExprWithTySig noExt expr' pty', fvExpr `plusFV` fvTy) }
 
-rnExpr (HsIf x _ p b1 b2)
+rnExpr (HsIf x _ p b1 b2 ws)
   = do { (p', fvP) <- rnLExpr p
        ; (b1', fvB1) <- rnLExpr b1
        ; (b2', fvB2) <- rnLExpr b2
        ; (mb_ite, fvITE) <- lookupIfThenElse
-       ; return (HsIf x mb_ite p' b1' b2', plusFVs [fvITE, fvP, fvB1, fvB2]) }
+       ; return (HsIf x mb_ite p' b1' b2' ws, plusFVs [fvITE, fvP, fvB1, fvB2]) }
 
 rnExpr (HsMultiIf x alts)
   = do { (alts', fvs) <- mapFvRn (rnGRHS IfAlt rnLExpr) alts
@@ -605,7 +605,7 @@ methodNamesGRHSs (XGRHSs _) = panic "methodNamesGRHSs"
 -------------------------------------------------
 
 methodNamesGRHS :: Located (GRHS GhcRn (LHsCmd GhcRn)) -> CmdNeeds
-methodNamesGRHS (L _ (GRHS _ _ rhs)) = methodNamesLCmd rhs
+methodNamesGRHS (L _ (GRHS _ _ rhs _)) = methodNamesLCmd rhs
 methodNamesGRHS (L _ (XGRHS _)) = panic "methodNamesGRHS"
 
 ---------------------------------------------------

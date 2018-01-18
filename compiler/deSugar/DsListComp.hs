@@ -26,6 +26,7 @@ import MkCore
 import DsMonad          -- the monadery used in the desugarer
 import DsUtils
 
+import BasicTypes
 import DynFlags
 import CoreUtils
 import Id
@@ -231,7 +232,7 @@ deListComp (LastStmt _ body _ _ : quals) list
 deListComp (BodyStmt _ guard _ _ : quals) list = do  -- rule B above
     core_guard <- dsLExpr guard
     core_rest <- deListComp quals list
-    return (mkIfThenElse core_guard core_rest list)
+    return (mkIfThenElse core_guard core_rest list Nothing)
 
 -- [e | let B, qs] = let B in [e | qs]
 deListComp (LetStmt _ binds : quals) list = do
@@ -294,13 +295,13 @@ deBindComp pat core_list1 quals core_list2 = do
         letrec_body = App (Var h) core_list1
 
     rest_expr <- deListComp quals core_fail
-    core_match <- matchSimply (Var u2) (StmtCtxt ListComp) pat rest_expr core_fail
+    core_match <- matchSimply (Var u2) (StmtCtxt ListComp) pat rest_expr core_fail Nothing
 
     let
         rhs = Lam u1 $
               Case (Var u1) u1 res_ty
-                   [(DataAlt nilDataCon,  [],       core_list2),
-                    (DataAlt consDataCon, [u2, u3], core_match)]
+                   [(DataAlt nilDataCon rareFreq,  [],       core_list2),
+                    (DataAlt consDataCon oftenFreq, [u2, u3], core_match)]
                         -- Increasing order of tag
 
     return (Let (Rec [(h, rhs)]) letrec_body)
@@ -341,7 +342,7 @@ dfListComp c_id n_id (LastStmt _ body _ _ : quals)
 dfListComp c_id n_id (BodyStmt _ guard _ _  : quals) = do
     core_guard <- dsLExpr guard
     core_rest <- dfListComp c_id n_id quals
-    return (mkIfThenElse core_guard core_rest (Var n_id))
+    return (mkIfThenElse core_guard core_rest (Var n_id) Nothing)
 
 dfListComp c_id n_id (LetStmt _ binds : quals) = do
     -- new in 1.3, local bindings
@@ -385,7 +386,7 @@ dfBindComp c_id n_id (pat, core_list1) quals = do
 
     -- build the pattern match
     core_expr <- matchSimply (Var x) (StmtCtxt ListComp)
-                pat core_rest (Var b)
+                pat core_rest (Var b) Nothing
 
     -- now build the outermost foldr, and return
     mkFoldrExpr x_ty b_ty (mkLams [x, b] core_expr) (Var n_id) core_list1
@@ -429,8 +430,8 @@ mkZipBind elt_tys = do
 
     mk_case (as, a', as') rest
           = Case (Var as) as elt_tuple_list_ty
-                  [(DataAlt nilDataCon,  [],        mkNilExpr elt_tuple_ty),
-                   (DataAlt consDataCon, [a', as'], rest)]
+                  [(DataAlt nilDataCon rareFreq,  [],        mkNilExpr elt_tuple_ty),
+                   (DataAlt consDataCon oftenFreq, [a', as'], rest)]
                         -- Increasing order of tag
 
 
@@ -623,7 +624,7 @@ dsMcBindStmt pat rhs' bind_op fail_op res1_ty stmts
   = do  { body     <- dsMcStmts stmts
         ; var      <- selectSimpleMatchVarL pat
         ; match <- matchSinglePatVar var (StmtCtxt DoExpr) pat
-                                  res1_ty (cantFailMatchResult body)
+                                  res1_ty (cantFailMatchResult body) Nothing Nothing
         ; match_code <- handle_failure pat match fail_op
         ; dsSyntaxExpr bind_op [rhs', Lam var match_code] }
 

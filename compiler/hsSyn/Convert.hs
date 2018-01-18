@@ -551,22 +551,23 @@ mkBadDecMsg doc bads
 
 cvtConstr :: TH.Con -> CvtM (LConDecl GhcPs)
 
+--TODO: Support weights for TH
 cvtConstr (NormalC c strtys)
   = do  { c'   <- cNameL c
         ; tys' <- mapM cvt_arg strtys
-        ; returnL $ mkConDeclH98 c' Nothing Nothing (PrefixCon tys') }
-
+        ; returnL $ mkConDeclH98 c' Nothing Nothing (PrefixCon tys') Nothing }
+--TODO: Support weights for TH
 cvtConstr (RecC c varstrtys)
   = do  { c'    <- cNameL c
         ; args' <- mapM cvt_id_arg varstrtys
         ; returnL $ mkConDeclH98 c' Nothing Nothing
-                                   (RecCon (noLoc args')) }
-
+                                   (RecCon (noLoc args')) Nothing }
+--TODO: Support weights for TH
 cvtConstr (InfixC st1 c st2)
   = do  { c'   <- cNameL c
         ; st1' <- cvt_arg st1
         ; st2' <- cvt_arg st2
-        ; returnL $ mkConDeclH98 c' Nothing Nothing (InfixCon st1' st2') }
+        ; returnL $ mkConDeclH98 c' Nothing Nothing (InfixCon st1' st2') Nothing }
 
 cvtConstr (ForallC tvs ctxt con)
   = do  { tvs'      <- cvtTvs tvs
@@ -593,13 +594,13 @@ cvtConstr (ForallC tvs ctxt con)
         all_tvs = hsQTvExplicit tvs' ++ ex_tvs
 
     add_forall _ _ (XConDecl _) = panic "cvtConstr"
-
+--TODO: Support weights for TH
 cvtConstr (GadtC c strtys ty)
   = do  { c'      <- mapM cNameL c
         ; args    <- mapM cvt_arg strtys
         ; (dL->L _ ty') <- cvtType ty
         ; c_ty    <- mk_arr_apps args ty'
-        ; returnL $ fst $ mkGadtDecl c' c_ty}
+        ; returnL $ fst $ mkGadtDecl c' c_ty Nothing}
 
 cvtConstr (RecGadtC c varstrtys ty)
   = do  { c'       <- mapM cNameL c
@@ -607,7 +608,7 @@ cvtConstr (RecGadtC c varstrtys ty)
         ; rec_flds <- mapM cvt_id_arg varstrtys
         ; let rec_ty = noLoc (HsFunTy noExt
                                            (noLoc $ HsRecTy noExt rec_flds) ty')
-        ; returnL $ fst $ mkGadtDecl c' rec_ty }
+        ; returnL $ fst $ mkGadtDecl c' rec_ty Nothing}
 
 cvtSrcUnpackedness :: TH.SourceUnpackedness -> SrcUnpackedness
 cvtSrcUnpackedness NoSourceUnpackedness = NoSrcUnpack
@@ -911,8 +912,9 @@ cvtl e = wrapL (cvt e)
                                        ; unboxedSumChecks alt arity
                                        ; return $ ExplicitSum noExt
                                                                    alt arity e'}
+    --TODO: TH Support for weights
     cvt (CondE x y z)  = do { x' <- cvtl x; y' <- cvtl y; z' <- cvtl z;
-                            ; return $ HsIf noExt (Just noSyntaxExpr) x' y' z' }
+                            ; return $ HsIf noExt (Just noSyntaxExpr) x' y' z' Nothing }
     cvt (MultiIfE alts)
       | null alts      = failWith (text "Multi-way if-expression with no alternatives")
       | otherwise      = do { alts' <- mapM cvtpair alts
@@ -1130,14 +1132,14 @@ cvtMatch ctxt (TH.Match p body decs)
 cvtGuard :: TH.Body -> CvtM [LGRHS GhcPs (LHsExpr GhcPs)]
 cvtGuard (GuardedB pairs) = mapM cvtpair pairs
 cvtGuard (NormalB e)      = do { e' <- cvtl e
-                               ; g' <- returnL $ GRHS noExt [] e'; return [g'] }
+                               ; g' <- returnL $ GRHS noExt [] e' Nothing; return [g'] } --TODO
 
 cvtpair :: (TH.Guard, TH.Exp) -> CvtM (LGRHS GhcPs (LHsExpr GhcPs))
 cvtpair (NormalG ge,rhs) = do { ge' <- cvtl ge; rhs' <- cvtl rhs
                               ; g' <- returnL $ mkBodyStmt ge'
-                              ; returnL $ GRHS noExt [g'] rhs' }
+                              ; returnL $ GRHS noExt [g'] rhs' Nothing } --TODO
 cvtpair (PatG gs,rhs)    = do { gs' <- cvtStmts gs; rhs' <- cvtl rhs
-                              ; returnL $ GRHS noExt gs' rhs' }
+                              ; returnL $ GRHS noExt gs' rhs' Nothing } --TODO
 
 cvtOverLit :: Lit -> CvtM (HsOverLit GhcPs)
 cvtOverLit (IntegerL i)

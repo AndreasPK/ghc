@@ -48,6 +48,7 @@ import DmdAnal          ( dmdAnalProgram )
 import CallArity        ( callArityAnalProgram )
 import Exitify          ( exitifyProgram )
 import WorkWrap         ( wwTopBinds )
+import HotCode          ( likelyRecursionPgm, unlikelyBottomsPgm )
 import SrcLoc
 import Util
 import Module
@@ -136,6 +137,8 @@ getCoreToDo dflags
     eta_expand_on = gopt Opt_DoLambdaEtaExpansion         dflags
     ww_on         = gopt Opt_WorkerWrapper                dflags
     static_ptrs   = xopt LangExt.StaticPointers           dflags
+    unlikely_bot  = gopt Opt_UnlikelyBottoms              dflags
+    likely_rec    = gopt Opt_LikelyRecursion              dflags
 
     maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
 
@@ -340,7 +343,12 @@ getCoreToDo dflags
         -- has run at all. See Note [Final Demand Analyser run] in DmdAnal
         -- It is EXTREMELY IMPORTANT to run this pass, otherwise execution
         -- can become /exponentially/ more expensive. See Trac #11731, #12996.
-        runWhen (strictness || late_dmd_anal) CoreDoStrictness,
+        runWhen (strictness || late_dmd_anal || unlikely_bot) CoreDoStrictness,
+
+        -- With up to date demand information and most optimizations applied
+        -- we try to infer likely/unlikely branches.
+        runWhen likely_rec CoreLikelyRecursion,
+        runWhen unlikely_bot CoreUnlikelyBottoms,
 
         maybe_rule_check (Phase 0)
      ]
@@ -456,6 +464,12 @@ doCorePass CoreDoSpecialising        = {-# SCC "Specialise" #-}
 
 doCorePass CoreDoSpecConstr          = {-# SCC "SpecConstr" #-}
                                        specConstrProgram
+
+doCorePass CoreLikelyRecursion       = {-# SCC "LikelyRecursion" #-}
+                                       likelyRecursionPgm
+
+doCorePass CoreUnlikelyBottoms       = {-# SCC "UnlikelyBottoms" #-}
+                                       unlikelyBottomsPgm
 
 doCorePass CoreDoPrintCore              = observe   printCore
 doCorePass (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat

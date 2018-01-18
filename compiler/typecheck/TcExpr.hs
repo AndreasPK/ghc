@@ -563,7 +563,7 @@ tcExpr (HsCase x scrut matches) res_ty
     match_ctxt = MC { mc_what = CaseAlt,
                       mc_body = tcBody }
 
-tcExpr (HsIf x Nothing pred b1 b2) res_ty    -- Ordinary 'if'
+tcExpr (HsIf x Nothing pred b1 b2 ws) res_ty    -- Ordinary 'if'
   = do { pred' <- tcMonoExpr pred (mkCheckExpType boolTy)
        ; res_ty <- tauifyExpType res_ty
            -- Just like Note [Case branches must never infer a non-tau type]
@@ -571,9 +571,9 @@ tcExpr (HsIf x Nothing pred b1 b2) res_ty    -- Ordinary 'if'
 
        ; b1' <- tcMonoExpr b1 res_ty
        ; b2' <- tcMonoExpr b2 res_ty
-       ; return (HsIf x Nothing pred' b1' b2') }
+       ; return (HsIf x Nothing pred' b1' b2' ws) }
 
-tcExpr (HsIf x (Just fun) pred b1 b2) res_ty
+tcExpr (HsIf x (Just fun) pred b1 b2 ws) res_ty
   = do { ((pred', b1', b2'), fun')
            <- tcSyntaxOp IfOrigin fun [SynAny, SynAny, SynAny] res_ty $
               \ [pred_ty, b1_ty, b2_ty] ->
@@ -581,7 +581,7 @@ tcExpr (HsIf x (Just fun) pred b1 b2) res_ty
                  ; b1'   <- tcPolyExpr b1   b1_ty
                  ; b2'   <- tcPolyExpr b2   b2_ty
                  ; return (pred', b1', b2') }
-       ; return (HsIf x (Just fun') pred' b1' b2') }
+       ; return (HsIf x (Just fun') pred' b1' b2' ws) }
 
 tcExpr (HsMultiIf _ alts) res_ty
   = do { res_ty <- if isSingleton alts

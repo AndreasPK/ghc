@@ -33,7 +33,7 @@ import Type
 import RepType          ( isVoidTy, typePrimRep )
 import Coercion
 import FamInstEnv
-import BasicTypes       ( Boxity(..) )
+import BasicTypes       ( Boxity(..), alwaysFreq )
 import TyCon
 import UniqSupply
 import Unique
@@ -1027,7 +1027,7 @@ mkWWcpr_help (data_con, inst_tys, arg_tys, co)
              con_app   = mkConApp2 data_con inst_tys [arg] `mkCast` mkSymCo co
 
        ; return ( True
-                , \ wkr_call -> Case wkr_call arg (exprType con_app) [(DEFAULT, [], con_app)]
+                , \ wkr_call -> Case wkr_call arg (exprType con_app) [(DEFAULT alwaysFreq, [], con_app)]
                 , \ body     -> mkUnpackCase body co work_uniq data_con [arg] (varToCoreExpr arg)
                                 -- varToCoreExpr important here: arg can be a coercion
                                 -- Lacking this caused Trac #10658
@@ -1044,7 +1044,7 @@ mkWWcpr_help (data_con, inst_tys, arg_tys, co)
              con_app     = mkConApp2 data_con inst_tys args `mkCast` mkSymCo co
 
        ; return (True
-                , \ wkr_call -> Case wkr_call wrap_wild (exprType con_app)  [(DataAlt (tupleDataCon Unboxed (length arg_tys)), args, con_app)]
+                , \ wkr_call -> Case wkr_call wrap_wild (exprType con_app)  [(DataAlt (tupleDataCon Unboxed (length arg_tys)) alwaysFreq, args, con_app)]
                 , \ body     -> mkUnpackCase body co work_uniq data_con args ubx_tup_app
                 , ubx_tup_ty ) }
 
@@ -1057,7 +1057,7 @@ mkUnpackCase (Tick tickish e) co uniq con args body   -- See Note [Profiling and
   = Tick tickish (mkUnpackCase e co uniq con args body)
 mkUnpackCase scrut co uniq boxing_con unpk_args body
   = Case casted_scrut bndr (exprType body)
-         [(DataAlt boxing_con, unpk_args, body)]
+         [(DataAlt boxing_con alwaysFreq, unpk_args, body)]
   where
     casted_scrut = scrut `mkCast` co
     bndr = mk_ww_local uniq (exprType casted_scrut, MarkedStrict)

@@ -151,7 +151,8 @@ import Name
 import NameEnv          ( NameEnv, mkNameEnv, lookupNameEnv, lookupNameEnv_NF )
 import NameSet          ( NameSet, mkNameSet, elemNameSet )
 import BasicTypes       ( Arity, Boxity(..), TupleSort(..), ConTagZ,
-                          SourceText(..) )
+                          SourceText(..),
+                          BranchWeight(..), defaultFreq, rareFreq, oftenFreq )
 import ForeignCall
 import SrcLoc           ( noSrcSpan )
 import Unique
@@ -493,7 +494,7 @@ pcTyCon name cType tyvars cons
                 (VanillaAlgTyCon (mkPrelTyConRepName name))
                 False           -- Not in GADT syntax
 
-pcDataCon :: Name -> [TyVar] -> [Type] -> TyCon -> DataCon
+pcDataCon :: Name -> [TyVar] -> [Type] -> TyCon -> Maybe BranchWeight -> DataCon
 pcDataCon n univs = pcDataConWithFixity False n univs
                       []    -- no ex_tvs
                       univs -- the univs are precisely the user-written tyvars
@@ -505,6 +506,7 @@ pcDataConWithFixity :: Bool      -- ^ declared infix?
                     -> [TyCoVar] -- ^ user-written tycovars
                     -> [Type]    -- ^ args
                     -> TyCon
+                    -> Maybe BranchWeight
                     -> DataCon
 pcDataConWithFixity infx n = pcDataConWithFixity' infx n (dataConWorkerUnique (nameUnique n))
                                                   NoRRI
@@ -517,12 +519,13 @@ pcDataConWithFixity infx n = pcDataConWithFixity' infx n (dataConWorkerUnique (n
 
 pcDataConWithFixity' :: Bool -> Name -> Unique -> RuntimeRepInfo
                      -> [TyVar] -> [TyCoVar] -> [TyCoVar]
-                     -> [Type] -> TyCon -> DataCon
+                     -> [Type] -> TyCon -> Maybe BranchWeight
+                     -> DataCon
 -- The Name should be in the DataName name space; it's the name
 -- of the DataCon itself.
 
 pcDataConWithFixity' declared_infix dc_name wrk_key rri
-                     tyvars ex_tyvars user_tyvars arg_tys tycon
+                     tyvars ex_tyvars user_tyvars arg_tys tycon weight
   = data_con
   where
     tag_map = mkTyConTagMap tycon
@@ -546,6 +549,7 @@ pcDataConWithFixity' declared_infix dc_name wrk_key rri
                 []      -- No stupid theta
                 (mkDataConWorkId wrk_name data_con)
                 NoDataConRep    -- Wired-in types are too simple to need wrappers
+                weight
 
     no_bang = HsSrcBang NoSourceText NoSrcUnpack NoSrcStrict
 
@@ -565,10 +569,11 @@ mkDataConWorkerName data_con wrk_key =
     wrk_occ = mkDataConWorkerOcc dc_occ
 
 -- used for RuntimeRep and friends
-pcSpecialDataCon :: Name -> [Type] -> TyCon -> RuntimeRepInfo -> DataCon
-pcSpecialDataCon dc_name arg_tys tycon rri
+pcSpecialDataCon :: Name -> [Type] -> TyCon -> RuntimeRepInfo
+                 -> Maybe BranchWeight -> DataCon
+pcSpecialDataCon dc_name arg_tys tycon rri weight
   = pcDataConWithFixity' False dc_name (dataConWorkerUnique (nameUnique dc_name)) rri
-                         [] [] [] arg_tys tycon
+                         [] [] [] arg_tys tycon weight
 
 {-
 ************************************************************************
@@ -861,7 +866,7 @@ mk_tuple Boxed arity = (tycon, tuple_con)
 
     dc_tvs     = binderVars tc_binders
     dc_arg_tys = mkTyVarTys dc_tvs
-    tuple_con  = pcDataCon dc_name dc_tvs dc_arg_tys tycon
+    tuple_con  = pcDataCon dc_name dc_tvs dc_arg_tys tycon Nothing
 
     boxity  = Boxed
     modu    = gHC_TUPLE
@@ -889,7 +894,7 @@ mk_tuple Unboxed arity = (tycon, tuple_con)
 
     dc_tvs               = binderVars tc_binders
     (rr_tys, dc_arg_tys) = splitAt arity (mkTyVarTys dc_tvs)
-    tuple_con            = pcDataCon dc_name dc_tvs dc_arg_tys tycon
+    tuple_con            = pcDataCon dc_name dc_tvs dc_arg_tys tycon Nothing
 
     boxity  = Unboxed
     modu    = gHC_PRIM
@@ -1016,6 +1021,7 @@ mk_sum arity = (tycon, sum_cons)
                                    tyvars -- univ tyvars
                                    [tyvar_tys !! i] -- arg types
                                    tycon
+                                   Nothing -- Weights not relevant
 
                     dc_name = mkWiredInName gHC_PRIM
                                             (mkSumDataConOcc i arity)
@@ -1046,6 +1052,7 @@ eqClass,   heqClass,   coercibleClass   :: Class
 eqDataCon, heqDataCon, coercibleDataCon :: DataCon
 eqSCSelId, heqSCSelId, coercibleSCSelId :: Id
 
+ --TODO: Should we give weights here
 (eqTyCon, eqClass, eqDataCon, eqSCSelId)
   = (tycon, klass, datacon, sc_sel_id)
   where
@@ -1053,7 +1060,7 @@ eqSCSelId, heqSCSelId, coercibleSCSelId :: Id
                              rhs klass
                              (mkPrelTyConRepName eqTyConName)
     klass     = mk_class tycon sc_pred sc_sel_id
-    datacon   = pcDataCon eqDataConName tvs [sc_pred] tycon
+    datacon   = pcDataCon eqDataConName tvs [sc_pred] tycon Nothing
 
     -- Kind: forall k. k -> k -> Constraint
     binders   = mkTemplateTyConBinders [liftedTypeKind] (\[k] -> [k,k])
@@ -1071,7 +1078,7 @@ eqSCSelId, heqSCSelId, coercibleSCSelId :: Id
                              rhs klass
                              (mkPrelTyConRepName heqTyConName)
     klass     = mk_class tycon sc_pred sc_sel_id
-    datacon   = pcDataCon heqDataConName tvs [sc_pred] tycon
+    datacon   = pcDataCon heqDataConName tvs [sc_pred] tycon Nothing
 
     -- Kind: forall k1 k2. k1 -> k2 -> Constraint
     binders   = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] id
@@ -1089,7 +1096,7 @@ eqSCSelId, heqSCSelId, coercibleSCSelId :: Id
                              rhs klass
                              (mkPrelTyConRepName coercibleTyConName)
     klass     = mk_class tycon sc_pred sc_sel_id
-    datacon   = pcDataCon coercibleDataConName tvs [sc_pred] tycon
+    datacon   = pcDataCon coercibleDataConName tvs [sc_pred] tycon Nothing
 
     -- Kind: forall k. k -> k -> Constraint
     binders   = mkTemplateTyConBinders [liftedTypeKind] (\[k] -> [k,k])
@@ -1134,7 +1141,7 @@ vecRepDataCon :: DataCon
 vecRepDataCon = pcSpecialDataCon vecRepDataConName [ mkTyConTy vecCountTyCon
                                                    , mkTyConTy vecElemTyCon ]
                                  runtimeRepTyCon
-                                 (RuntimeRep prim_rep_fun)
+                                 (RuntimeRep prim_rep_fun) Nothing
   where
     prim_rep_fun [count, elem]
       | VecCount n <- tyConRuntimeRepInfo (tyConAppTyCon count)
@@ -1149,6 +1156,7 @@ vecRepDataConTyCon = promoteDataCon vecRepDataCon
 tupleRepDataCon :: DataCon
 tupleRepDataCon = pcSpecialDataCon tupleRepDataConName [ mkListTy runtimeRepTy ]
                                    runtimeRepTyCon (RuntimeRep prim_rep_fun)
+                                   Nothing
   where
     prim_rep_fun [rr_ty_list]
       = concatMap (runtimeRepPrimRep doc) rr_tys
@@ -1164,6 +1172,7 @@ tupleRepDataConTyCon = promoteDataCon tupleRepDataCon
 sumRepDataCon :: DataCon
 sumRepDataCon = pcSpecialDataCon sumRepDataConName [ mkListTy runtimeRepTy ]
                                  runtimeRepTyCon (RuntimeRep prim_rep_fun)
+                                 Nothing
   where
     prim_rep_fun [rr_ty_list]
       = map slotPrimRep (ubxSumRepType prim_repss)
@@ -1188,6 +1197,7 @@ runtimeRepSimpleDataCons@(liftedRepDataCon : _)
   where
     mk_runtime_rep_dc primrep name
       = pcSpecialDataCon name [] runtimeRepTyCon (RuntimeRep (\_ -> [primrep]))
+        Nothing
 
 -- See Note [Wiring in RuntimeRep]
 liftedRepDataConTy, unliftedRepDataConTy,
@@ -1210,7 +1220,7 @@ vecCountDataCons = zipWithLazy mk_vec_count_dc
                      vecCountDataConNames
   where
     mk_vec_count_dc n name
-      = pcSpecialDataCon name [] vecCountTyCon (VecCount n)
+      = pcSpecialDataCon name [] vecCountTyCon (VecCount n) Nothing
 
 -- See Note [Wiring in RuntimeRep]
 vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
@@ -1230,7 +1240,7 @@ vecElemDataCons = zipWithLazy mk_vec_elem_dc
                     vecElemDataConNames
   where
     mk_vec_elem_dc elem name
-      = pcSpecialDataCon name [] vecElemTyCon (VecElem elem)
+      = pcSpecialDataCon name [] vecElemTyCon (VecElem elem) Nothing
 
 -- See Note [Wiring in RuntimeRep]
 int8ElemRepDataConTy, int16ElemRepDataConTy, int32ElemRepDataConTy,
@@ -1289,7 +1299,7 @@ charTyCon   = pcTyCon charTyConName
                                   (NoSourceText,fsLit "HsChar")))
                    [] [charDataCon]
 charDataCon :: DataCon
-charDataCon = pcDataCon charDataConName [] [charPrimTy] charTyCon
+charDataCon = pcDataCon charDataConName [] [charPrimTy] charTyCon Nothing
 
 stringTy :: Type
 stringTy = mkListTy charTy -- convenience only
@@ -1302,7 +1312,7 @@ intTyCon = pcTyCon intTyConName
                (Just (CType NoSourceText Nothing (NoSourceText,fsLit "HsInt")))
                  [] [intDataCon]
 intDataCon :: DataCon
-intDataCon = pcDataCon intDataConName [] [intPrimTy] intTyCon
+intDataCon = pcDataCon intDataConName [] [intPrimTy] intTyCon Nothing
 
 wordTy :: Type
 wordTy = mkTyConTy wordTyCon
@@ -1312,7 +1322,7 @@ wordTyCon = pcTyCon wordTyConName
             (Just (CType NoSourceText Nothing (NoSourceText, fsLit "HsWord")))
                [] [wordDataCon]
 wordDataCon :: DataCon
-wordDataCon = pcDataCon wordDataConName [] [wordPrimTy] wordTyCon
+wordDataCon = pcDataCon wordDataConName [] [wordPrimTy] wordTyCon Nothing
 
 word8Ty :: Type
 word8Ty = mkTyConTy word8TyCon
@@ -1323,7 +1333,7 @@ word8TyCon = pcTyCon word8TyConName
                             (NoSourceText, fsLit "HsWord8"))) []
                      [word8DataCon]
 word8DataCon :: DataCon
-word8DataCon = pcDataCon word8DataConName [] [wordPrimTy] word8TyCon
+word8DataCon = pcDataCon word8DataConName [] [wordPrimTy] word8TyCon Nothing
 
 floatTy :: Type
 floatTy = mkTyConTy floatTyCon
@@ -1335,6 +1345,7 @@ floatTyCon   = pcTyCon floatTyConName
                       [floatDataCon]
 floatDataCon :: DataCon
 floatDataCon = pcDataCon         floatDataConName [] [floatPrimTy] floatTyCon
+                                 Nothing
 
 doubleTy :: Type
 doubleTy = mkTyConTy doubleTyCon
@@ -1347,6 +1358,7 @@ doubleTyCon = pcTyCon doubleTyConName
 
 doubleDataCon :: DataCon
 doubleDataCon = pcDataCon doubleDataConName [] [doublePrimTy] doubleTyCon
+                          Nothing
 
 {-
 ************************************************************************
@@ -1407,9 +1419,10 @@ boolTyCon = pcTyCon boolTyConName
                            (NoSourceText, fsLit "HsBool")))
                     [] [falseDataCon, trueDataCon]
 
+--Should we give True/False default weights?
 falseDataCon, trueDataCon :: DataCon
-falseDataCon = pcDataCon falseDataConName [] [] boolTyCon
-trueDataCon  = pcDataCon trueDataConName  [] [] boolTyCon
+falseDataCon = pcDataCon falseDataConName [] [] boolTyCon Nothing
+trueDataCon  = pcDataCon trueDataConName  [] [] boolTyCon Nothing
 
 falseDataConId, trueDataConId :: Id
 falseDataConId = dataConWorkId falseDataCon
@@ -1419,10 +1432,11 @@ orderingTyCon :: TyCon
 orderingTyCon = pcTyCon orderingTyConName Nothing
                         [] [ordLTDataCon, ordEQDataCon, ordGTDataCon]
 
+--TODO: Check are these good default weights?
 ordLTDataCon, ordEQDataCon, ordGTDataCon :: DataCon
-ordLTDataCon = pcDataCon ordLTDataConName  [] [] orderingTyCon
-ordEQDataCon = pcDataCon ordEQDataConName  [] [] orderingTyCon
-ordGTDataCon = pcDataCon ordGTDataConName  [] [] orderingTyCon
+ordLTDataCon = pcDataCon ordLTDataConName  [] [] orderingTyCon (Just defaultFreq)
+ordEQDataCon = pcDataCon ordEQDataConName  [] [] orderingTyCon (Just rareFreq)
+ordGTDataCon = pcDataCon ordGTDataConName  [] [] orderingTyCon (Just defaultFreq)
 
 ordLTDataConId, ordEQDataConId, ordGTDataConId :: Id
 ordLTDataConId = dataConWorkId ordLTDataCon
@@ -1453,13 +1467,14 @@ listTyCon =
                 (VanillaAlgTyCon $ mkPrelTyConRepName listTyConName)
 
 nilDataCon :: DataCon
-nilDataCon  = pcDataCon nilDataConName alpha_tyvar [] listTyCon
+nilDataCon  = pcDataCon nilDataConName alpha_tyvar [] listTyCon (Just rareFreq)
 
 consDataCon :: DataCon
 consDataCon = pcDataConWithFixity True {- Declared infix -}
                consDataConName
                alpha_tyvar [] alpha_tyvar
                [alphaTy, mkTyConApp listTyCon alpha_ty] listTyCon
+               (Just oftenFreq)
 -- Interesting: polymorphic recursion would help here.
 -- We can't use (mkListTy alphaTy) in the defn of consDataCon, else mkListTy
 -- gets the over-specific type (Type -> Type)
@@ -1470,11 +1485,16 @@ maybeTyCon :: TyCon
 maybeTyCon = pcTyCon maybeTyConName Nothing alpha_tyvar
                      [nothingDataCon, justDataCon]
 
+--TODO: Are these good defaults?
+--What about cases were we look for Just a in a list of
+--[Nothing, .. .. .. .. , Just a, ..]
 nothingDataCon :: DataCon
 nothingDataCon = pcDataCon nothingDataConName alpha_tyvar [] maybeTyCon
+                           (Just rareFreq)
 
 justDataCon :: DataCon
 justDataCon = pcDataCon justDataConName alpha_tyvar [alphaTy] maybeTyCon
+                        (Just oftenFreq)
 
 {-
 ** *********************************************************************

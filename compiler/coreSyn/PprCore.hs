@@ -300,7 +300,7 @@ pprCoreAlt (con, args, rhs)
   = hang (ppr_case_pat con args <+> arrow) 2 (pprCoreExpr rhs)
 
 ppr_case_pat :: OutputableBndr a => AltCon -> [a] -> SDoc
-ppr_case_pat (DataAlt dc) args
+ppr_case_pat (DataAlt dc _w) args --TODO
   | Just sort <- tyConTuple_maybe tc
   = tupleParens sort (pprWithCommas ppr_bndr args)
   where
@@ -617,4 +617,3 @@ instance Outputable id => Outputable (Tickish id) where
          _            -> hcat [text "scc<",     ppr cc, char '>']
   ppr (SourceNote span _) =
       hcat [ text "src<", pprUserRealSpan True span, char '>']
-

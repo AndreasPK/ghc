@@ -43,7 +43,7 @@ import CoreOpt          ( pushCoTyArg, pushCoValArg
 import Rules            ( mkRuleInfo, lookupRule, getRules )
 import Demand           ( mkClosedStrictSig, topDmd, botRes )
 import BasicTypes       ( TopLevelFlag(..), isNotTopLevel, isTopLevel,
-                          RecFlag(..), Arity )
+                          RecFlag(..), Arity, BranchWeight(..) )
 import MonadUtils       ( mapAccumLM, liftIO )
 import Var              ( isTyCoVar )
 import Maybes           (  orElse )
@@ -910,8 +910,9 @@ simplExprF1 env expr@(Lam {}) cont
     zap b | isTyVar b = b
           | otherwise = zapLamIdInfo b
 
-simplExprF1 env (Case scrut bndr _ alts) cont
+simplExprF1 env e@(Case scrut bndr _ alts) cont
   = {-#SCC "simplExprF1-Case" #-}
+    --pprTraceM "simplExpr:Case" (text "cont:" <> ppr cont <+> text "expr:" <> ppr e) >>
     simplExprF env scrut (Select { sc_dup = NoDup, sc_bndr = bndr
                                  , sc_alts = alts
                                  , sc_env = env, sc_cont = cont })
@@ -1187,7 +1188,8 @@ rebuild env expr cont
                        -- NB: mkCast implements the (Coercion co |> g) optimisation
 
       Select { sc_bndr = bndr, sc_alts = alts, sc_env = se, sc_cont = cont }
-        -> rebuildCase (se `setInScopeFromE` env) expr bndr alts cont
+        ->  --pprTraceM "rebuild" (ppr cont <+> ppr expr) >>
+            rebuildCase (se `setInScopeFromE` env) expr bndr alts cont
 
       StrictArg { sc_fun = fun, sc_cont = cont }
         -> rebuildCall env (fun `addValArgTo` expr) cont
@@ -2391,13 +2393,13 @@ rebuildCase, reallyRebuildCase
 --------------------------------------------------
 --      1. Eliminate the case if there's a known constructor
 --------------------------------------------------
-
+-- TODO: Push weights into outer case.
 rebuildCase env scrut case_bndr alts cont
   | Lit lit <- scrut    -- No need for same treatment as constructors
                         -- because literals are inlined more vigorously
   , not (litIsLifted lit)
   = do  { tick (KnownBranch case_bndr)
-        ; case findAlt (LitAlt lit) alts of
+        ; case findAlt (LitAlt lit (error "rebuildCase:lit")) alts of
             Nothing           -> missingAlt env case_bndr alts cont
             Just (_, bs, rhs) -> simple_rhs env [] scrut bs rhs }
 
@@ -2407,14 +2409,24 @@ rebuildCase env scrut case_bndr alts cont
         -- as well as when it's an explicit constructor application
   , let env0 = setInScopeSet env in_scope'
   = do  { tick (KnownBranch case_bndr)
-        ; case findAlt (DataAlt con) alts of
+        ; case findAlt (DataAlt con (error "rebuildCase:Lookup")) alts of
             Nothing  -> missingAlt env0 case_bndr alts cont
-            Just (DEFAULT, bs, rhs) -> let con_app = Var (dataConWorkId con)
+            Just (DEFAULT _, bs, rhs) -> let con_app = Var (dataConWorkId con)
                                                  `mkTyApps` ty_args
                                                  `mkApps`   other_args
                                        in simple_rhs env0 wfloats con_app bs rhs
             Just (_, bs, rhs)       -> knownCon env0 scrut wfloats con ty_args other_args
                                                 case_bndr bs rhs cont
+        -- --; pprTraceM "rebuildCase2:" $ ppr cont <+> text "alts:" <+> ppr alts <+> text "scrut:" <+> ppr scrut
+
+        -- ; x <- case findAlt (DataAlt con (error "rebuildCase:data")) alts of
+        --     Nothing  -> missingAlt env case_bndr alts cont
+        --     Just (DEFAULT _w, bs, rhs) -> simple_rhs bs rhs
+        --     Just (altCon, bs, rhs)       -> do --Found the known con.
+        --       let weight = altConWeight altCon
+        --       knownCon env scrut con ty_args other_args (Just weight) --TODO: Remove maybe?
+        --                case_bndr bs rhs cont
+        -- ; return x
         }
   where
     simple_rhs env wfloats scrut' bs rhs =
@@ -2632,7 +2644,7 @@ improveSeq :: (FamInstEnv, FamInstEnv) -> SimplEnv
            -> OutExpr -> InId -> OutId -> [InAlt]
            -> SimplM (SimplEnv, OutExpr, OutId)
 -- Note [Improving seq]
-improveSeq fam_envs env scrut case_bndr case_bndr1 [(DEFAULT,_,_)]
+improveSeq fam_envs env scrut case_bndr case_bndr1 [(DEFAULT _,_,_)]
   | Just (co, ty2) <- topNormaliseType_maybe fam_envs (idType case_bndr1)
   = do { case_bndr2 <- newId (fsLit "nt") ty2
         ; let rhs  = DoneEx (Var case_bndr2 `Cast` mkSymCo co) Nothing
@@ -2653,21 +2665,21 @@ simplAlt :: SimplEnv
          -> InAlt
          -> SimplM OutAlt
 
-simplAlt env _ imposs_deflt_cons case_bndr' cont' (DEFAULT, bndrs, rhs)
+simplAlt env _ imposs_deflt_cons case_bndr' cont' (def@DEFAULT{}, bndrs, rhs)
   = ASSERT( null bndrs )
     do  { let env' = addBinderUnfolding env case_bndr'
                                         (mkOtherCon imposs_deflt_cons)
                 -- Record the constructors that the case-binder *can't* be.
         ; rhs' <- simplExprC env' rhs cont'
-        ; return (DEFAULT, [], rhs') }
+        ; return (def, [], rhs') }
 
-simplAlt env scrut' _ case_bndr' cont' (LitAlt lit, bndrs, rhs)
+simplAlt env scrut' _ case_bndr' cont' (litCon@(LitAlt lit _), bndrs, rhs)
   = ASSERT( null bndrs )
     do  { env' <- addAltUnfoldings env scrut' case_bndr' (Lit lit)
         ; rhs' <- simplExprC env' rhs cont'
-        ; return (LitAlt lit, [], rhs') }
+        ; return (litCon, [], rhs') }
 
-simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs)
+simplAlt env scrut' _ case_bndr' cont' (dataCon@(DataAlt con _w), vs, rhs)
   = do  { -- See Note [Adding evaluatedness info to pattern-bound variables]
           let vs_with_evals = addEvals scrut' con vs
         ; (env', vs') <- simplLamBndrs env vs_with_evals
@@ -2679,7 +2691,7 @@ simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs)
 
         ; env'' <- addAltUnfoldings env' scrut' case_bndr' con_app
         ; rhs' <- simplExprC env'' rhs cont'
-        ; return (DataAlt con, vs', rhs') }
+        ; return (dataCon, vs', rhs') }
 
 {- Note [Adding evaluatedness info to pattern-bound variables]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2854,6 +2866,7 @@ and then
         f (h v)
 
 All this should happen in one sweep.
+
 -}
 
 knownCon :: SimplEnv
@@ -2875,6 +2888,23 @@ knownCon env scrut dc_floats dc dc_ty_args dc_args bndr bs rhs cont
                -- See Note [FloatBinds from constructor wrappers]
                      , MkCore.wrapFloats dc_floats $
                        wrapFloats (floats1 `addFloats` floats2 `addFloats` floats3) expr') }
+
+
+--          -> OutExpr                             -- ^ The scrutinee
+--          -> DataCon -> [OutType] -> [OutExpr] -> Maybe BranchWeight
+--                                                 -- ^ The scrutinee (in pieces)
+--          -> InId -> [InBndr] -> InExpr          -- ^ The alternative
+--          -> SimplCont
+--          -> SimplM (SimplFloats, OutExpr)
+
+-- --TODO: Use weight
+-- knownCon env scrut dc dc_ty_args dc_args dc_weight bndr bs rhs cont
+--   = do  { (floats1, env1)  <- bind_args env bs dc_args
+--         ; (floats2, env2) <- bind_case_bndr env1
+--         ; (floats3, expr') <- simplExprF env2 rhs cont
+--         -- ; pprTraceM "knownCon" $ ppr dc <+> ppr cont
+--         ; return (floats1 `addFloats` floats2 `addFloats` floats3, expr') }
+
   where
     zap_occ = zapBndrOccInfo (isDeadBinder bndr)    -- bndr is an InId
 
@@ -3136,8 +3166,8 @@ mkDupableAlt dflags case_bndr jfloats (con, bndrs', rhs')
               scrut_ty = idType case_bndr
               case_bndr_w_unf
                 = case con of
-                      DEFAULT    -> case_bndr
-                      DataAlt dc -> setIdUnfolding case_bndr unf
+                      DEFAULT _    -> case_bndr
+                      DataAlt dc _ -> setIdUnfolding case_bndr unf
                           where
                                  -- See Note [Case binders and join points]
                              unf = mkInlineUnfolding rhs

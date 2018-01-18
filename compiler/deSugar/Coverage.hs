@@ -542,11 +542,12 @@ addTickHsExpr (HsCase x e mgs) =
                 (addTickLHsExpr e) -- not an EvalInner; e might not necessarily
                                    -- be evaluated.
                 (addTickMatchGroup False mgs)
-addTickHsExpr (HsIf x cnd e1 e2 e3) =
-        liftM3 (HsIf x cnd)
+addTickHsExpr (HsIf x cnd e1 e2 e3 w) =
+        liftM4 (HsIf x cnd)
                 (addBinTickLHsExpr (BinBox CondBinBox) e1)
                 (addTickLHsExprOptAlt True e2)
                 (addTickLHsExprOptAlt True e3)
+                (pure w)
 addTickHsExpr (HsMultiIf ty alts)
   = do { let isOneOfMany = case alts of [_] -> False; _ -> True
        ; alts' <- mapM (liftL $ addTickGRHS isOneOfMany False) alts
@@ -673,10 +674,10 @@ addTickGRHSs _ _ (XGRHSs _) = panic "addTickGRHSs"
 
 addTickGRHS :: Bool -> Bool -> GRHS GhcTc (LHsExpr GhcTc)
             -> TM (GRHS GhcTc (LHsExpr GhcTc))
-addTickGRHS isOneOfMany isLambda (GRHS x stmts expr) = do
+addTickGRHS isOneOfMany isLambda (GRHS x stmts expr weight) = do
   (stmts',expr') <- addTickLStmts' (Just $ BinBox $ GuardBinBox) stmts
                         (addTickGRHSBody isOneOfMany isLambda expr)
-  return $ GRHS x stmts' expr'
+  return $ GRHS x stmts' expr' weight
 addTickGRHS _ _ (XGRHS _) = panic "addTickGRHS"
 
 addTickGRHSBody :: Bool -> Bool -> LHsExpr GhcTc -> TM (LHsExpr GhcTc)
@@ -928,10 +929,10 @@ addTickCmdGRHSs (XGRHSs _) = panic "addTickCmdGRHSs"
 addTickCmdGRHS :: GRHS GhcTc (LHsCmd GhcTc) -> TM (GRHS GhcTc (LHsCmd GhcTc))
 -- The *guards* are *not* Cmds, although the body is
 -- C.f. addTickGRHS for the BinBox stuff
-addTickCmdGRHS (GRHS x stmts cmd)
+addTickCmdGRHS (GRHS x stmts cmd weight)
   = do { (stmts',expr') <- addTickLStmts' (Just $ BinBox $ GuardBinBox)
                                    stmts (addTickLHsCmd cmd)
-       ; return $ GRHS x stmts' expr' }
+       ; return $ GRHS x stmts' expr' weight}
 addTickCmdGRHS (XGRHS _) = panic "addTickCmdGRHS"
 
 addTickLCmdStmts :: [LStmt GhcTc (LHsCmd GhcTc)]

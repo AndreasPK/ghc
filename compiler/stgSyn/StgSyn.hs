@@ -60,6 +60,7 @@ module StgSyn (
 
 import GhcPrelude
 
+import BasicTypes  (BranchWeight)
 import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
@@ -583,7 +584,7 @@ rather than from the scrutinee type.
 type GenStgAlt pass
   = (AltCon,          -- alts: data constructor,
      [BinderP pass],  -- constructor's parameters,
-     GenStgExpr pass) -- ...right-hand side.
+     GenStgExpr pass) -- ...right-hand side
 
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
@@ -841,7 +842,8 @@ pprStgExpr (StgCase expr bndr alt_type alts)
 
 pprStgAlt :: OutputablePass pass => GenStgAlt pass -> SDoc
 pprStgAlt (con, params, expr)
-  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), text "->"])
+  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params),
+                text "->"])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc

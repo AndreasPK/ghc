@@ -44,6 +44,7 @@ module DataCon (
         dataConWorkId, dataConWrapId, dataConWrapId_maybe,
         dataConImplicitTyThings,
         dataConRepStrictness, dataConImplBangs, dataConBoxer,
+        dataConWeight,
 
         splitDataProductType_maybe,
 
@@ -469,8 +470,10 @@ data DataCon
                                 -- Used for Template Haskell and 'deriving' only
                                 -- The actual fixity is stored elsewhere
 
-        dcPromoted :: TyCon    -- The promoted TyCon
+        dcPromoted :: TyCon,   -- The promoted TyCon
                                -- See Note [Promoted data constructors] in TyCon
+
+        dcWeight :: Maybe BranchWeight -- Default weight for case alternatives.
   }
 
 
@@ -905,6 +908,7 @@ mkDataCon :: Name
                                 -- declaration e.g. @data Eq a => T a ...@
           -> Id                 -- ^ Worker Id
           -> DataConRep         -- ^ Representation
+          -> Maybe BranchWeight -- ^ Default weight in branches
           -> DataCon
   -- Can get the tag from the TyCon
 
@@ -914,7 +918,7 @@ mkDataCon name declared_infix prom_info
           univ_tvs ex_tvs user_tvbs
           eq_spec theta
           orig_arg_tys orig_res_ty rep_info rep_tycon tag
-          stupid_theta work_id rep
+          stupid_theta work_id rep weight
 -- Warning: mkDataCon is not a good place to check certain invariants.
 -- If the programmer writes the wrong result type in the decl, thus:
 --      data T a where { MkT :: S }
@@ -943,7 +947,8 @@ mkDataCon name declared_infix prom_info
                   dcRep = rep,
                   dcSourceArity = length orig_arg_tys,
                   dcRepArity = length rep_arg_tys + count isCoVar ex_tvs,
-                  dcPromoted = promoted }
+                  dcPromoted = promoted,
+                  dcWeight = weight }
 
         -- The 'arg_stricts' passed to mkDataCon are simply those for the
         -- source-language arguments.  We add extra ones for the
@@ -1208,6 +1213,9 @@ dataConImplBangs dc
 dataConBoxer :: DataCon -> Maybe DataConBoxer
 dataConBoxer (MkData { dcRep = DCR { dcr_boxer = boxer } }) = Just boxer
 dataConBoxer _ = Nothing
+
+dataConWeight :: DataCon -> Maybe BranchWeight
+dataConWeight = dcWeight
 
 -- | The \"signature\" of the 'DataCon' returns, in order:
 --

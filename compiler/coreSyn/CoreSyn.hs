@@ -35,7 +35,7 @@ module CoreSyn (
         mkConApp, mkConApp2, mkTyBind, mkCoBind,
         varToCoreExpr, varsToCoreExprs,
 
-        isId, cmpAltCon, cmpAlt, ltAlt,
+        isId, cmpAltCon, cmpAlt, ltAlt, altConWeight, setAltConWeight,
 
         -- ** Simple 'Expr' access functions and predicates
         bindersOf, bindersOfBinds, rhssOfBind, rhssOfAlts,
@@ -279,14 +279,15 @@ type Alt b = (AltCon, [b], Expr b)
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 data AltCon
-  = DataAlt DataCon   --  ^ A plain data constructor: @case e of { Foo x -> ... }@.
-                      -- Invariant: the 'DataCon' is always from a @data@ type, and never from a @newtype@
+  = DataAlt DataCon BranchWeight
+        --  ^ A plain data constructor: @case e of { Foo x -> ... }@.
+        -- Invariant: the 'DataCon' is always from a @data@ type, and never from a @newtype@
 
-  | LitAlt  Literal   -- ^ A literal: @case e of { 1 -> ... }@
+  | LitAlt  Literal BranchWeight  -- ^ A literal: @case e of { 1 -> ... }@
                       -- Invariant: always an *unlifted* literal
                       -- See Note [Literal alternatives]
 
-  | DEFAULT           -- ^ Trivial alternative: @case e of { _ -> ... }@
+  | DEFAULT BranchWeight          -- ^ Trivial alternative: @case e of { _ -> ... }@
    deriving (Eq, Data)
 
 -- This instance is a bit shady. It can only be used to compare AltCons for
@@ -294,15 +295,15 @@ data AltCon
 -- ever need to compare AltCons for different type constructors.
 -- The instance adheres to the order described in [CoreSyn case invariants]
 instance Ord AltCon where
-  compare (DataAlt con1) (DataAlt con2) =
+  compare (DataAlt con1 _) (DataAlt con2 _) =
     ASSERT( dataConTyCon con1 == dataConTyCon con2 )
     compare (dataConTag con1) (dataConTag con2)
-  compare (DataAlt _) _ = GT
-  compare _ (DataAlt _) = LT
-  compare (LitAlt l1) (LitAlt l2) = compare l1 l2
-  compare (LitAlt _) DEFAULT = GT
-  compare DEFAULT DEFAULT = EQ
-  compare DEFAULT _ = LT
+  compare (DataAlt _ _) _ = GT
+  compare _ (DataAlt _ _) = LT
+  compare (LitAlt l1 _) (LitAlt l2 _) = compare l1 l2
+  compare (LitAlt _ _)  (DEFAULT _) = GT
+  compare (DEFAULT _)   (DEFAULT _) = EQ
+  compare (DEFAULT _)    _          = LT
 
 -- | Binding, used for top level bindings in a module and local bindings in a @let@.
 
@@ -1072,6 +1073,7 @@ tickishPlace HpcTick{}     = PlaceRuntime
 tickishPlace Breakpoint{}  = PlaceRuntime
 tickishPlace SourceNote{}  = PlaceNonLam
 
+
 -- | Returns whether one tick "contains" the other one, therefore
 -- making the second tick redundant.
 tickishContains :: Eq b => Tickish b -> Tickish b -> Bool
@@ -1700,10 +1702,10 @@ the occurrence info is wrong
 -- constructor-applications with LitArg args, then you could get
 -- rid of this Ord.
 
-instance Outputable AltCon where
-  ppr (DataAlt dc) = ppr dc
-  ppr (LitAlt lit) = ppr lit
-  ppr DEFAULT      = text "__DEFAULT"
+instance Outputable AltCon where --TODO
+  ppr (DataAlt dc w) = ppr dc <> parens (text "Weight:" <+> ppr w)
+  ppr (LitAlt lit w) = ppr lit  <> parens (text "Weight:" <+> ppr w)
+  ppr (DEFAULT w)    = text "__DEFAULT"  <> parens (text "Weight:" <+> ppr w)
 
 cmpAlt :: (AltCon, a, b) -> (AltCon, a, b) -> Ordering
 cmpAlt (con1, _, _) (con2, _, _) = con1 `cmpAltCon` con2
@@ -1715,17 +1717,29 @@ cmpAltCon :: AltCon -> AltCon -> Ordering
 -- ^ Compares 'AltCon's within a single list of alternatives
 -- DEFAULT comes out smallest, so that sorting by AltCon
 -- puts alternatives in the order required by #case_invariants#
-cmpAltCon DEFAULT      DEFAULT     = EQ
-cmpAltCon DEFAULT      _           = LT
+cmpAltCon (DEFAULT _)  (DEFAULT _)      = EQ
+cmpAltCon (DEFAULT _)  _                = LT
 
-cmpAltCon (DataAlt d1) (DataAlt d2) = dataConTag d1 `compare` dataConTag d2
-cmpAltCon (DataAlt _)  DEFAULT      = GT
-cmpAltCon (LitAlt  l1) (LitAlt  l2) = l1 `compare` l2
-cmpAltCon (LitAlt _)   DEFAULT      = GT
+cmpAltCon (DataAlt d1 _) (DataAlt d2 _) = dataConTag d1 `compare` dataConTag d2
+cmpAltCon (DataAlt _ _)  (DEFAULT _)    = GT
+cmpAltCon (LitAlt l1 _)  (LitAlt l2 _)  = l1 `compare` l2
+cmpAltCon (LitAlt _  _)  (DEFAULT _)    = GT
 
 cmpAltCon con1 con2 = WARN( True, text "Comparing incomparable AltCons" <+>
                                   ppr con1 <+> ppr con2 )
                       LT
+
+altConWeight :: AltCon -> BranchWeight
+altConWeight (DEFAULT   w) = w
+altConWeight (DataAlt _ w) = w
+altConWeight (LitAlt  _ w) = w
+
+-- | Set weight for the given AltCon
+setAltConWeight :: AltCon -> BranchWeight -> AltCon
+setAltConWeight (DEFAULT   _) w = (DEFAULT   w)
+setAltConWeight (DataAlt c _) w = (DataAlt c w)
+setAltConWeight (LitAlt  l _) w = (LitAlt  l w)
+
 
 {-
 ************************************************************************

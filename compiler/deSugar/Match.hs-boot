@@ -1,6 +1,7 @@
 module Match where
 
 import GhcPrelude
+import BasicTypes (BranchWeight)
 import Var      ( Id )
 import TcType   ( Type )
 import DsMonad  ( DsM, EquationInfo, MatchResult )
@@ -12,7 +13,8 @@ import HsExtension ( GhcTc )
 match   :: [Id]
         -> Type
         -> [EquationInfo]
-        -> DsM MatchResult
+        -> Maybe BranchWeight
+        -> DsM (MatchResult, Maybe BranchWeight)
 
 matchWrapper
         :: HsMatchContext Name
@@ -26,6 +28,7 @@ matchSimply
         -> LPat GhcTc
         -> CoreExpr
         -> CoreExpr
+        -> Maybe (BranchWeight, BranchWeight)
         -> DsM CoreExpr
 
 matchSinglePatVar
@@ -34,4 +37,6 @@ matchSinglePatVar
         -> LPat GhcTc
         -> Type
         -> MatchResult
+        -> Maybe BranchWeight
+        -> Maybe BranchWeight
         -> DsM MatchResult

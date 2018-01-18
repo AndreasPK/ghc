@@ -234,17 +234,17 @@ simple_opt_expr env expr
       | isDeadBinder b
       , Just (_, [], con, _tys, es) <- exprIsConApp_maybe in_scope_env e'
         -- We don't need to be concerned about floats when looking for coerce.
-      , Just (altcon, bs, rhs) <- findAlt (DataAlt con) as
+      , Just (altcon, bs, rhs) <- findAlt (DataAlt con (error "simpl_opt_expr:lookup only")) as
       = case altcon of
-          DEFAULT -> go rhs
-          _       -> foldr wrapLet (simple_opt_expr env' rhs) mb_prs
+          DEFAULT _ -> go rhs
+          _         -> foldr wrapLet (simple_opt_expr env' rhs) mb_prs
             where
               (env', mb_prs) = mapAccumL simple_out_bind env $
                                zipEqual "simpleOptExpr" bs es
 
          -- Note [Getting the map/coerce RULE to work]
       | isDeadBinder b
-      , [(DEFAULT, _, rhs)] <- as
+      , [(DEFAULT {}, _, rhs)] <- as
       , isCoVarType (varType b)
       , (Var fun, _args) <- collectArgs e
       , fun `hasKey` coercibleSCSelIdKey

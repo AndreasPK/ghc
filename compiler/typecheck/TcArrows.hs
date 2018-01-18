@@ -273,11 +273,11 @@ tc_cmd env
              ; return (GRHSs x grhss' (L l binds')) }
     tc_grhss (XGRHSs _) _ _ = panic "tc_grhss"
 
-    tc_grhs stk_ty res_ty (GRHS x guards body)
+    tc_grhs stk_ty res_ty (GRHS x guards body weight)
         = do { (guards', rhs') <- tcStmtsAndThen pg_ctxt tcGuardStmt guards res_ty $
                                   \ res_ty -> tcCmd env body
                                                 (stk_ty, checkingExpType "tc_grhs" res_ty)
-             ; return (GRHS x guards' rhs') }
+             ; return (GRHS x guards' rhs' weight) }
     tc_grhs _ _ (XGRHS _) = panic "tc_grhs"
 
 -------------------------------------------

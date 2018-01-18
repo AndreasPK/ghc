@@ -702,10 +702,10 @@ zonkGRHSs :: ZonkEnv
 zonkGRHSs env zBody (GRHSs x grhss (dL->L l binds)) = do
     (new_env, new_binds) <- zonkLocalBinds env binds
     let
-        zonk_grhs (GRHS xx guarded rhs)
+        zonk_grhs (GRHS xx guarded rhs weight)
           = do (env2, new_guarded) <- zonkStmts new_env zonkLExpr guarded
                new_rhs <- zBody env2 rhs
-               return (GRHS xx new_guarded new_rhs)
+               return (GRHS xx new_guarded new_rhs weight)
         zonk_grhs (XGRHS _) = panic "zonkGRHSs"
     new_grhss <- mapM (wrapLocM zonk_grhs) grhss
     return (GRHSs x new_grhss (cL l new_binds))
@@ -830,27 +830,27 @@ zonkExpr env (HsCase x expr ms)
        new_ms <- zonkMatchGroup env zonkLExpr ms
        return (HsCase x new_expr new_ms)
 
-zonkExpr env (HsIf x Nothing e1 e2 e3)
+zonkExpr env (HsIf x Nothing e1 e2 e3 w)
   = do new_e1 <- zonkLExpr env e1
        new_e2 <- zonkLExpr env e2
        new_e3 <- zonkLExpr env e3
-       return (HsIf x Nothing new_e1 new_e2 new_e3)
+       return (HsIf x Nothing new_e1 new_e2 new_e3 w)
 
-zonkExpr env (HsIf x (Just fun) e1 e2 e3)
+zonkExpr env (HsIf x (Just fun) e1 e2 e3 w)
   = do (env1, new_fun) <- zonkSyntaxExpr env fun
        new_e1 <- zonkLExpr env1 e1
        new_e2 <- zonkLExpr env1 e2
        new_e3 <- zonkLExpr env1 e3
-       return (HsIf x (Just new_fun) new_e1 new_e2 new_e3)
+       return (HsIf x (Just new_fun) new_e1 new_e2 new_e3 w)
 
 zonkExpr env (HsMultiIf ty alts)
   = do { alts' <- mapM (wrapLocM zonk_alt) alts
        ; ty'   <- zonkTcTypeToTypeX env ty
        ; return $ HsMultiIf ty' alts' }
-  where zonk_alt (GRHS x guard expr)
+  where zonk_alt (GRHS x guard expr weight)
           = do { (env', guard') <- zonkStmts env zonkLExpr guard
                ; expr'          <- zonkLExpr env' expr
-               ; return $ GRHS x guard' expr' }
+               ; return $ GRHS x guard' expr' weight}
         zonk_alt (XGRHS _) = panic "zonkExpr.HsMultiIf"
 
 zonkExpr env (HsLet x (dL->L l binds) expr)

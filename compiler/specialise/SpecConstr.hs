@@ -974,7 +974,7 @@ extendCaseBndrs env scrut case_bndr con alt_bndrs
               = alt_bndrs
 
    cval = case con of
-                DEFAULT    -> Nothing
+                DEFAULT{}    -> Nothing
                 LitAlt {}  -> Just (ConVal con [])
                 DataAlt {} -> Just (ConVal con vanilla_args)
                       where
@@ -1234,7 +1234,7 @@ scExpr' env (Case scrut b ty alts)
   where
     sc_con_app con args scrut'  -- Known constructor; simplify
      = do { let (_, bs, rhs) = findAlt con alts
-                                  `orElse` (DEFAULT, [], mkImpossibleExpr ty)
+                                  `orElse` (DEFAULT defaultFreq, [], mkImpossibleExpr ty) --TODOW
                 alt_env'     = extendScSubstList env ((b,scrut') : bs `zip` trimConArgs con args)
           ; scExpr alt_env' rhs }
 
@@ -1260,8 +1260,8 @@ scExpr' env (Case scrut b ty alts)
           ; (usg, rhs') <- scExpr env2 rhs
           ; let (usg', b_occ:arg_occs) = lookupOccs usg (b':bs2)
                 scrut_occ = case con of
-                               DataAlt dc -> ScrutOcc (unitUFM dc arg_occs)
-                               _          -> ScrutOcc emptyUFM
+                               DataAlt dc _w -> ScrutOcc (unitUFM dc arg_occs)
+                               _             -> ScrutOcc emptyUFM
           ; return (usg', b_occ `combineOcc` scrut_occ, (con, bs2, rhs')) }
 
 scExpr' env (Let (NonRec bndr rhs) body)
@@ -2197,7 +2197,7 @@ argToPat in_scope val_env arg arg_occ
   -- Check for a constructor application
   -- NB: this *precedes* the Var case, so that we catch nullary constrs
 argToPat env in_scope val_env arg arg_occ
-  | Just (ConVal (DataAlt dc) args) <- isValue val_env arg
+  | Just (ConVal (DataAlt dc _w) args) <- isValue val_env arg
   , not (ignoreDataCon env dc)        -- See Note [NoSpecConstr]
   , Just arg_occs <- mb_scrut dc
   = do  { let (ty_args, rest_args) = splitAtList (dataConUnivTyVars dc) args
@@ -2273,7 +2273,7 @@ argsToPats env in_scope val_env args occs
 isValue :: ValueEnv -> CoreExpr -> Maybe Value
 isValue _env (Lit lit)
   | litIsLifted lit = Nothing
-  | otherwise       = Just (ConVal (LitAlt lit) [])
+  | otherwise       = Just (ConVal (LitAlt lit defaultFreq) []) --TODO: Freq?
 
 isValue env (Var v)
   | Just cval <- lookupVarEnv env v
@@ -2305,7 +2305,7 @@ isValue _env expr       -- Maybe it's a constructor application
         Just con | args `lengthAtLeast` dataConRepArity con
                 -- Check saturated; might be > because the
                 --                  arity excludes type args
-                -> Just (ConVal (DataAlt con) args)
+                -> Just (ConVal (DataAlt con defaultFreq) args) --TODOW: Weight?
 
         _other | valArgCount args < idArity fun
                 -- Under-applied function

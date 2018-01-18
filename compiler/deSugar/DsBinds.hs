@@ -170,7 +170,7 @@ dsHsBind dflags b@(FunBind { fun_id = (dL->L _ fun)
 dsHsBind dflags (PatBind { pat_lhs = pat, pat_rhs = grhss
                          , pat_ext = NPatBindTc _ ty
                          , pat_ticks = (rhs_tick, var_ticks) })
-  = do  { body_expr <- dsGuarded grhss ty
+  = do  { body_expr <- dsGuarded grhss ty --TODO: CLeanup?
         ; checkGuardMatches PatBindGuards grhss
         ; let body' = mkOptTickBox rhs_tick body_expr
               pat'  = decideBangHood dflags pat
@@ -918,7 +918,7 @@ decomposeRuleLhs dflags orig_bndrs orig_lhs
      where (bs, body') = split_lets body
 
     -- handle "unlifted lets" too, needed for "map/coerce"
-   split_lets (Case r d _ [(DEFAULT, _, body)])
+   split_lets (Case r d _ [(DEFAULT _w, _, body)])
      | isCoVar d
      = ((d,r):bs, body')
      where (bs, body') = split_lets body

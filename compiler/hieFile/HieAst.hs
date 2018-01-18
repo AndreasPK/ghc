@@ -712,7 +712,7 @@ instance ( ToHie (Located body)
          , Data (GRHS a (Located body))
          ) => ToHie (LGRHS a (Located body)) where
   toHie (L span g) = concatM $ makeNode g span : case g of
-    GRHS _ guards body ->
+    GRHS _ guards body _ -> --TODO: Weights
       [ toHie $ listScopes (mkLScope body) guards
       , toHie body
       ]
@@ -797,7 +797,7 @@ instance ( a ~ GhcPass p
         [ toHie expr
         , toHie matches
         ]
-      HsIf _ _ a b c ->
+      HsIf _ _ a b c _weight -> --TODO: Weights
         [ toHie a
         , toHie b
         , toHie c

@@ -18,6 +18,7 @@ import GhcPrelude
 
 import {-# SOURCE #-} Match     ( match )
 
+import BasicTypes (BranchWeight(..))
 import HsSyn
 import DsBinds
 import ConLike
@@ -91,23 +92,25 @@ have-we-used-all-the-constructors? question; the local function
 matchConFamily :: [Id]
                -> Type
                -> [[EquationInfo]]
+               -> Maybe BranchWeight -- Weight for failure case
                -> DsM MatchResult
 -- Each group of eqns is for a single constructor
-matchConFamily (var:vars) ty groups
-  = do alts <- mapM (fmap toRealAlt . matchOneConLike vars ty) groups
-       return (mkCoAlgCaseMatchResult var ty alts)
+matchConFamily (var:vars) ty groups fail_weight
+  = -- pprTrace "matchCon" (ppr (groups,fail_weight)) $
+    do alts <- mapM (\g -> fmap toRealAlt $ matchOneConLike vars ty g fail_weight) groups
+       return (mkCoAlgCaseMatchResult var ty alts fail_weight)
   where
     toRealAlt alt = case alt_pat alt of
         RealDataCon dcon -> alt{ alt_pat = dcon }
         _ -> panic "matchConFamily: not RealDataCon"
-matchConFamily [] _ _ = panic "matchConFamily []"
+matchConFamily [] _ _ _ = panic "matchConFamily []"
 
 matchPatSyn :: [Id]
             -> Type
             -> [EquationInfo]
             -> DsM MatchResult
 matchPatSyn (var:vars) ty eqns
-  = do alt <- fmap toSynAlt $ matchOneConLike vars ty eqns
+  = do alt <- fmap toSynAlt $ matchOneConLike vars ty eqns Nothing
        return (mkCoSynCaseMatchResult var ty alt)
   where
     toSynAlt alt = case alt_pat alt of
@@ -120,8 +123,9 @@ type ConArgPats = HsConDetails (LPat GhcTc) (HsRecFields GhcTc (LPat GhcTc))
 matchOneConLike :: [Id]
                 -> Type
                 -> [EquationInfo]
+                -> Maybe BranchWeight
                 -> DsM (CaseAlt ConLike)
-matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
+matchOneConLike vars ty (eqn1 : eqns) fail_weight   -- All eqns for a single constructor
   = do  { let inst_tys = ASSERT( all tcIsTcTyVar ex_tvs )
                            -- ex_tvs can only be tyvars as data types in source
                            -- Haskell cannot mention covar yet (Aug 2018).
@@ -139,9 +143,9 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
                 = ASSERT( notNull arg_eqn_prs )
                   do { (wraps, eqns') <- liftM unzip (mapM shift arg_eqn_prs)
                      ; let group_arg_vars = select_arg_vars arg_vars arg_eqn_prs
-                     ; match_result <- match (group_arg_vars ++ vars) ty eqns'
+                     ; (match_result,_w) <- match (group_arg_vars ++ vars) ty eqns' fail_weight
                      ; return (adjustMatchResult (foldr1 (.) wraps) match_result) }
-
+              shift :: (a, EquationInfo) -> DsM (DsWrapper, EquationInfo)
               shift (_, eqn@(EqnInfo { eqn_pats = ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
                                                              pat_binds = bind, pat_args = args
                                                   } : pats }))
@@ -168,13 +172,16 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
         ; return $ MkCaseAlt{ alt_pat = con1,
                               alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
                               alt_wrapper = wrapper1,
-                              alt_result = foldr1 combineMatchResults match_results } }
+                              alt_result = foldr1 combineMatchResults match_results,
+                              alt_weight = weight1 } }
   where
     ConPatOut { pat_con = (dL->L _ con1)
               , pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 }
               = firstPat eqn1
     fields1 = map flSelector (conLikeFieldLabels con1)
+    weight1 = eqn_weight eqn1 :: Maybe BranchWeight
+    --TODO: There should probably only be one weight here.
 
     ex_tvs = conLikeExTyCoVars con1
 
@@ -195,7 +202,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
         lookup_fld (dL->L _ rpat) = lookupNameEnv_NF fld_var_env
                                             (idName (unLoc (hsRecFieldId rpat)))
     select_arg_vars _ [] = panic "matchOneCon/select_arg_vars []"
-matchOneConLike _ _ [] = panic "matchOneCon []"
+matchOneConLike _ _ [] _ = panic "matchOneCon []"
 
 -----------------
 compatible_pats :: (ConArgPats,a) -> (ConArgPats,a) -> Bool

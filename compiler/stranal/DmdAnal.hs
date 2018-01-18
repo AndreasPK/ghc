@@ -224,7 +224,7 @@ dmdAnal' env dmd (Lam var body)
     in
     (postProcessUnsat defer_and_use lam_ty, Lam var' body')
 
-dmdAnal' env dmd (Case scrut case_bndr ty [(DataAlt dc, bndrs, rhs)])
+dmdAnal' env dmd (Case scrut case_bndr ty [(con@(DataAlt dc _w), bndrs, rhs)])
   -- Only one alternative with a product constructor
   | let tycon = dataConTyCon dc
   , isJust (isDataProductTyCon_maybe tycon)
@@ -255,7 +255,7 @@ dmdAnal' env dmd (Case scrut case_bndr ty [(DataAlt dc, bndrs, rhs)])
 --                                   , text "scrut_ty" <+> ppr scrut_ty
 --                                   , text "alt_ty" <+> ppr alt_ty2
 --                                   , text "res_ty" <+> ppr res_ty ]) $
-    (res_ty, Case scrut' case_bndr' ty [(DataAlt dc, bndrs', rhs')])
+    (res_ty, Case scrut' case_bndr' ty [(con, bndrs', rhs')])
 
 dmdAnal' env dmd (Case scrut case_bndr ty alts)
   = let      -- Case expression with multiple alternatives

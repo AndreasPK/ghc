@@ -904,7 +904,8 @@ tcIfaceDataCons tycon_name tycon tc_tybinders if_cons
                          ifConCtxt = ctxt, ifConEqSpec = spec,
                          ifConArgTys = args, ifConFields = lbl_names,
                          ifConStricts = if_stricts,
-                         ifConSrcStricts = if_src_stricts})
+                         ifConSrcStricts = if_src_stricts,
+                         ifConWeight = if_weight})
      = -- Universally-quantified tyvars are shared with
        -- parent TyCon, and are already in scope
        bindIfaceBndrs ex_bndrs    $ \ ex_tvs -> do
@@ -964,7 +965,7 @@ tcIfaceDataCons tycon_name tycon tc_tybinders if_cons
                        lbl_names
                        univ_tvs ex_tvs user_tv_bndrs
                        eq_spec theta
-                       arg_tys orig_res_ty tycon tag_map
+                       arg_tys orig_res_ty tycon tag_map if_weight
         ; traceIf (text "Done interface-file tc_con_decl" <+> ppr dc_name)
         ; return con }
     mk_doc con_name = text "Constructor" <+> ppr con_name
@@ -1397,29 +1398,29 @@ tcIfaceLit lit = return lit
 tcIfaceAlt :: CoreExpr -> (TyCon, [Type])
            -> (IfaceConAlt, [FastString], IfaceExpr)
            -> IfL (AltCon, [TyVar], CoreExpr)
-tcIfaceAlt _ _ (IfaceDefault, names, rhs)
+tcIfaceAlt _ _ (IfaceDefault weight, names, rhs)
   = ASSERT( null names ) do
     rhs' <- tcIfaceExpr rhs
-    return (DEFAULT, [], rhs')
+    return (DEFAULT weight, [], rhs')
 
-tcIfaceAlt _ _ (IfaceLitAlt lit, names, rhs)
+tcIfaceAlt _ _ (IfaceLitAlt lit weight, names, rhs)
   = ASSERT( null names ) do
     lit' <- tcIfaceLit lit
     rhs' <- tcIfaceExpr rhs
-    return (LitAlt lit', [], rhs')
+    return (LitAlt lit' weight, [], rhs')
 
 -- A case alternative is made quite a bit more complicated
 -- by the fact that we omit type annotations because we can
 -- work them out.  True enough, but its not that easy!
-tcIfaceAlt scrut (tycon, inst_tys) (IfaceDataAlt data_occ, arg_strs, rhs)
+tcIfaceAlt scrut (tycon, inst_tys) (IfaceDataAlt data_occ weight, arg_strs, rhs)
   = do  { con <- tcIfaceDataCon data_occ
         ; when (debugIsOn && not (con `elem` tyConDataCons tycon))
                (failIfM (ppr scrut $$ ppr con $$ ppr tycon $$ ppr (tyConDataCons tycon)))
-        ; tcIfaceDataAlt con inst_tys arg_strs rhs }
+        ; tcIfaceDataAlt con weight inst_tys arg_strs rhs }
 
-tcIfaceDataAlt :: DataCon -> [Type] -> [FastString] -> IfaceExpr
+tcIfaceDataAlt :: DataCon -> BranchWeight -> [Type] -> [FastString] -> IfaceExpr
                -> IfL (AltCon, [TyVar], CoreExpr)
-tcIfaceDataAlt con inst_tys arg_strs rhs
+tcIfaceDataAlt con weight inst_tys arg_strs rhs
   = do  { us <- newUniqueSupply
         ; let uniqs = uniqsFromSupply us
         ; let (ex_tvs, arg_ids)
@@ -1428,7 +1429,7 @@ tcIfaceDataAlt con inst_tys arg_strs rhs
         ; rhs' <- extendIfaceEnvs  ex_tvs       $
                   extendIfaceIdEnv arg_ids      $
                   tcIfaceExpr rhs
-        ; return (DataAlt con, ex_tvs ++ arg_ids, rhs') }
+        ; return (DataAlt con weight, ex_tvs ++ arg_ids, rhs') }
 
 {-
 ************************************************************************

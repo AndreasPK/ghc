@@ -28,7 +28,7 @@ import CoreSyn
 import Outputable
 import BasicTypes
 import CoreMap
-import Util             ( filterOut )
+import Util             ( filterOut, fstOf3 )
 import Data.List        ( mapAccumL )
 
 {-
@@ -575,18 +575,18 @@ cseCase env scrut bndr ty alts
 
     -- Given case x of { K y z -> ...K y z... }
     -- CSE K y z into x...
-    cse_alt (DataAlt con, args, rhs)
+    cse_alt (DataAlt con w, args, rhs)
         | not (null args)
                 -- ... but don't try CSE if there are no args; it just increases the number
                 -- of live vars.  E.g.
                 --      case x of { True -> ....True.... }
                 -- Don't replace True by x!
                 -- Hence the 'null args', which also deal with literals and DEFAULT
-        = (DataAlt con, args', tryForCSE new_env rhs)
+        = (DataAlt con w, args', tryForCSE new_env rhs)
         where
           (env', args') = addBinders alt_env args
           new_env       = extendCSEnv env' con_expr con_target
-          con_expr      = mkAltExpr (DataAlt con) args' arg_tys
+          con_expr      = mkAltExpr (DataAlt con w) args' arg_tys
 
     cse_alt (con, args, rhs)
         = (con, args', tryForCSE env' rhs)
@@ -595,12 +595,17 @@ cseCase env scrut bndr ty alts
 
 combineAlts :: CSEnv -> [InAlt] -> [InAlt]
 -- See Note [Combine case alternatives]
-combineAlts env ((_,bndrs1,rhs1) : rest_alts)
+combineAlts env ((con1,bndrs1,rhs1) : rest_alts)
   | all isDeadBinder bndrs1
-  = (DEFAULT, [], rhs1) : filtered_alts
+  -- Don't rebuild the case if we can't combine any alternatives.
+  , not (null combined_alts)
+  = (DEFAULT filteredWeights, [], rhs1) : filtered_alts --TODOW
   where
+    filteredWeights = foldl1 combinedFreqs (map (altConWeight . fstOf3) combined_alts)
+    (combined_alts,filtered_alts)
+      = span identical rest_alts :: ([CoreAlt],[CoreAlt])
+
     in_scope = substInScope (csEnvSubst env)
-    filtered_alts = filterOut identical rest_alts
     identical (_con, bndrs, rhs) = all ok bndrs && eqExpr in_scope rhs1 rhs
     ok bndr = isDeadBinder bndr || not (bndr `elemInScopeSet` in_scope)
 

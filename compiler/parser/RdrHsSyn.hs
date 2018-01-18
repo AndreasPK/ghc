@@ -57,6 +57,8 @@ module   RdrHsSyn (
         checkValDef,          -- (SrcLoc, HsExp, HsRhs, [HsDecl]) -> P HsDecl
         checkValSigLhs,
         checkDoAndIfThenElse,
+        checkIfWeights,       -- Annotations required in both or no branch.
+        checkConWeights,      -- Annotations on all or no constructor
         LRuleTyTmVar, RuleTyTmVar(..),
         mkRuleBndrs, mkRuleTyVarBndrs,
         checkRuleTyVarBndrNames,
@@ -644,23 +646,26 @@ recordPatSynErr loc pat =
 
 mkConDeclH98 :: Located RdrName -> Maybe [LHsTyVarBndr GhcPs]
                 -> Maybe (LHsContext GhcPs) -> HsConDeclDetails GhcPs
+                -> Maybe BranchWeight
                 -> ConDecl GhcPs
 
-mkConDeclH98 name mb_forall mb_cxt args
+mkConDeclH98 name mb_forall mb_cxt args weight
   = ConDeclH98 { con_ext    = noExt
                , con_name   = name
                , con_forall = noLoc $ isJust mb_forall
                , con_ex_tvs = mb_forall `orElse` []
                , con_mb_cxt = mb_cxt
                , con_args   = args'
-               , con_doc    = Nothing }
+               , con_doc    = Nothing
+               , con_weight = weight }
   where
     args' = nudgeHsSrcBangs args
 
 mkGadtDecl :: [Located RdrName]
            -> LHsType GhcPs     -- Always a HsForAllTy
+           -> Maybe BranchWeight
            -> (ConDecl GhcPs, [AddAnn])
-mkGadtDecl names ty
+mkGadtDecl names ty weight
   = (ConDeclGADT { con_g_ext  = noExt
                  , con_names  = names
                  , con_forall = cL l $ isLHsForAllTy ty'
@@ -668,7 +673,8 @@ mkGadtDecl names ty
                  , con_mb_cxt = mcxt
                  , con_args   = args'
                  , con_res_ty = res_ty
-                 , con_doc    = Nothing }
+                 , con_doc    = Nothing
+                 , con_weight = weight }
     , anns1 ++ anns2)
   where
     (ty'@(dL->L l _),anns1) = peel_parens ty []
@@ -1304,6 +1310,32 @@ checkDoAndIfThenElse guardExpr semiThen thenExpr semiElse elseExpr
                  text "then" <+> ppr thenExpr  <> pprOptSemi semiElse <+>
                  text "else" <+> ppr elseExpr
 
+checkIfWeights :: SrcSpan -> Maybe BranchWeight -> Maybe BranchWeight
+               -> P (Maybe (BranchWeight,BranchWeight))
+checkIfWeights loc thenWeight elseWeight
+  | isJust thenWeight == isJust elseWeight
+  = return $ do tw <- thenWeight
+                ew <- elseWeight
+                return (tw,ew)
+  | otherwise
+  = addFatalError  loc $
+    text "Annotated if requires annotations in both branches" --TODO: Proper error msg
+
+checkConWeights :: [LConDecl GhcPs]
+                -> P ()
+checkConWeights [] = return ()
+checkConWeights cons
+  | all (\x -> hasWeight x == firstWeight) cons
+  = return ()
+  | otherwise
+  = addFatalError  srcSpan $
+                   text "Weights must be given for all Constructors or not at all"
+  where
+    srcSpan = foldr1 combineSrcSpans (map getLoc cons)
+    firstWeight = hasWeight $ head cons
+    hasWeight = isJust . con_weight . unLoc
+
+
 
         -- The parser left-associates, so there should
         -- not be any OpApps inside the e's
@@ -1892,7 +1924,8 @@ checkCmd _ (HsPar _ e) =
     checkCommand e >>= (\c -> return $ HsCmdPar noExt c)
 checkCmd _ (HsCase _ e mg) =
     checkCmdMatchGroup mg >>= (\mg' -> return $ HsCmdCase noExt e mg')
-checkCmd _ (HsIf _ cf ep et ee) = do
+-- Weights not supported here
+checkCmd _ (HsIf _ cf ep et ee _) = do
     pt <- checkCommand et
     pe <- checkCommand ee
     return $ HsCmdIf noExt cf ep pt pe
@@ -1950,10 +1983,10 @@ checkCmdGRHSs (XGRHSs _) = panic "checkCmdGRHSs"
 checkCmdGRHS :: LGRHS GhcPs (LHsExpr GhcPs) -> P (LGRHS GhcPs (LHsCmd GhcPs))
 checkCmdGRHS = locMap $ const convert
   where
-    convert (GRHS x stmts e) = do
+    convert (GRHS x stmts e w) = do
         c <- checkCommand e
 --        cmdStmts <- mapM checkCmdLStmt stmts
-        return $ GRHS x {- cmdStmts -} stmts c
+        return $ GRHS x {- cmdStmts -} stmts c w
     convert (XGRHS _) = panic "checkCmdGRHS"
 
 

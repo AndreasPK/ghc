@@ -438,16 +438,18 @@ gen_Ord_binds loc tycon = do
       | tag > last_tag `div` 2  -- lower range is larger
       = untag_Expr dflags tycon [(b_RDR, bh_RDR)] $
         nlHsIf (genPrimOpApp (nlHsVar bh_RDR) ltInt_RDR tag_lit)
-               (gtResult op) $  -- Definitely GT
-        nlHsCase (nlHsVar b_RDR) [ mkInnerEqAlt op data_con
-                                 , mkHsCaseAlt nlWildPat (ltResult op) ]
+               (gtResult op)    -- Definitely GT
+               (nlHsCase (nlHsVar b_RDR) [ mkInnerEqAlt op data_con
+                                  , mkHsCaseAlt nlWildPat (ltResult op) ])
+                Nothing --TODOW: Is there a likely path?
 
       | otherwise               -- upper range is larger
       = untag_Expr dflags tycon [(b_RDR, bh_RDR)] $
         nlHsIf (genPrimOpApp (nlHsVar bh_RDR) gtInt_RDR tag_lit)
-               (ltResult op) $  -- Definitely LT
-        nlHsCase (nlHsVar b_RDR) [ mkInnerEqAlt op data_con
-                                 , mkHsCaseAlt nlWildPat (gtResult op) ]
+               (ltResult op)   -- Definitely LT
+               (nlHsCase (nlHsVar b_RDR) [ mkInnerEqAlt op data_con
+                                 , mkHsCaseAlt nlWildPat (gtResult op) ])
+               Nothing --TODOW: Is there a likely path?
       where
         tag     = get_tag data_con
         tag_lit = noLoc (HsLit noExt (HsIntPrim NoSourceText (toInteger tag)))
@@ -522,14 +524,19 @@ unliftedCompare :: RdrName -> RdrName
                                                     -- Three results
                 -> LHsExpr GhcPs
 -- Return (if a < b then lt else if a == b then eq else gt)
+-- Test (<) first, not (==), because the latter
+-- is true less often, so putting it first would
+-- mean more tests (dynamically)
 unliftedCompare lt_op eq_op a_expr b_expr lt eq gt
-  = nlHsIf (ascribeBool $ genPrimOpApp a_expr lt_op b_expr) lt $
-                        -- Test (<) first, not (==), because the latter
-                        -- is true less often, so putting it first would
-                        -- mean more tests (dynamically)
-        nlHsIf (ascribeBool $ genPrimOpApp a_expr eq_op b_expr) eq gt
+  = nlHsIf (ascribeBool $ genPrimOpApp a_expr lt_op b_expr)
+           lt
+           gtEq
+           Nothing
   where
     ascribeBool e = nlExprWithTySig e boolTy
+    gtEq = nlHsIf (ascribeBool $ genPrimOpApp a_expr eq_op b_expr)
+                      eq gt
+                     (Just (rareFreq,oftenFreq))
 
 nlConWildPat :: DataCon -> LPat GhcPs
 -- The pattern (K {})
@@ -607,6 +614,7 @@ gen_Enum_binds loc tycon = do
              (nlHsApp (nlHsVar (tag2con_RDR dflags tycon))
                     (nlHsApps plus_RDR [nlHsVarApps intDataCon_RDR [ah_RDR],
                                         nlHsIntLit 1]))
+             Nothing --TODOW: Give weights
 
     pred_enum dflags
       = mk_easy_FunBind loc pred_RDR [a_Pat] $
@@ -619,6 +627,7 @@ gen_Enum_binds loc tycon = do
                             [ nlHsVarApps intDataCon_RDR [ah_RDR]
                             , nlHsLit (HsInt noExt
                                                 (mkIntegralLit (-1 :: Int)))]))
+              Nothing --TODOW: Give weights
 
     to_enum dflags
       = mk_easy_FunBind loc toEnum_RDR [a_Pat] $
@@ -628,6 +637,7 @@ gen_Enum_binds loc tycon = do
                                  , nlHsVar (maxtag_RDR dflags tycon)]])
              (nlHsVarApps (tag2con_RDR dflags tycon) [a_RDR])
              (illegal_toEnum_tag occ_nm (maxtag_RDR dflags tycon))
+             Nothing --TODOW: Give weights
 
     enum_from dflags
       = mk_easy_FunBind loc enumFrom_RDR [a_Pat] $
@@ -649,6 +659,7 @@ gen_Enum_binds loc tycon = do
                                                nlHsVarApps intDataCon_RDR [bh_RDR]])
                            (nlHsIntLit 0)
                            (nlHsVar (maxtag_RDR dflags tycon))
+                           Nothing --TODOW: Give weights
                            ))
 
     from_enum dflags

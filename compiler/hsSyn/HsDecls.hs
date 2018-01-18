@@ -1327,6 +1327,7 @@ data ConDecl pass
 
       , con_doc     :: Maybe LHsDocString
           -- ^ A possible Haddock comment.
+      , con_weight :: Maybe BranchWeight -- ^ Default weight when casing
       }
 
   | ConDeclH98
@@ -1342,8 +1343,9 @@ data ConDecl pass
       , con_mb_cxt :: Maybe (LHsContext pass)  -- ^ User-written context (if any)
       , con_args   :: HsConDeclDetails pass    -- ^ Arguments; can be InfixCon
 
-      , con_doc       :: Maybe LHsDocString
+      , con_doc    :: Maybe LHsDocString
           -- ^ A possible Haddock comment.
+      , con_weight :: Maybe BranchWeight -- ^ Default weight when casing
       }
   | XConDecl (XXConDecl pass)
 

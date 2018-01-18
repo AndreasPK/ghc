@@ -273,11 +273,11 @@ tcGRHSs _ (XGRHSs _) _ = panic "tcGRHSs"
 tcGRHS :: TcMatchCtxt body -> ExpRhoType -> GRHS GhcRn (Located (body GhcRn))
        -> TcM (GRHS GhcTcId (Located (body GhcTcId)))
 
-tcGRHS ctxt res_ty (GRHS _ guards rhs)
+tcGRHS ctxt res_ty (GRHS _ guards rhs weight)
   = do  { (guards', rhs')
             <- tcStmtsAndThen stmt_ctxt tcGuardStmt guards res_ty $
                mc_body ctxt rhs
-        ; return (GRHS noExt guards' rhs') }
+        ; return (GRHS noExt guards' rhs' weight) }
   where
     stmt_ctxt  = PatGuard (mc_what ctxt)
 tcGRHS _ _ (XGRHS _) = panic "tcGRHS"

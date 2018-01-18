@@ -65,6 +65,8 @@ import Control.Monad
 import CostCentre       ( CostCentre, ccFromThisModule )
 import qualified Data.Set as S
 
+import HotCode
+
 {-
 -- ---------------------------------------------------------------------------
 -- Note [CorePrep Overview]
@@ -178,41 +180,48 @@ type CpeRhs  = CoreExpr    -- Non-terminal 'rhs'
 
 corePrepPgm :: HscEnv -> Module -> ModLocation -> CoreProgram -> [TyCon]
             -> IO (CoreProgram, S.Set CostCentre)
-corePrepPgm hsc_env this_mod mod_loc binds data_tycons =
+corePrepPgm hsc_env this_mod mod_loc binds data_tycons = do
     withTiming (pure dflags)
-               (text "CorePrep"<+>brackets (ppr this_mod))
-               (const ()) $ do
-    us <- mkSplitUniqSupply 's'
-    initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
+                (text "CorePrep"<+>brackets (ppr this_mod))
+                (const ()) $ do
+      us <- mkSplitUniqSupply 's'
+      initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
 
-    let cost_centres
-          | WayProf `elem` ways dflags
-          = collectCostCentres this_mod binds
-          | otherwise
-          = S.empty
+      let cost_centres
+            | WayProf `elem` ways dflags
+            = collectCostCentres this_mod binds
+            | otherwise
+            = S.empty
 
-        implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
-            -- NB: we must feed mkImplicitBinds through corePrep too
-            -- so that they are suitably cloned and eta-expanded
+          implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
+              -- NB: we must feed mkImplicitBinds through corePrep too
+              -- so that they are suitably cloned and eta-expanded
 
-        binds_out = initUs_ us $ do
-                      floats1 <- corePrepTopBinds initialCorePrepEnv binds
-                      floats2 <- corePrepTopBinds initialCorePrepEnv implicit_binds
-                      return (deFloatTop (floats1 `appendFloats` floats2))
+          binds_out = initUs_ us $ do
+                        floats1 <- corePrepTopBinds initialCorePrepEnv binds
+                        floats2 <- corePrepTopBinds initialCorePrepEnv implicit_binds
+                        return (deFloatTop (floats1 `appendFloats` floats2))
 
-    endPassIO hsc_env alwaysQualify CorePrep binds_out []
-    return (binds_out, cost_centres)
+      endPassIO hsc_env alwaysQualify CorePrep binds_out []
+      return (binds_out, cost_centres)
   where
     dflags = hsc_dflags hsc_env
 
 corePrepExpr :: DynFlags -> HscEnv -> CoreExpr -> IO CoreExpr
-corePrepExpr dflags hsc_env expr =
+corePrepExpr dflags hsc_env expr = do
+    --TODO: This does not belong here!
+    expr <- withTiming (pure dflags) (text "LikelyRecursion [expr]") (const ()) (
+      if gopt Opt_LikelyRecursion dflags
+        then (return $ likelyRecursion expr)
+        else return expr)
+
+
     withTiming (pure dflags) (text "CorePrep [expr]") (const ()) $ do
-    us <- mkSplitUniqSupply 's'
-    initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
-    let new_expr = initUs_ us (cpeBodyNF initialCorePrepEnv expr)
-    dumpIfSet_dyn dflags Opt_D_dump_prep "CorePrep" (ppr new_expr)
-    return new_expr
+      us <- mkSplitUniqSupply 's'
+      initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
+      let new_expr = initUs_ us (cpeBodyNF initialCorePrepEnv expr)
+      dumpIfSet_dyn dflags Opt_D_dump_prep "CorePrep" (ppr new_expr)
+      return new_expr
 
 corePrepTopBinds :: CorePrepEnv -> [CoreBind] -> UniqSM Floats
 -- Note [Floating out of top level bindings]
@@ -664,7 +673,7 @@ cpeRhsE env (Case scrut bndr ty alts)
                  -- unexpectedly returns.
                | gopt Opt_CatchBottoms (cpe_dynFlags env)
                , not (altsAreExhaustive alts)
-               = addDefault alts (Just err)
+               = addDefault alts (Just (err,neverFreq))
                | otherwise = alts
                where err = mkRuntimeErrorApp rUNTIME_ERROR_ID ty
                                              "Bottoming expression returned"
@@ -1262,7 +1271,7 @@ wrapBinds :: Floats -> CpeBody -> CpeBody
 wrapBinds (Floats _ binds) body
   = foldrOL mk_bind body binds
   where
-    mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
+    mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT alwaysFreq, [], body)] --TODO: Check
     mk_bind (FloatLet bind)        body = Let bind body
     mk_bind (FloatTick tickish)    body = mkTick tickish body
 

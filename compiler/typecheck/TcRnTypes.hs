@@ -3646,7 +3646,7 @@ exprCtOrigin (SectionR _ _ _)     = SectionOrigin
 exprCtOrigin (ExplicitTuple {})   = Shouldn'tHappenOrigin "explicit tuple"
 exprCtOrigin ExplicitSum{}        = Shouldn'tHappenOrigin "explicit sum"
 exprCtOrigin (HsCase _ _ matches) = matchesCtOrigin matches
-exprCtOrigin (HsIf _ (Just syn) _ _ _) = exprCtOrigin (syn_expr syn)
+exprCtOrigin (HsIf _ (Just syn) _ _ _ _) = exprCtOrigin (syn_expr syn)
 exprCtOrigin (HsIf {})           = Shouldn'tHappenOrigin "if expression"
 exprCtOrigin (HsMultiIf _ rhs)   = lGRHSCtOrigin rhs
 exprCtOrigin (HsLet _ _ e)       = lexprCtOrigin e
@@ -3694,7 +3694,7 @@ grhssCtOrigin (XGRHSs _) = panic "grhssCtOrigin"
 
 -- | Extract a suitable CtOrigin from a list of guarded RHSs
 lGRHSCtOrigin :: [LGRHS GhcRn (LHsExpr GhcRn)] -> CtOrigin
-lGRHSCtOrigin [L _ (GRHS _ _ (L _ e))] = exprCtOrigin e
+lGRHSCtOrigin [L _ (GRHS _ _ (L _ e) _)] = exprCtOrigin e
 lGRHSCtOrigin [L _ (XGRHS _)] = panic "lGRHSCtOrigin"
 lGRHSCtOrigin _ = Shouldn'tHappenOrigin "multi-way GRHS"
 

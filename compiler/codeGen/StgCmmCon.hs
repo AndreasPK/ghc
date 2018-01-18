@@ -262,7 +262,7 @@ bindConArgs :: AltCon -> LocalReg -> [NonVoid Id] -> FCode [LocalReg]
 -- (bindConArgs con args) augments the environment with bindings for the
 -- binders args, assuming that we have just returned from a 'case' which
 -- found a con
-bindConArgs (DataAlt con) base args
+bindConArgs (DataAlt con _w) base args
   = ASSERT(not (isUnboxedTupleCon con))
     do dflags <- getDynFlags
        let (_, _, args_w_offsets) = mkVirtConstrOffsets dflags (addIdReps args)

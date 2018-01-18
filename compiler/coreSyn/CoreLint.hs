@@ -279,6 +279,9 @@ coreDumpFlag CoreDesugarOpt           = Just Opt_D_dump_ds
 coreDumpFlag CoreTidy                 = Just Opt_D_dump_simpl
 coreDumpFlag CorePrep                 = Just Opt_D_dump_prep
 coreDumpFlag CoreOccurAnal            = Just Opt_D_dump_occur_anal
+coreDumpFlag CoreLikelyRecursion      = Just Opt_D_verbose_core2core
+coreDumpFlag CoreUnlikelyBottoms      = Just Opt_D_verbose_core2core
+
 
 coreDumpFlag CoreDoPrintCore          = Nothing
 coreDumpFlag (CoreDoRuleCheck {})     = Nothing
@@ -801,8 +804,8 @@ lintCoreExpr e@(Case scrut var alt_ty alts) =
      -- See Note [No alternatives lint check] for details.
 
      -- See Note [Rules for floating-point comparisons] in PrelRules
-     ; let isLitPat (LitAlt _, _ , _) = True
-           isLitPat _                 = False
+     ; let isLitPat (LitAlt _ _, _ , _) = True
+           isLitPat _                   = False
      ; checkL (not $ isFloatingTy scrut_ty && any isLitPat alts)
          (ptext (sLit $ "Lint warning: Scrutinising floating-point " ++
                         "expression with literal pattern in case " ++
@@ -1125,8 +1128,8 @@ checkCaseAlts e ty alts =
     increasing_tag (alt1 : rest@( alt2 : _)) = alt1 `ltAlt` alt2 && increasing_tag rest
     increasing_tag _                         = True
 
-    non_deflt (DEFAULT, _, _) = False
-    non_deflt _               = True
+    non_deflt (DEFAULT _, _, _) = False
+    non_deflt _                 = True
 
     is_infinite_ty = case tyConAppTyCon_maybe ty of
                         Nothing    -> False
@@ -1143,11 +1146,11 @@ lintCoreAlt :: OutType          -- Type of scrutinee
             -> LintM ()
 -- If you edit this function, you may need to update the GHC formalism
 -- See Note [GHC Formalism]
-lintCoreAlt _ alt_ty (DEFAULT, args, rhs) =
+lintCoreAlt _ alt_ty (DEFAULT _, args, rhs) =
   do { lintL (null args) (mkDefaultArgsMsg args)
      ; lintAltExpr rhs alt_ty }
 
-lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
+lintCoreAlt scrut_ty alt_ty (LitAlt lit _, args, rhs)
   | litIsLifted lit
   = failWithL integerScrutinisedMsg
   | otherwise
@@ -1157,7 +1160,7 @@ lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
   where
     lit_ty = literalType lit
 
-lintCoreAlt scrut_ty alt_ty alt@(DataAlt con, args, rhs)
+lintCoreAlt scrut_ty alt_ty alt@(DataAlt con _, args, rhs)
   | isNewTyCon (dataConTyCon con)
   = addErrL (mkNewTyDataConAltMsg scrut_ty alt)
   | Just (tycon, tycon_arg_tys) <- splitTyConApp_maybe scrut_ty

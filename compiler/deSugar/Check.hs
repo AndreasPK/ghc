@@ -1241,7 +1241,7 @@ translateMatch fam_insts (dL->L _ (Match { m_pats = lpats, m_grhss = grhss })) =
   return (pats', guards')
   where
     extractGuards :: LGRHS GhcTc (LHsExpr GhcTc) -> [GuardStmt GhcTc]
-    extractGuards (dL->L _ (GRHS _ gs _)) = map unLoc gs
+    extractGuards (dL->L _ (GRHS _ gs _ _)) = map unLoc gs
     extractGuards _                       = panic "translateMatch"
 
     pats   = map unLoc lpats

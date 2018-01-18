@@ -523,6 +523,8 @@ are the most common patterns, rewritten as regular expressions for clarity:
  '{-# OVERLAPS'           { L _ (IToverlaps_prag _) }
  '{-# INCOHERENT'         { L _ (ITincoherent_prag _) }
  '{-# COMPLETE'           { L _ (ITcomplete_prag _)   }
+ '{-# LIKELY'             { L _ (ITlikely_prag _)   }
+
  '#-}'                    { L _ ITclose_prag }
 
  '..'           { L _ ITdotdot }                        -- reserved symbols
@@ -1096,7 +1098,8 @@ ty_decl :: { LTyClDecl GhcPs }
 
           -- ordinary data type or newtype declaration
         | data_or_newtype capi_ctype tycl_hdr constrs maybe_derivings
-                {% amms (mkTyData (comb4 $1 $3 $4 $5) (snd $ unLoc $1) $2 $3
+                {% checkConWeights (snd $ unLoc $4) >>
+                   amms (mkTyData (comb4 $1 $3 $4 $5) (snd $ unLoc $1) $2 $3
                            Nothing (reverse (snd $ unLoc $4))
                                    (fmap reverse $5))
                                    -- We need the location on tycl_hdr in case
@@ -1107,7 +1110,8 @@ ty_decl :: { LTyClDecl GhcPs }
         | data_or_newtype capi_ctype tycl_hdr opt_kind_sig
                  gadt_constrlist
                  maybe_derivings
-            {% amms (mkTyData (comb4 $1 $3 $5 $6) (snd $ unLoc $1) $2 $3
+            {% checkConWeights (snd . unLoc $ $5) >>
+               amms (mkTyData (comb4 $1 $3 $5 $6) (snd $ unLoc $1) $2 $3
                             (snd $ unLoc $4) (snd $ unLoc $5)
                             (fmap reverse $6) )
                                    -- We need the location on tycl_hdr in case
@@ -2174,13 +2178,14 @@ gadt_constr_with_doc
         | gadt_constr
                 {% return $1 }
 
+--TODO: Check that all or no constructors are annotated
 gadt_constr :: { LConDecl GhcPs }
     -- see Note [Difference in parsing GADT and data constructors]
     -- Returns a list because of:   C,D :: ty
-        : con_list '::' sigtypedoc
-                {% let (gadt,anns) = mkGadtDecl (unLoc $1) $3
-                   in ams (sLL $1 $> gadt)
-                       (mu AnnDcolon $2:anns) }
+        : optWeight con_list '::' sigtypedoc
+                {% let (gadt,anns) = mkGadtDecl (unLoc $2) $4 (wCon $1)
+                   in ams (sLL $2 $> gadt)
+                       (mu AnnDcolon $3:anns) }
 
 {- Note [Difference in parsing GADT and data constructors]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2202,7 +2207,8 @@ constrs1 :: { Located [LConDecl GhcPs] }
         : constrs1 maybe_docnext '|' maybe_docprev constr
             {% addAnnotation (gl $ head $ unLoc $1) AnnVbar (gl $3)
                >> return (sLL $1 $> (addConDoc $5 $2 : addConDocFirst (unLoc $1) $4)) }
-        | constr                                          { sL1 $1 [$1] }
+        | constr                                    { sL1 $1 [$1] }
+
 
 {- Note [Constr variatons of non-terminals]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2256,21 +2262,31 @@ They must be kept identical except for their treatment of 'docprev'.
 
 -}
 
+--TODO: SrcLoc for weight
 constr :: { LConDecl GhcPs }
-        : maybe_docnext forall constr_context '=>' constr_stuff
-                {% ams (let (con,details,doc_prev) = unLoc $5 in
-                  addConDoc (cL (comb4 $2 $3 $4 $5) (mkConDeclH98 con
+        :maybe_docnext forall constr_context '=>' optWeight constr_stuff
+                {% ams (let (con,details,doc_prev) = unLoc $6 in
+                  addConDoc (cL (comb4 $2 $3 $4 $6) (mkConDeclH98 con
                                                        (snd $ unLoc $2)
                                                        (Just $3)
-                                                       details))
+                                                       details (wCon $5))
+                                                       )
                             ($1 `mplus` doc_prev))
                         (mu AnnDarrow $4:(fst $ unLoc $2)) }
+        | maybe_docnext forall weight constr_stuff
+                {% ams ( let (con,details,doc_prev) = unLoc $4 in
+                  addConDoc (cL (comb2 $2 $4) (mkConDeclH98 con
+                                                      (snd $ unLoc $2)
+                                                      Nothing   -- No context
+                                                      details (Just $ mkConWeight $3)))
+                            ($1 `mplus` doc_prev))
+                       (fst $ unLoc $2) }
         | maybe_docnext forall constr_stuff
                 {% ams ( let (con,details,doc_prev) = unLoc $3 in
                   addConDoc (cL (comb2 $2 $3) (mkConDeclH98 con
                                                       (snd $ unLoc $2)
                                                       Nothing   -- No context
-                                                      details))
+                                                      details Nothing))
                             ($1 `mplus` doc_prev))
                        (fst $ unLoc $2) }
 
@@ -2413,10 +2429,10 @@ decl    :: { LHsDecl GhcPs }
         | splice_exp            { sLL $1 $> $ mkSpliceDecl $1 }
 
 rhs     :: { Located ([AddAnn],GRHSs GhcPs (LHsExpr GhcPs)) }
-        : '=' exp wherebinds    { sL (comb3 $1 $2 $3)
-                                    ((mj AnnEqual $1 : (fst $ unLoc $3))
-                                    ,GRHSs noExt (unguardedRHS (comb3 $1 $2 $3) $2)
-                                   (snd $ unLoc $3)) }
+        : '=' optWeight exp wherebinds    { sL (comb3 $1 $3 $4)
+                                    ((mj AnnEqual $1 : (fst $ unLoc $4))
+                                    ,GRHSs noExt (unguardedRHS (comb3 $1 $3 $4) $3 (wUser $2))
+                                   (snd $ unLoc $4)) }
         | gdrhs wherebinds      { sLL $1 $>  (fst $ unLoc $2
                                     ,GRHSs noExt (reverse (unLoc $1))
                                                     (snd $ unLoc $2)) }
@@ -2426,7 +2442,8 @@ gdrhs :: { Located [LGRHS GhcPs (LHsExpr GhcPs)] }
         | gdrh                  { sL1 $1 [$1] }
 
 gdrh :: { LGRHS GhcPs (LHsExpr GhcPs) }
-        : '|' guardquals '=' exp  {% ams (sL (comb2 $1 $>) $ GRHS noExt (unLoc $2) $4)
+        : '|' guardquals '=' optWeight exp
+                        {% ams (sL (comb2 $1 $>) $ GRHS noExt (unLoc $2) $5 (wUser $4))
                                          [mj AnnVbar $1,mj AnnEqual $3] }
 
 sigdecl :: { LHsDecl GhcPs }
@@ -2641,7 +2658,7 @@ aexp    :: { LHsExpr GhcPs }
                             [sLL $1 $> $ Match { m_ext = noExt
                                                , m_ctxt = LambdaExpr
                                                , m_pats = $2:$3
-                                               , m_grhss = unguardedGRHSs $5 }]))
+                                               , m_grhss = unguardedGRHSs $5 Nothing }]))
                           [mj AnnLam $1, mu AnnRarrow $4] }
         | 'let' binds 'in' exp          {% ams (sLL $1 $> $ HsLet noExt (snd $ unLoc $2) $4)
                                                (mj AnnLet $1:mj AnnIn $3
@@ -2650,13 +2667,18 @@ aexp    :: { LHsExpr GhcPs }
             {% ams (sLL $1 $> $ HsLamCase noExt
                                    (mkMatchGroup FromSource (snd $ unLoc $3)))
                    (mj AnnLam $1:mj AnnCase $2:(fst $ unLoc $3)) }
-        | 'if' exp optSemi 'then' exp optSemi 'else' exp
-                           {% checkDoAndIfThenElse $2 (snd $3) $5 (snd $6) $8 >>
-                              ams (sLL $1 $> $ mkHsIf $2 $5 $8)
+
+        | 'if' exp optSemi 'then' optWeight exp optSemi 'else' optWeight exp
+                           {% do
+                              checkDoAndIfThenElse $2 (snd $3) $6 (snd $7) $10
+                              weights <- checkIfWeights (combineSrcSpans (getLoc $6) (getLoc $10))
+                                                        (wUser $5) (wUser $9)
+                              ams (sLL $1 $> $ mkHsIf $2 $6 $10 weights)
                                   (mj AnnIf $1:mj AnnThen $4
-                                     :mj AnnElse $7
+                                     :mj AnnElse $8
                                      :(map (\l -> mj AnnSemi l) (fst $3))
-                                    ++(map (\l -> mj AnnSemi l) (fst $6))) }
+                                    ++(map (\l -> mj AnnSemi l) (fst $7))) }
+
         | 'if' ifgdpats                 {% hintMultiWayIf (getLoc $1) >>
                                            ams (sLL $1 $> $ HsMultiIf noExt
                                                      (reverse $ snd $ unLoc $2))
@@ -2980,10 +3002,23 @@ alt_rhs :: { Located ([AddAnn],GRHSs GhcPs (LHsExpr GhcPs)) }
         : ralt wherebinds           { sLL $1 $> (fst $ unLoc $2,
                                             GRHSs noExt (unLoc $1) (snd $ unLoc $2)) }
 
+-- We can attach weights to the right of the arrow.
 ralt :: { Located [LGRHS GhcPs (LHsExpr GhcPs)] }
-        : '->' exp            {% ams (sLL $1 $> (unguardedRHS (comb2 $1 $2) $2))
-                                     [mu AnnRarrow $1] }
+        : '->' optWeight exp
+                        {% ams (sLL $1 $> (unguardedRHS (comb2 $1 $3) $3 (wUser $2)))
+                                      [mu AnnRarrow $1] } --TODO: Source locations
+        -- | '->' exp            {% ams (sLL $1 $> (unguardedRHS (comb2 $1 $2) $2 Nothing))
+        --                               [mu AnnRarrow $1] }
         | gdpats              { sL1 $1 (reverse (unLoc $1)) }
+
+optWeight :: { Maybe Int }
+        : weight
+                { Just $1 }
+        | {- empty -} { Nothing }
+
+weight :: { Int }
+        : '{-# LIKELY' INTEGER '#-}'
+                { fromInteger (il_value (getINTEGER $2)) }
 
 gdpats :: { Located [LGRHS GhcPs (LHsExpr GhcPs)] }
         : gdpats gdpat                  { sLL $1 $> ($2 : unLoc $1) }
@@ -2998,7 +3033,7 @@ ifgdpats :: { Located ([AddAnn],[LGRHS GhcPs (LHsExpr GhcPs)]) }
 
 gdpat   :: { LGRHS GhcPs (LHsExpr GhcPs) }
         : '|' guardquals '->' exp
-                                  {% ams (sL (comb2 $1 $>) $ GRHS noExt (unLoc $2) $4)
+                                  {% ams (sL (comb2 $1 $>) $ GRHS noExt (unLoc $2) $4 Nothing)
                                          [mj AnnVbar $1,mu AnnRarrow $3] }
 
 -- 'pat' recognises a pattern, including one with a bang at the top
@@ -3635,7 +3670,9 @@ getOVERLAPPABLE_PRAGs (dL->L _ (IToverlappable_prag src)) = src
 getOVERLAPPING_PRAGs  (dL->L _ (IToverlapping_prag  src)) = src
 getOVERLAPS_PRAGs     (dL->L _ (IToverlaps_prag     src)) = src
 getINCOHERENT_PRAGs   (dL->L _ (ITincoherent_prag   src)) = src
+getLIKELY_PRAGs       (dL->L _ (ITlikely_prag       src)) = src
 getCTYPEs             (dL->L _ (ITctype             src)) = src
+
 
 getStringLiteral l = StringLiteral (getSTRINGs l) (getSTRING l)
 
@@ -3803,6 +3840,11 @@ reportEmptyDoubleQuotes span = do
         [ text "Parser error on `''`"
         , text "Character literals may not be empty"
         ]
+
+wUser, wCon :: Maybe Int -> Maybe BranchWeight
+wUser w = mkUserWeight <$> w
+wCon w = mkConWeight <$> w
+
 
 {-
 %************************************************************************

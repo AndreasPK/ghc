@@ -60,7 +60,7 @@ instance Applicative (RegM freeRegs) where
       (<*>) = ap
 
 instance Monad (RegM freeRegs) where
-  m >>= k   =  RegM $ \s -> case unReg m s of { (# s, a #) -> unReg (k a) s }
+  m >>= k   =  RegM $ \s -> case unReg m s of { (# s, a #) -> (unReg (k a) s) }
 
 instance HasDynFlags (RegM a) where
     getDynFlags = RegM $ \s -> (# s, ra_DynFlags s #)
@@ -103,7 +103,6 @@ makeRAStats state
         = RegAllocStats
         { ra_spillInstrs        = binSpillReasons (ra_spills state)
         , ra_fixupList          = ra_fixups state }
-
 
 spillR :: Instruction instr
        => Reg -> Unique -> RegM freeRegs (instr, Int)

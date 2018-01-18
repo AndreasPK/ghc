@@ -54,6 +54,7 @@ module DsMonad (
 
 import GhcPrelude
 
+import BasicTypes
 import TcRnMonad
 import FamInstEnv
 import CoreSyn
@@ -122,10 +123,13 @@ data EquationInfo
 
             , eqn_rhs  :: MatchResult
               -- ^ What to do after match
+
+            , eqn_weight :: Maybe BranchWeight
+              -- ^ Relative weight of this equation
             }
 
 instance Outputable EquationInfo where
-    ppr (EqnInfo pats _ _) = ppr pats
+    ppr (EqnInfo pats _ _ _) = ppr pats
 
 type DsWrapper = CoreExpr -> CoreExpr
 idDsWrapper :: DsWrapper
@@ -136,12 +140,12 @@ idDsWrapper e = e
 -- where vs are not bound by wrap
 
 
--- A MatchResult is an expression with a hole in it
+-- | A MatchResult is an expression with a hole in it
 data MatchResult
   = MatchResult
-        CanItFail       -- Tells whether the failure expression is used
+        CanItFail       -- ^ Tells whether the failure expression is used
         (CoreExpr -> DsM CoreExpr)
-                        -- Takes a expression to plug in at the
+                        -- ^ Takes a expression to plug in at the
                         -- failure point(s). The expression should
                         -- be duplicatable!
 

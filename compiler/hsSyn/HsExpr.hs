@@ -30,6 +30,7 @@ import HsTypes
 import HsBinds
 
 -- others:
+import BasicTypes (combineWeights)
 import TcEvidence
 import CoreSyn
 import DynFlags ( gopt, GeneralFlag(Opt_PrintExplicitCoercions) )
@@ -49,7 +50,7 @@ import {-# SOURCE #-} TcRnTypes (TcLclEnv)
 -- libraries:
 import Data.Data hiding (Fixity(..))
 import qualified Data.Data as Data (Fixity(..))
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, catMaybes)
 
 import GHCi.RemoteTypes ( ForeignRef )
 import qualified Language.Haskell.TH as TH (Q)
@@ -429,6 +430,7 @@ data HsExpr p
                 (LHsExpr p)    --  predicate
                 (LHsExpr p)    --  then part
                 (LHsExpr p)    --  else part
+                (Maybe (BranchWeight, BranchWeight))
 
   -- | Multi-way if
   --
@@ -1051,21 +1053,25 @@ ppr_expr (HsCase _ expr matches)
   = sep [ sep [text "case", nest 4 (ppr expr), ptext (sLit "of")],
           nest 2 (pprMatches matches) ]
 
-ppr_expr (HsIf _ _ e1 e2 e3)
+ppr_expr (HsIf _ _ e1 e2 e3 ws)
   = sep [hsep [text "if", nest 2 (ppr e1), ptext (sLit "then")],
-         nest 4 (ppr e2),
+         nest 4 (ppr_weight (fst <$> ws) <> ppr e2),
          text "else",
-         nest 4 (ppr e3)]
+         nest 4 (ppr_weight (snd <$> ws) <> ppr e3)]
+  where
+    --TODO: Check Syntax
+    ppr_weight (Just w) = text "{-# LIKELY" <+> ppr w <+> text "#-} "
+    ppr_weight Nothing = empty
 
 ppr_expr (HsMultiIf _ alts)
   = hang (text "if") 3  (vcat (map ppr_alt alts))
-  where ppr_alt (L _ (GRHS _ guards expr)) =
+  where ppr_alt (L _ (GRHS _ guards expr weight)) =
           hang vbar 2 (ppr_one one_alt)
           where
             ppr_one [] = panic "ppr_exp HsMultiIf"
             ppr_one (h:t) = hang h 2 (sep t)
             one_alt = [ interpp'SP guards
-                      , text "->" <+> pprDeeper (ppr expr) ]
+                      , text "->" <+> ppr weight <+> pprDeeper (ppr expr) ]
         ppr_alt (L _ (XGRHS x)) = ppr x
 
 -- special case: let ... in let ...
@@ -1701,7 +1707,7 @@ hsLMatchPats (L _ (XMatch _)) = panic "hsLMatchPats"
 data GRHSs p body
   = GRHSs {
       grhssExt :: XCGRHSs p body,
-      grhssGRHSs :: [LGRHS p body],      -- ^ Guarded RHSs
+      grhssGRHSs :: [LGRHS p body],       -- ^ Guarded RHSs
       grhssLocalBinds :: LHsLocalBinds p -- ^ The where clause
     }
   | XGRHSs (XXGRHSs p body)
@@ -1716,10 +1722,22 @@ type LGRHS id body = Located (GRHS id body)
 data GRHS p body = GRHS (XCGRHS p body)
                         [GuardLStmt p] -- Guards
                         body           -- Right hand side
+                        (Maybe BranchWeight) -- ^ Weight for alternatives
                   | XGRHS (XXGRHS p body)
 
 type instance XCGRHS (GhcPass _) b = NoExt
 type instance XXGRHS (GhcPass _) b = NoExt
+
+getGRHSWeight :: GRHS p b -> Maybe BranchWeight
+getGRHSWeight (GRHS _ _ _ weight) = weight
+
+getGRHSsWeight :: GRHSs p b -> Maybe BranchWeight
+getGRHSsWeight (GRHSs _ grhss _)
+  | null weights  = Nothing
+  | otherwise     = Just $ foldr1 combineWeights $ weights
+  where
+    weights = catMaybes $ map (getGRHSWeight . unLoc) grhss :: [BranchWeight]
+
 
 -- We know the list must have at least one @Match@ in it.
 
@@ -1794,16 +1812,16 @@ pprGRHSs _ (XGRHSs x) = ppr x
 
 pprGRHS :: (OutputableBndrId (GhcPass idR), Outputable body)
         => HsMatchContext idL -> GRHS (GhcPass idR) body -> SDoc
-pprGRHS ctxt (GRHS _ [] body)
- =  pp_rhs ctxt body
+pprGRHS ctxt (GRHS _ [] body weight)
+ =  pp_rhs ctxt body weight
 
-pprGRHS ctxt (GRHS _ guards body)
- = sep [vbar <+> interpp'SP guards, pp_rhs ctxt body]
+pprGRHS ctxt (GRHS _ guards body weight)
+ = sep [vbar <+> interpp'SP guards, pp_rhs ctxt body weight]
 
 pprGRHS _ (XGRHS x) = ppr x
 
-pp_rhs :: Outputable body => HsMatchContext idL -> body -> SDoc
-pp_rhs ctxt rhs = matchSeparator ctxt <+> pprDeeper (ppr rhs)
+pp_rhs :: Outputable body => HsMatchContext idL -> body -> Maybe BranchWeight -> SDoc
+pp_rhs ctxt rhs weight = matchSeparator ctxt <+> ppr weight <+> pprDeeper (ppr rhs)
 
 {-
 ************************************************************************

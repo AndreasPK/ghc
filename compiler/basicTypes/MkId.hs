@@ -397,7 +397,7 @@ mkDictSelRhs clas val_index
     rhs_body | new_tycon = unwrapNewTypeBody tycon (mkTyVarTys tyvars)
                                                    (Var dict_id)
              | otherwise = Case (Var dict_id) dict_id (idType the_arg_id)
-                                [(DataAlt data_con, arg_ids, varToCoreExpr the_arg_id)]
+                                [(DataAlt data_con defaultFreq, arg_ids, varToCoreExpr the_arg_id)] --TODO: Maybe always?
                                 -- varToCoreExpr needed for equality superclass selectors
                                 --   sel a b d = case x of { MkC _ (g:a~b) _ -> CO g }
 
@@ -915,7 +915,8 @@ wrapCo co rep_ty (unbox_rep, box_rep)  -- co :: arg_ty ~ rep_ty
 
 ------------------------
 seqUnboxer :: Unboxer
-seqUnboxer v = return ([v], \e -> Case (Var v) v (exprType e) [(DEFAULT, [], e)])
+seqUnboxer v = return
+              ([v], \e -> Case (Var v) v (exprType e) [(DEFAULT alwaysFreq, [], e)])
 
 unitUnboxer :: Unboxer
 unitUnboxer v = return ([v], \e -> e)
@@ -943,7 +944,7 @@ dataConArgUnpack arg_ty
        do { rep_ids <- mapM newLocal rep_tys
           ; let unbox_fn body
                   = Case (Var arg_id) arg_id (exprType body)
-                         [(DataAlt con, rep_ids, body)]
+                         [(DataAlt con alwaysFreq, rep_ids, body)]
           ; return (rep_ids, unbox_fn) }
      , Boxer $ \ subst ->
        do { rep_ids <- mapM (newLocal . TcType.substTyUnchecked subst) rep_tys
@@ -1334,7 +1335,8 @@ seqId = pcMiscPrelId seqName ty info
                           (mkFunTy alphaTy (mkFunTy betaTy betaTy))
 
     [x,y] = mkTemplateLocals [alphaTy, betaTy]
-    rhs = mkLams [alphaTyVar,betaTyVar,x,y] (Case (Var x) x betaTy [(DEFAULT, [], Var y)])
+    rhs = mkLams [alphaTyVar,betaTyVar,x,y]
+          (Case (Var x) x betaTy [(DEFAULT alwaysFreq, [], Var y)])
 
 ------------------------------------------------
 lazyId :: Id    -- See Note [lazyId magic]
@@ -1392,7 +1394,7 @@ coerceId = pcMiscPrelId coerceName ty info
     [eqR,x,eq] = mkTemplateLocals [eqRTy, alphaTy, eqRPrimTy]
     rhs = mkLams [alphaTyVar, betaTyVar, eqR, x] $
           mkWildCase (Var eqR) eqRTy betaTy $
-          [(DataAlt coercibleDataCon, [eq], Cast (Var x) (mkCoVarCo eq))]
+          [(DataAlt coercibleDataCon alwaysFreq, [eq], Cast (Var x) (mkCoVarCo eq))]
 
 {-
 Note [Unsafe coerce magic]

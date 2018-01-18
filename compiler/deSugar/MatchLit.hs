@@ -400,9 +400,10 @@ tidyNPat over_lit mb_neg eq outer_ty
 matchLiterals :: [Id]
               -> Type                   -- Type of the whole case expression
               -> [[EquationInfo]]       -- All PgLits
+              -> Maybe BranchWeight
               -> DsM MatchResult
 
-matchLiterals (var:vars) ty sub_groups
+matchLiterals (var:vars) ty sub_groups fail_weight
   = ASSERT( notNull sub_groups && all notNull sub_groups )
     do  {       -- Deal with each group
         ; alts <- mapM match_group sub_groups
@@ -415,28 +416,30 @@ matchLiterals (var:vars) ty sub_groups
                 ; mrs <- mapM (wrap_str_guard eq_str) alts
                 ; return (foldr1 combineMatchResults mrs) }
           else
-            return (mkCoPrimCaseMatchResult var ty alts)
+            return (mkCoPrimCaseMatchResult var ty alts fail_weight)
         }
   where
-    match_group :: [EquationInfo] -> DsM (Literal, MatchResult)
+    match_group :: [EquationInfo] -> DsM (Literal, Maybe BranchWeight,MatchResult)
     match_group eqns
-        = do { dflags <- getDynFlags
-             ; let LitPat _ hs_lit = firstPat (head eqns)
-             ; match_result <- match vars ty (shiftEqns eqns)
-             ; return (hsLitKey dflags hs_lit, match_result) }
+        = do dflags <- getDynFlags
+             let LitPat _ hs_lit = firstPat (head eqns)
+             let weight = eqn_weight (head eqns) :: Maybe BranchWeight
+             --TODO: fail_weight or nothing here?
+             (match_result,_) <- match vars ty (shiftEqns eqns) fail_weight
+             return (hsLitKey dflags hs_lit, weight, match_result)
 
-    wrap_str_guard :: Id -> (Literal,MatchResult) -> DsM MatchResult
+    wrap_str_guard :: Id -> (Literal,a,MatchResult) -> DsM MatchResult
         -- Equality check for string literals
-    wrap_str_guard eq_str (LitString s, mr)
+    wrap_str_guard eq_str (LitString s,_, mr)
         = do { -- We now have to convert back to FastString. Perhaps there
                -- should be separate LitBytes and LitString constructors?
                let s'  = mkFastStringByteString s
              ; lit    <- mkStringExprFS s'
              ; let pred = mkApps (Var eq_str) [Var var, lit]
-             ; return (mkGuardedMatchResult pred mr) }
-    wrap_str_guard _ (l, _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
+             ; return (mkGuardedMatchResult pred mr Nothing) }
+    wrap_str_guard _ (l,_ , _) = pprPanic "matchLiterals/wrap_str_guard" (ppr l)
 
-matchLiterals [] _ _ = panic "matchLiterals []"
+matchLiterals [] _ _ _ = panic "matchLiterals []"
 
 ---------------------------
 hsLitKey :: DynFlags -> HsLit GhcTc -> Literal
@@ -475,8 +478,8 @@ matchNPats (var:vars) ty (eqn1:eqns)    -- All for the same literal
                             Nothing  -> return lit_expr
                             Just neg -> dsSyntaxExpr neg [lit_expr]
         ; pred_expr <- dsSyntaxExpr eq_chk [Var var, neg_lit]
-        ; match_result <- match vars ty (shiftEqns (eqn1:eqns))
-        ; return (mkGuardedMatchResult pred_expr match_result) }
+        ; (match_result,_w) <- match vars ty (shiftEqns (eqn1:eqns)) Nothing
+        ; return (mkGuardedMatchResult pred_expr match_result Nothing) }
 matchNPats vars _ eqns = pprPanic "matchOneNPat" (ppr (vars, eqns))
 
 {-
@@ -507,11 +510,12 @@ matchNPlusKPats (var:vars) ty (eqn1:eqns)
         ; pred_expr   <- dsSyntaxExpr ge    [Var var, lit1_expr]
         ; minusk_expr <- dsSyntaxExpr minus [Var var, lit2_expr]
         ; let (wraps, eqns') = mapAndUnzip (shift n1) (eqn1:eqns)
-        ; match_result <- match vars ty eqns'
-        ; return  (mkGuardedMatchResult pred_expr               $
-                   mkCoLetMatchResult (NonRec n1 minusk_expr)   $
-                   adjustMatchResult (foldr1 (.) wraps)         $
-                   match_result) }
+        ; (match_result,_w) <- match vars ty eqns' Nothing
+        ; return  (mkGuardedMatchResult pred_expr
+                   (mkCoLetMatchResult (NonRec n1 minusk_expr)  $
+                    adjustMatchResult (foldr1 (.) wraps)         $
+                    match_result)
+                   Nothing) }
   where
     shift n1 eqn@(EqnInfo { eqn_pats = NPlusKPat _ (dL->L _ n) _ _ _ _ : pats })
         = (wrapBind n n1, eqn { eqn_pats = pats })

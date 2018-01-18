@@ -482,6 +482,7 @@ data GeneralFlag
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_RegsGraph                      -- do graph coloring register allocation
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
+   | Opt_RegsCfgAlloc                   -- ^ Prioritize heavy edges in register allocation
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
    | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA (hidden flag)
    | Opt_LlvmFillUndefWithGarbage       -- Testing for undef bugs (hidden flag)
@@ -502,6 +503,10 @@ data GeneralFlag
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
    | Opt_NumConstantFolding
+   | Opt_UnlikelyBottoms    -- ^ Assume bottoming alternatives are not taken.
+   | Opt_LikelyRecursion    -- ^ Assume branches which represent an recursive
+                            --   case are likely to be taken.
+   | Opt_WeightBalanceAlts  -- ^ Split trees by branch weight where applicable.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
@@ -708,6 +713,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_Loopification
    , Opt_CfgBlocklayout
    , Opt_WeightlessBlocklayout
+   , Opt_RegsCfgAlloc
    , Opt_CprAnal
    , Opt_WorkerWrapper
    , Opt_SolveConstantDicts
@@ -4158,6 +4164,7 @@ fFlagsDeps = [
   flagSpec "late-dmd-anal"                    Opt_LateDmdAnal,
   flagSpec "late-specialise"                  Opt_LateSpecialise,
   flagSpec "liberate-case"                    Opt_LiberateCase,
+  flagSpec "likely-recursion"                 Opt_LikelyRecursion,
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
   flagSpec "loopification"                    Opt_Loopification,
@@ -4184,6 +4191,7 @@ fFlagsDeps = [
   flagSpec "prof-count-entries"               Opt_ProfCountEntries,
   flagSpec "regs-graph"                       Opt_RegsGraph,
   flagSpec "regs-iterative"                   Opt_RegsIterative,
+  flagSpec "regs-cfg"                         Opt_RegsCfgAlloc,
   depFlagSpec' "rewrite-rules"                Opt_EnableRewriteRules
    (useInstead "-f" "enable-rewrite-rules"),
   flagSpec "shared-implib"                    Opt_SharedImplib,
@@ -4212,7 +4220,9 @@ fFlagsDeps = [
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
-  flagSpec "keep-cafs"                        Opt_KeepCAFs
+  flagSpec "keep-cafs"                        Opt_KeepCAFs,
+  flagSpec "unlikely-bottoms"                 Opt_UnlikelyBottoms,
+  flagSpec "weight-balance-alts"              Opt_WeightBalanceAlts
   ]
   ++ fHoleFlags
 
@@ -4667,6 +4677,10 @@ optLevelFlags -- see Note [Documenting optimisation flags]
 
     , ([2],     Opt_LiberateCase)
     , ([2],     Opt_SpecConstr)
+    , ([1,2],   Opt_UnlikelyBottoms)
+    , ([2],     Opt_LikelyRecursion)
+    , ([1,2],   Opt_WeightBalanceAlts)
+
 --  , ([2],     Opt_RegsGraph)
 --   RegsGraph suffers performance regression. See #7679
 --  , ([2],     Opt_StaticArgumentTransformation)

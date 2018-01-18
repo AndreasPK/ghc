@@ -151,5 +151,6 @@ liftExpr (StgLetNoEscape scope bind body)
         Just bind' -> pure (StgLetNoEscape noExtSilent bind' body')
 
 liftAlt :: LlStgAlt -> LiftM OutStgAlt
-liftAlt (con, infos, rhs) = withSubstBndrs (map binderInfoBndr infos) $ \bndrs' ->
-  (,,) con bndrs' <$> liftExpr rhs
+liftAlt (con, infos, rhs) = withSubstBndrs (map binderInfoBndr infos) $ \bndrs' -> do
+  rhs' <- liftExpr rhs
+  return (con, bndrs', rhs')

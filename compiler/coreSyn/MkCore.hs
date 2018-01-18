@@ -171,7 +171,7 @@ mk_val_app fun arg arg_ty res_ty
   = App fun arg                -- The vastly common case
 
   | otherwise
-  = Case arg arg_id res_ty [(DEFAULT,[],App fun (Var arg_id))]
+  = Case arg arg_id res_ty [(DEFAULT alwaysFreq,[],App fun (Var arg_id))]
   where
     arg_id = mkWildValBinder arg_ty
         -- Lots of shadowing, but it doesn't matter,
@@ -201,12 +201,16 @@ mkWildCase :: CoreExpr -> Type -> Type -> [CoreAlt] -> CoreExpr
 mkWildCase scrut scrut_ty res_ty alts
   = Case scrut (mkWildValBinder scrut_ty) res_ty alts
 
-mkIfThenElse :: CoreExpr -> CoreExpr -> CoreExpr -> CoreExpr
-mkIfThenElse guard then_expr else_expr
+mkIfThenElse :: CoreExpr -> CoreExpr -> CoreExpr
+             -> Maybe (BranchWeight,BranchWeight) -> CoreExpr
+mkIfThenElse guard then_expr else_expr weights
 -- Not going to be refining, so okay to take the type of the "then" clause
   = mkWildCase guard boolTy (exprType then_expr)
-         [ (DataAlt falseDataCon, [], else_expr),       -- Increasing order of tag!
-           (DataAlt trueDataCon,  [], then_expr) ]
+         [ (DataAlt falseDataCon elseFreq, [], else_expr),       -- Increasing order of tag!
+           (DataAlt trueDataCon  thenFreq, [], then_expr) ]
+  where
+    thenFreq = maybe defFreq fst weights
+    elseFreq = maybe defFreq snd weights
 
 castBottomExpr :: CoreExpr -> Type -> CoreExpr
 -- (castBottomExpr e ty), assuming that 'e' diverges,
@@ -481,7 +485,7 @@ mkSmallTupleSelector vars the_var scrut_var scrut
 mkSmallTupleSelector1 vars the_var scrut_var scrut
   = ASSERT( notNull vars )
     Case scrut scrut_var (idType the_var)
-         [(DataAlt (tupleDataCon Boxed (length vars)), vars, Var the_var)]
+         [(DataAlt (tupleDataCon Boxed (length vars)) alwaysFreq, vars, Var the_var)]
 
 -- | A generalization of 'mkTupleSelector', allowing the body
 -- of the case to be an arbitrary expression.
@@ -535,7 +539,7 @@ mkSmallTupleCase [var] body _scrut_var scrut
 mkSmallTupleCase vars body scrut_var scrut
 -- One branch no refinement?
   = Case scrut scrut_var (exprType body)
-         [(DataAlt (tupleDataCon Boxed (length vars)), vars, body)]
+         [(DataAlt (tupleDataCon Boxed (length vars)) alwaysFreq, vars, body)]
 
 {-
 ************************************************************************

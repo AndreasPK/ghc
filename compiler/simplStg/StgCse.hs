@@ -343,7 +343,7 @@ stgCseExpr env (StgLetNoEscape ext binds body)
 -- Case alternatives
 -- Extend the CSE environment
 stgCseAlt :: CseEnv -> AltType -> OutId -> InStgAlt -> OutStgAlt
-stgCseAlt env ty case_bndr (DataAlt dataCon, args, rhs)
+stgCseAlt env ty case_bndr (altCon@(DataAlt dataCon _), args, rhs)
     = let (env1, args') = substBndrs env args
           env2
             -- To avoid dealing with unboxed sums StgCse runs after unarise and
@@ -358,8 +358,8 @@ stgCseAlt env ty case_bndr (DataAlt dataCon, args, rhs)
             = env1
             -- see note [Case 2: CSEing case binders]
           rhs' = stgCseExpr env2 rhs
-      in (DataAlt dataCon, args', rhs')
-stgCseAlt env _ _ (altCon, args, rhs)
+      in (altCon, args', rhs')
+stgCseAlt env _ty _ (altCon, args, rhs)
     = let (env1, args') = substBndrs env args
           rhs' = stgCseExpr env1 rhs
       in (altCon, args', rhs')

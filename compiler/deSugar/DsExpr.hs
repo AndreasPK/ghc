@@ -214,7 +214,8 @@ dsUnliftedBind (PatBind {pat_lhs = pat, pat_rhs = grhss
        ; let upat = unLoc pat
              eqn = EqnInfo { eqn_pats = [upat],
                              eqn_orig = FromSource,
-                             eqn_rhs = cantFailMatchResult body }
+                             eqn_rhs = cantFailMatchResult body,
+                             eqn_weight = Nothing }
        ; var    <- selectMatchVar upat
        ; result <- matchEquations PatBindRhs [var] [eqn] (exprType body)
        ; return (bindNonRec var rhs result) }
@@ -436,21 +437,21 @@ ds_expr _ (HsDo _ GhciStmtCtxt  (dL->L _ stmts)) = dsDo stmts
 ds_expr _ (HsDo _ MDoExpr       (dL->L _ stmts)) = dsDo stmts
 ds_expr _ (HsDo _ MonadComp     (dL->L _ stmts)) = dsMonadComp stmts
 
-ds_expr _ (HsIf _ mb_fun guard_expr then_expr else_expr)
+ds_expr _ (HsIf _ mb_fun guard_expr then_expr else_expr weights)
   = do { pred <- dsLExpr guard_expr
        ; b1 <- dsLExpr then_expr
        ; b2 <- dsLExpr else_expr
        ; case mb_fun of
            Just fun -> dsSyntaxExpr fun [pred, b1, b2]
-           Nothing  -> return $ mkIfThenElse pred b1 b2 }
+           Nothing  -> return $ mkIfThenElse pred b1 b2 weights }
 
 ds_expr _ (HsMultiIf res_ty alts)
   | null alts
   = mkErrorExpr
 
   | otherwise
-  = do { match_result <- liftM (foldr1 combineMatchResults)
-                               (mapM (dsGRHS IfAlt res_ty) alts)
+  = do { (rhs,_weight) <- unzip <$> mapM (\g -> dsGRHS IfAlt res_ty g Nothing) alts --TODO: Check that no weights are present
+       ; let match_result = (foldr1 combineMatchResults) rhs
        ; checkGuardMatches IfAlt (GRHSs noExt alts (noLoc emptyLocalBinds))
        ; error_expr   <- mkErrorExpr
        ; extractMatchResult match_result error_expr }
@@ -920,7 +921,7 @@ dsDo stmts
             ; rhs'     <- dsLExpr rhs
             ; var   <- selectSimpleMatchVarL pat
             ; match <- matchSinglePatVar var (StmtCtxt DoExpr) pat
-                                      res1_ty (cantFailMatchResult body)
+                                      res1_ty (cantFailMatchResult body) Nothing Nothing
             ; match_code <- handle_failure pat match fail_op
             ; dsSyntaxExpr bind_op [rhs', Lam var match_code] }
 

@@ -1906,6 +1906,23 @@ h y = case y of
 If we inline h into f, the default case of the inlined h can't happen.
 If we don't notice this, we may end up filtering out *all* the cases
 of the inner case y, which give us nowhere to go!
+
+When doing 1. we explicitly don't add the weight information from the excluded
+branches to the default. Otherwise if we inline a case expression into an
+environment which has ruled out certain constructors we might incorrectly
+inflate the weight of the default.
+
+Consider a show function for Colour:
+  show Red    = {-# LIKELY 2 #-} "Red"
+  show Green  = {-# LIKELY 2 #-} "Green"
+  show _      = {-# LIKELY 1 #-} "Blue"
+
+If we eliminate the Red alternative adding the weight to Blue would mean
+that the color is most likely blue. A claim clearly wrong looking at the
+original code.
+So we just drop that weight and Green is still twice as likely as Blue,
+just like before and as intended.
+
 -}
 
 prepareAlts :: OutExpr -> OutId -> [InAlt] -> SimplM ([AltCon], [InAlt])
@@ -2054,7 +2071,8 @@ mkCase, mkCase1, mkCase2, mkCase3
 --      1. Merge Nested Cases
 --------------------------------------------------
 
-mkCase dflags scrut outer_bndr alts_ty ((DEFAULT, _, deflt_rhs) : outer_alts)
+--TODO: Update Weights
+mkCase dflags scrut outer_bndr alts_ty ((DEFAULT _, _, deflt_rhs) : outer_alts)
   | gopt Opt_CaseMerge dflags
   , (ticks, Case (Var inner_scrut_var) inner_bndr _ inner_alts)
        <- stripTicksTop tickishFloatable deflt_rhs
@@ -2109,14 +2127,14 @@ mkCase1 _dflags scrut case_bndr _ alts@((_,_,rhs1) : _)      -- Identity case
     check_eq (Tick t e) alt args
       = tickishFloatable t && check_eq e alt args
 
-    check_eq (Lit lit) (LitAlt lit') _     = lit == lit'
-    check_eq (Var v) _ _  | v == case_bndr = True
-    check_eq (Var v)   (DataAlt con) args
-      | null arg_tys, null args            = v == dataConWorkId con
+    check_eq (Lit lit) (LitAlt lit' _w) _     = lit == lit'
+    check_eq (Var v) _ _  | v == case_bndr    = True
+    check_eq (Var v)   (DataAlt con _) args
+      | null arg_tys, null args               = v == dataConWorkId con
                                              -- Optimisation only
-    check_eq rhs        (DataAlt con) args = cheapEqExpr' tickishFloatable rhs $
+    check_eq rhs        (DataAlt con _) args  = cheapEqExpr' tickishFloatable rhs $
                                              mkConApp2 con arg_tys args
-    check_eq _          _             _    = False
+    check_eq _          _             _       = False
 
     arg_tys = tyConAppArgs (idType case_bndr)
 
@@ -2144,8 +2162,8 @@ mkCase1 dflags scrut bndr alts_ty alts = mkCase2 dflags scrut bndr alts_ty alts
 mkCase2 dflags scrut bndr alts_ty alts
   | -- See Note [Scrutinee Constant Folding]
     case alts of  -- Not if there is just a DEFAULT alternative
-      [(DEFAULT,_,_)] -> False
-      _               -> True
+      [(DEFAULT _,_,_)] -> False
+      _                 -> True
   , gopt Opt_CaseFolding dflags
   , Just (scrut', tx_con, mk_orig) <- caseRules dflags scrut
   = do { bndr' <- newId (fsLit "lwild") (exprType scrut')
@@ -2190,11 +2208,11 @@ mkCase2 dflags scrut bndr alts_ty alts
              | otherwise         = bindNonRec bndr orig_val rhs
 
         orig_val = case con of
-                      DEFAULT    -> mk_orig new_bndr
-                      LitAlt l   -> Lit l
-                      DataAlt dc -> mkConApp2 dc (tyConAppArgs (idType bndr)) bs
+                      DEFAULT _w    -> mk_orig new_bndr
+                      LitAlt l _w   -> Lit l
+                      DataAlt dc _w -> mkConApp2 dc (tyConAppArgs (idType bndr)) bs
 
-    mk_new_bndrs new_bndr (DataAlt dc)
+    mk_new_bndrs new_bndr (DataAlt dc _w)
       | not (isNullaryRepDataCon dc)
       = -- For non-nullary data cons we must invent some fake binders
         -- See Note [caseRules for dataToTag] in PrelRules
@@ -2209,7 +2227,7 @@ mkCase2 dflags scrut bndr alts_ty alts
 
     add_default :: [CoreAlt] -> [CoreAlt]
     -- See Note [Literal cases]
-    add_default ((LitAlt {}, bs, rhs) : alts) = (DEFAULT, bs, rhs) : alts
+    add_default ((LitAlt {}, bs, rhs) : alts) = (DEFAULT defaultFreq, bs, rhs) : alts --TODOW: Often?
     add_default alts                          = alts
 
 {- Note [Literal cases]

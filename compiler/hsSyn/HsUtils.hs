@@ -147,20 +147,21 @@ mkSimpleMatch :: HsMatchContext (NameOrRdrName (IdP (GhcPass p)))
 mkSimpleMatch ctxt pats rhs
   = cL loc $
     Match { m_ext = noExt, m_ctxt = ctxt, m_pats = pats
-          , m_grhss = unguardedGRHSs rhs }
+          , m_grhss = unguardedGRHSs rhs Nothing} --TODO: Weight?
   where
     loc = case pats of
                 []      -> getLoc rhs
                 (pat:_) -> combineSrcSpans (getLoc pat) (getLoc rhs)
 
-unguardedGRHSs :: Located (body (GhcPass p))
+-- | Single unguarded rhs.
+unguardedGRHSs :: Located (body (GhcPass p)) -> Maybe BranchWeight
                -> GRHSs (GhcPass p) (Located (body (GhcPass p)))
-unguardedGRHSs rhs@(dL->L loc _)
-  = GRHSs noExt (unguardedRHS loc rhs) (noLoc emptyLocalBinds)
+unguardedGRHSs rhs@(dL->L loc _) weight
+  = GRHSs noExt (unguardedRHS loc rhs weight) (noLoc emptyLocalBinds)
 
-unguardedRHS :: SrcSpan -> Located (body (GhcPass p))
+unguardedRHS :: SrcSpan -> Located (body (GhcPass p)) -> Maybe BranchWeight
              -> [LGRHS (GhcPass p) (Located (body (GhcPass p)))]
-unguardedRHS loc rhs = [cL loc (GRHS noExt [] rhs)]
+unguardedRHS loc rhs weight = [cL loc (GRHS noExt [] rhs weight)]
 
 mkMatchGroup :: (XMG name (Located (body name)) ~ NoExt)
              => Origin -> [LMatch name (Located (body name))]
@@ -272,8 +273,9 @@ mkHsComp ctxt stmts expr = mkHsDo ctxt (stmts ++ [last_stmt])
     last_stmt = cL (getLoc expr) $ mkLastStmt expr
 
 mkHsIf :: LHsExpr (GhcPass p) -> LHsExpr (GhcPass p) -> LHsExpr (GhcPass p)
+       -> Maybe (BranchWeight, BranchWeight)
        -> HsExpr (GhcPass p)
-mkHsIf c a b = HsIf noExt (Just noSyntaxExpr) c a b
+mkHsIf c a b ws = HsIf noExt (Just noSyntaxExpr) c a b ws
 
 mkNPat lit neg     = NPat noExt lit neg noSyntaxExpr
 mkNPlusKPat id lit
@@ -469,7 +471,7 @@ nlHsOpApp e1 op e2 = noLoc (mkHsOpApp e1 op e2)
 
 nlHsLam  :: LMatch GhcPs (LHsExpr GhcPs) -> LHsExpr GhcPs
 nlHsPar  :: LHsExpr (GhcPass id) -> LHsExpr (GhcPass id)
-nlHsIf   :: LHsExpr (GhcPass id) -> LHsExpr (GhcPass id) -> LHsExpr (GhcPass id)
+nlHsIf   :: LHsExpr (GhcPass id) -> LHsExpr (GhcPass id) -> LHsExpr (GhcPass id) -> Maybe (BranchWeight,BranchWeight)
          -> LHsExpr (GhcPass id)
 nlHsCase :: LHsExpr GhcPs -> [LMatch GhcPs (LHsExpr GhcPs)]
          -> LHsExpr GhcPs
@@ -481,7 +483,7 @@ nlHsPar e              = noLoc (HsPar noExt e)
 -- Note [Rebindable nlHsIf]
 -- nlHsIf should generate if-expressions which are NOT subject to
 -- RebindableSyntax, so the first field of HsIf is Nothing. (#12080)
-nlHsIf cond true false = noLoc (HsIf noExt Nothing cond true false)
+nlHsIf cond true false weights = noLoc (HsIf noExt Nothing cond true false weights)
 
 nlHsCase expr matches
   = noLoc (HsCase noExt expr (mkMatchGroup Generated matches))
@@ -856,7 +858,7 @@ mkMatch ctxt pats expr lbinds
   = noLoc (Match { m_ext   = noExt
                  , m_ctxt  = ctxt
                  , m_pats  = map paren pats
-                 , m_grhss = GRHSs noExt (unguardedRHS noSrcSpan expr) lbinds })
+                 , m_grhss = GRHSs noExt (unguardedRHS noSrcSpan expr Nothing) lbinds }) --TODO: Weights?
   where
     paren lp@(dL->L l p)
       | patNeedsParens appPrec p = cL l (ParPat noExt lp)

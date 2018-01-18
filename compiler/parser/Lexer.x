@@ -654,6 +654,7 @@ data Token
   | ITnounpack_prag     SourceText
   | ITann_prag          SourceText
   | ITcomplete_prag     SourceText
+  | ITlikely_prag       SourceText
   | ITclose_prag
   | IToptions_prag String
   | ITinclude_prag String
@@ -2968,6 +2969,7 @@ oneWordPrags = Map.fromList [
      ("incoherent", strtoken (\s -> ITincoherent_prag (SourceText s))),
      ("ctype", strtoken (\s -> ITctype (SourceText s))),
      ("complete", strtoken (\s -> ITcomplete_prag (SourceText s))),
+     ("likely", strtoken (\s -> ITlikely_prag (SourceText s))),
      ("column", columnPrag)
      ]
 

@@ -540,8 +540,8 @@ litEq is_eq = msum
     do_lit_eq dflags lit expr = do
       guard (not (litIsLifted lit))
       return (mkWildCase expr (literalType lit) intPrimTy
-                    [(DEFAULT,    [], val_if_neq),
-                     (LitAlt lit, [], val_if_eq)])
+                    [(DEFAULT oftenFreq,    [], val_if_neq),
+                     (LitAlt lit defaultFreq, [], val_if_eq)])
       where
         val_if_eq  | is_eq     = trueValInt  dflags
                    | otherwise = falseValInt dflags
@@ -2031,9 +2031,9 @@ caseRules _ _ = Nothing
 
 
 tx_lit_con :: DynFlags -> (Integer -> Integer) -> AltCon -> Maybe AltCon
-tx_lit_con _      _      DEFAULT    = Just DEFAULT
-tx_lit_con dflags adjust (LitAlt l) = Just $ LitAlt (mapLitValue dflags adjust l)
-tx_lit_con _      _      alt        = pprPanic "caseRules" (ppr alt)
+tx_lit_con _      _      (DEFAULT w)  = Just $ DEFAULT w
+tx_lit_con dflags adjust (LitAlt l w) = Just $ LitAlt (mapLitValue dflags adjust l) w
+tx_lit_con _      _      alt          = pprPanic "caseRules" (ppr alt)
    -- NB: mapLitValue uses mkLitIntWrap etc, to ensure that the
    -- literal alternatives remain in Word/Int target ranges
    -- (See Note [Word/Int underflow/overflow] in Literal and #13172).
@@ -2073,17 +2073,17 @@ adjustUnary op
          _         -> Nothing
 
 tx_con_tte :: DynFlags -> AltCon -> Maybe AltCon
-tx_con_tte _      DEFAULT         = Just DEFAULT
+tx_con_tte _      (DEFAULT w)     = Just $ DEFAULT w
 tx_con_tte _      alt@(LitAlt {}) = pprPanic "caseRules" (ppr alt)
-tx_con_tte dflags (DataAlt dc)  -- See Note [caseRules for tagToEnum]
-  = Just $ LitAlt $ mkLitInt dflags $ toInteger $ dataConTagZ dc
+tx_con_tte dflags (DataAlt dc w)  -- See Note [caseRules for tagToEnum]
+  = Just $ LitAlt (mkLitInt dflags $ toInteger $ dataConTagZ dc) w
 
 tx_con_dtt :: Type -> AltCon -> Maybe AltCon
-tx_con_dtt _  DEFAULT = Just DEFAULT
-tx_con_dtt ty (LitAlt (LitNumber LitNumInt i _))
+tx_con_dtt _  def@DEFAULT{} = Just def
+tx_con_dtt ty (LitAlt (LitNumber LitNumInt i _) w)
    | tag >= 0
    , tag < n_data_cons
-   = Just (DataAlt (data_cons !! tag))   -- tag is zero-indexed, as is (!!)
+   = Just (DataAlt (data_cons !! tag) w)   -- tag is zero-indexed, as is (!!)
    | otherwise
    = Nothing
    where

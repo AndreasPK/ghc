@@ -15,6 +15,7 @@ types that
 -}
 
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module BasicTypes(
         Version, bumpVersion, initialVersion,
@@ -106,16 +107,26 @@ module BasicTypes(
 
         IntWithInf, infinity, treatZeroAsInf, mkIntWithInf, intGtLimit,
 
-        SpliceExplicitFlag(..)
+        SpliceExplicitFlag(..),
+
+        BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, defaultFreq, oftenFreq,
+        usuallyFreq, alwaysFreq, combinedFreqs, moreLikely, getWeight,
+        multiplyWeight, combineWeights, combineWeightsMaybe, representsNumWeight,
+        mkCompilerWeight, mkConWeight, mkUserWeight, mkUnknownWeight,
+        -- Similar to BranchWeight but absolute numbers and only used in the
+        -- backend/Cmm.
+        EdgeWeight(..)
    ) where
 
 import GhcPrelude
 
 import FastString
+import Maybes (expectJust)
 import Outputable
 import SrcLoc ( Located,unLoc )
 import Data.Data hiding (Fixity, Prefix, Infix)
 import Data.Function (on)
+import Control.Monad (liftM2)
 
 {-
 ************************************************************************
@@ -1612,3 +1623,256 @@ data SpliceExplicitFlag
           = ExplicitSplice | -- ^ <=> $(f x y)
             ImplicitSplice   -- ^ <=> f x y,  i.e. a naked top level expression
     deriving Data
+
+
+{-
+  Note [Branch weights]
+ ~~~~~~~~~~~~~~~~~~~~~~~
+
+  The basic rundown:
+  * From Core onward we track which brances are most likely taken.
+  * We generate this info by
+    + Checking for bottom during the core-to-stg translation.
+      Expressions which we can detect as being bottom during compile time can
+      safely be assumed to be rarely taken.
+    + Heap/Stack checks when generating Cmm code:
+      Running out of heap/stack space is comperativly rare so we assume these
+      are not taken.
+    + User annotations when compiling hand written Cmm code.
+      This makes it possible to have the compiler optimize for the common case
+      without relying on internal details of the cmm to assembly translation.
+    + User annotations on constructors or case statements.
+  * When generating code we use this information to generate better assembly:
+    + We use it to lay out branches favourable for the likely path.
+      This happens in CmmContFlowOpt and the native codegen blocklayout.
+
+  This is part of #14672.
+  [Make likelyhood of branches/conditions available throughout the compiler.]
+
+  At the Stg/Core level we record in AltCon a branch weight for alternatives.
+  Weights are relative to each other with higher numbers being more
+  likely to be taken.
+
+  When generating Cmm this is included in switchtargets as is or translated
+  to likely/not likely for conditional statements.
+
+  This information is then used in the backend for optimizing control
+  flow.
+
+  As long as we only perform simple optimizations that just check
+  which of two branches is more likely to be taken using a Int based
+  representation is fine.
+
+  TODO: For more involved optimizations like calculating hot paths
+  stricter semantics might be needed. As currently a branch with weight
+  2 and weight 4 only are meaniful compareable if they branch off at the
+  same point. (Eg a single case statement)
+  Conditionals would also require more information than just
+  likely/unlikely/unknown for this to work.
+
+-}
+
+{-   Note [Weight backpropagation for known constructor]
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+We want a tiered measure of branchweights for optimization in the compiler.
+ * No information:
+    The default assumption when nothing was entered, defaulting to 1/n.
+ * Estimated/generated information:
+    An important type of this information is coming from defaults.
+    We might assign default weights to Nil/Cons. But we want to overwrite
+    these with information entered by the user when appropriate.
+ * Accurate/Custom weights:
+    Weights given by the user or coming from reliable sources like profiling.
+
+Why go through all that trouble?
+
+Consider a simple definition using guards:
+  foo x
+    | x == C1 =   { -# LIKELY 10 #- } e1
+    | otherwise = { -# LIKELY  0 #- } e1
+
+We (usually) end up inling the call to `==` giving something like this:
+
+  case (case x of { C1 -> (Weight: 1000) True;
+                    C2 -> (Weight: 1000) False;
+                    C3 -> (Weight: 1000) False; } ) of
+        {
+        True ->  (Weight: 10) True;
+        False -> (Weight: 0)  False;
+        }
+
+We then apply the known constructor optimization resulting in:
+
+      case x of {
+        C1(Weight: 1000) -> True;
+        C2(Weight: 1000) -> False;
+        C3(Weight: 1000) -> False
+      }
+
+With the end result that we dropped the user given weights,
+instead using the weights from the definition of `==`.
+
+Which is really neither wrong nor right for simple numeric weights
+depending on the situation.
+However we can improve on this by introducing the tiers of information
+from above.
+
+Armed with the extra level of information we can improve this such that
+if we eliminate a case via known constructor we:
+ * If both cases have weights of the same tier,
+   or if the case generating the known constructor has better information,
+   then use the weights form the case generating the known constructor.
+   (So the behaviour as described above)
+ * If the case generating the known constructor has less information, then
+   propagate the weights backwards.
+
+The backpropagation happens as follows:
+  * Collect in the using case weight per known constructor w_Cn,
+    and default weight w_d.
+  * Update weights in the generating case for all alternatives:
+    + Distribute among all cases generating C_n the weight w_Cn.
+    + Distribute the default weight among all constructors not used
+      in the using case.
+
+
+-}
+
+-- | Frequency with which a alternative is taken,
+--   values are relative to each other. Higher means
+--   a branch is taken more often.
+--   See alsoe Note [Branch weights]
+--   Don't use these constructors directly if possible
+data BranchWeight
+  = UnknownWeight -- ^ No weight known for an branch
+  | CompilerDefault  {-# UNPACK #-} Int -- ^ Estimated weights originating in the compiler.
+  | ConDefaultWeight {-# UNPACK #-} Int -- ^ Weight originating from constructor default
+  | UserWeight       {-# UNPACK #-} Int -- ^ Weight specified by the user.
+   deriving (Eq, Show, Data)
+
+mkCompilerWeight :: Int -> BranchWeight
+mkCompilerWeight w = CompilerDefault w
+
+mkConWeight :: Int -> BranchWeight
+mkConWeight w = ConDefaultWeight w
+
+mkUserWeight :: Int -> BranchWeight
+mkUserWeight w = UserWeight w
+
+mkUnknownWeight :: BranchWeight
+mkUnknownWeight = UnknownWeight
+
+
+
+instance Outputable BranchWeight where
+  ppr UnknownWeight = empty
+  ppr (CompilerDefault w)  = (text "c"  <> ppr w)
+  ppr (ConDefaultWeight w) = (text "dc" <> ppr w)
+  ppr (UserWeight w)       = (text "u"  <> ppr w)
+
+-- | Extract a branchs weight as integer value
+getWeight :: BranchWeight -> Maybe Int
+getWeight UnknownWeight = Nothing
+getWeight (ConDefaultWeight w) = Just w
+getWeight (CompilerDefault w) = Just w
+getWeight (UserWeight w) = Just w
+
+neverFreq, rareFreq, someFreq, defFreq, defaultFreq,
+  oftenFreq, usuallyFreq, alwaysFreq :: BranchWeight
+
+defFreqVal :: Int
+defFreqVal = 1000
+
+neverFreq = CompilerDefault $ 0
+rareFreq = CompilerDefault $ div defFreqVal 5
+someFreq = CompilerDefault $ div defFreqVal 2
+defFreq = CompilerDefault $ 1000
+defaultFreq = defFreq --TODO harmonize names ... /o\
+oftenFreq = CompilerDefault $ defFreqVal * 2
+usuallyFreq = CompilerDefault $ defFreqVal * 10
+--Don't go crazy here, for large switches we otherwise we might run into
+--integer overflow issues on 32bit platforms if we add them up.
+--which can happen if most of them result in the same expression.
+alwaysFreq = CompilerDefault $ defFreqVal * 50
+
+-- | Essentially @>@ with some whistles.
+--   Returns nothing if weights are the same numerically
+--   or are not comperable (eg UnknownWeight)
+moreLikely :: BranchWeight -> BranchWeight -> Maybe Bool
+moreLikely f1 f2 = do
+  w1' <- getWeight f1
+  w2' <- getWeight f2
+  case () of
+    _
+      | w1' > w2'   -> Just True
+      | w1' < w2'   -> Just False
+      | otherwise   -> Nothing
+
+
+{- | Add up weights respecting never.
+  Combining two weights where one is never or negative results in the other one.
+  This is neccesary because we never want a likely branch and a unlikely one
+  to add up to less than the likely branch was originally.
+
+  This could otherwise happen if we end up with negative weights somehow and
+  do simple addition.
+
+  Further the combined weight has the information level of the lower of the two
+  weights.
+
+-}
+
+
+
+combineWeights :: BranchWeight -> BranchWeight -> BranchWeight
+combineWeights UnknownWeight w2 = UnknownWeight
+combineWeights w1 UnknownWeight = UnknownWeight
+combineWeights w1 w2 = "combineWeights" `expectJust` (do
+  w1' <- getWeight w1
+  w2' <- getWeight w2
+  return . (lowestInfoCon w1 w2) $ addCheckNeg w1' w2')
+  where
+    lowestInfoCon (CompilerDefault _) _         = CompilerDefault
+    lowestInfoCon _ (CompilerDefault _)         = CompilerDefault
+    lowestInfoCon (ConDefaultWeight _) _        = ConDefaultWeight
+    lowestInfoCon _ (ConDefaultWeight _)        = ConDefaultWeight
+    lowestInfoCon (UserWeight _) (UserWeight _) = UserWeight
+
+    -- Avoid a positive and negative weight resulting in a negative one.
+    addCheckNeg f1 f2
+      | f1 < 0 || f2 < 0 = (max f2 f1)
+      | otherwise = (f1 + f2)
+
+
+-- | combineWeights lifted into Maybe but with a preference for Just.
+combineWeightsMaybe :: Maybe BranchWeight -> Maybe BranchWeight -> Maybe BranchWeight
+combineWeightsMaybe Nothing w = w
+combineWeightsMaybe w Nothing = w
+combineWeightsMaybe w1 w2 = liftM2 combineWeights w1 w2
+
+--TODO: Replace all mentions with combineWeights
+combinedFreqs :: BranchWeight -> BranchWeight -> BranchWeight
+combinedFreqs = combineWeights
+
+multiplyWeight :: BranchWeight -> Int -> BranchWeight
+multiplyWeight UnknownWeight        _ = UnknownWeight
+multiplyWeight (ConDefaultWeight w) f = ConDefaultWeight (w * f)
+multiplyWeight (CompilerDefault w)  f = CompilerDefault  (w * f)
+multiplyWeight (UserWeight w)       f = UserWeight       (w * f)
+
+-- | Can we get a numeric weight rep from this value?
+--   Useful if we want to replace unknown weights.
+representsNumWeight :: BranchWeight -> Bool
+representsNumWeight UnknownWeight = False
+representsNumWeight _             = True
+
+-- | Edge weight used by CFG in the native backend.
+-- Weights are absolute values across a single CFG.
+-- This means we can meaninfully compare any two weights
+-- inside the same CFG.
+newtype EdgeWeight
+  = EdgeWeight Int
+  deriving (Eq,Ord,Enum,Num,Real,Integral,Show)
+
+instance Outputable EdgeWeight where
+  ppr (EdgeWeight w) = ppr w

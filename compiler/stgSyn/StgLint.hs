@@ -38,6 +38,8 @@ module StgLint ( lintStgTopBindings ) where
 
 import GhcPrelude
 
+import BasicTypes (BranchWeight)
+
 import StgSyn
 
 import DynFlags
@@ -213,15 +215,17 @@ lintAlt
     :: (OutputablePass a, BinderP a ~ Id)
     => (AltCon, [Id], GenStgExpr a) -> LintM ()
 
-lintAlt (DEFAULT, _, rhs) =
+lintAlt (DEFAULT _, _, rhs) =
     lintStgExpr rhs
 
-lintAlt (LitAlt _, _, rhs) =
+lintAlt (LitAlt _ _, _, rhs) =
     lintStgExpr rhs
 
-lintAlt (DataAlt _, bndrs, rhs) = do
+lintAlt (DataAlt _ _, bndrs, rhs) = do
     mapM_ checkPostUnariseBndr bndrs
     addInScopeVars bndrs (lintStgExpr rhs)
+
+
 
 {-
 ************************************************************************

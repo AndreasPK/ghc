@@ -537,9 +537,9 @@ toIfaceAlt (c,bs,r) = (toIfaceCon c, map getOccFS bs, toIfaceExpr r)
 
 ---------------------
 toIfaceCon :: AltCon -> IfaceConAlt
-toIfaceCon (DataAlt dc) = IfaceDataAlt (getName dc)
-toIfaceCon (LitAlt l)   = IfaceLitAlt l
-toIfaceCon DEFAULT      = IfaceDefault
+toIfaceCon (DataAlt dc w) = IfaceDataAlt (getName dc) w
+toIfaceCon (LitAlt l w)   = IfaceLitAlt l w
+toIfaceCon (DEFAULT w)    = IfaceDefault w
 
 ---------------------
 toIfaceApp :: Expr CoreBndr -> [Arg CoreBndr] -> IfaceExpr

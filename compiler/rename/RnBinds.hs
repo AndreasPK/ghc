@@ -1228,7 +1228,7 @@ rnGRHS' :: HsMatchContext Name
         -> (Located (body GhcPs) -> RnM (Located (body GhcRn), FreeVars))
         -> GRHS GhcPs (Located (body GhcPs))
         -> RnM (GRHS GhcRn (Located (body GhcRn)), FreeVars)
-rnGRHS' ctxt rnBody (GRHS _ guards rhs)
+rnGRHS' ctxt rnBody (GRHS _ guards rhs weight)
   = do  { pattern_guards_allowed <- xoptM LangExt.PatternGuards
         ; ((guards', rhs'), fvs) <- rnStmts (PatGuard ctxt) rnLExpr guards $ \ _ ->
                                     rnBody rhs
@@ -1236,7 +1236,7 @@ rnGRHS' ctxt rnBody (GRHS _ guards rhs)
         ; unless (pattern_guards_allowed || is_standard_guard guards')
                  (addWarn NoReason (nonStdGuardErr guards'))
 
-        ; return (GRHS noExt guards' rhs', fvs) }
+        ; return (GRHS noExt guards' rhs' weight, fvs) }
   where
         -- Standard Haskell 1.4 guards are just a single boolean
         -- expression, rather than a list of qualifiers as in the

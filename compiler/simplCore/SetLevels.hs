@@ -89,7 +89,7 @@ import Demand           ( StrictSig, Demand, isStrictDmd, splitStrictSig, increa
 import Name             ( getOccName, mkSystemVarName )
 import OccName          ( occNameString )
 import Type             ( Type, mkLamTypes, splitTyConApp_maybe, tyCoVarsOfType, closeOverKindsDSet )
-import BasicTypes       ( Arity, RecFlag(..), isRec )
+import BasicTypes       ( Arity, RecFlag(..), isRec, defaultFreq )
 import DataCon          ( dataConOrigResTy )
 import TysWiredIn
 import UniqSupply
@@ -632,13 +632,13 @@ lvlMFE env strict_ctxt ann_expr
        ; let l1r       = incMinorLvlFrom rhs_env
              float_rhs = mkLams abs_vars_w_lvls $
                          Case expr1 (stayPut l1r ubx_bndr) dc_res_ty
-                             [(DEFAULT, [], mkConApp dc [Var ubx_bndr])]
+                             [(DEFAULT defaultFreq, [], mkConApp dc [Var ubx_bndr])] --TODOW: Check
 
        ; var <- newLvlVar float_rhs Nothing is_mk_static
        ; let l1u      = incMinorLvlFrom env
              use_expr = Case (mkVarApps (Var var) abs_vars)
                              (stayPut l1u bx_bndr) expr_ty
-                             [(DataAlt dc, [stayPut l1u ubx_bndr], Var ubx_bndr)]
+                             [(DataAlt dc defaultFreq, [stayPut l1u ubx_bndr], Var ubx_bndr)] --TODOW
        ; return (Let (NonRec (TB var (FloatMe dest_lvl)) float_rhs)
                      use_expr) }
 

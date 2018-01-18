@@ -206,7 +206,7 @@ coreCaseTuple uniqs scrut_var vars body
 coreCasePair :: Id -> Id -> Id -> CoreExpr -> CoreExpr
 coreCasePair scrut_var var1 var2 body
   = Case (Var scrut_var) scrut_var (exprType body)
-         [(DataAlt (tupleDataCon Boxed 2), [var1, var2], body)]
+         [(DataAlt (tupleDataCon Boxed 2) alwaysFreq, [var1, var2], body)]
 
 mkCorePairTy :: Type -> Type -> Type
 mkCorePairTy t1 t2 = mkBoxedTupleTy [t1, t2]
@@ -327,7 +327,7 @@ dsProcExpr pat (dL->L _ (HsCmdTop (CmdTopTc _unitTy cmd_ty ids) cmd)) = do
     let env_stk_expr = mkCorePairExpr (mkBigCoreVarTup env_ids) mkCoreUnitExpr
     fail_expr <- mkFailExpr ProcExpr env_stk_ty
     var <- selectSimpleMatchVarL pat
-    match_code <- matchSimply (Var var) ProcExpr pat env_stk_expr fail_expr
+    match_code <- matchSimply (Var var) ProcExpr pat env_stk_expr fail_expr Nothing
     let pat_ty = hsLPatType pat
     let proc_code = do_premap meth_ids pat_ty env_stk_ty cmd_ty
                     (Lam var match_code)
@@ -457,7 +457,7 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdApp _ cmd arg) env_ids = do
 dsCmd ids local_vars stack_ty res_ty
         (HsCmdLam _ (MG { mg_alts
           = (dL->L _ [dL->L _ (Match { m_pats  = pats
-                       , m_grhss = GRHSs _ [dL->L _ (GRHS _ [] body)] _ })]) }))
+                       , m_grhss = GRHSs _ [dL->L _ (GRHS _ [] body _weight)] _ })]) })) --TODO
         env_ids = do
     let pat_vars = mkVarSet (collectPatsBinders pats)
     let
@@ -533,7 +533,8 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdIf _ mb_fun cond then_cmd else_cmd)
                                       [core_cond, core_left, core_right]
                       ; matchEnvStack env_ids stack_id fun_apps }
        Nothing  -> matchEnvStack env_ids stack_id $
-                   mkIfThenElse core_cond core_left core_right
+        --TODO: Support weights for arrows
+                   mkIfThenElse core_cond core_left core_right Nothing
 
     return (do_premap ids in_ty sum_ty res_ty
                 core_if
@@ -897,7 +898,7 @@ dsCmdStmt ids local_vars out_ids (BindStmt _ pat cmd _ _) env_ids = do
     fail_expr <- mkFailExpr (StmtCtxt DoExpr) out_ty
     pat_id    <- selectSimpleMatchVarL pat
     match_code
-      <- matchSimply (Var pat_id) (StmtCtxt DoExpr) pat body_expr fail_expr
+      <- matchSimply (Var pat_id) (StmtCtxt DoExpr) pat body_expr fail_expr Nothing
     pair_id   <- newSysLocalDs after_c_ty
     let
         proj_expr = Lam pair_id (coreCasePair pair_id pat_id env_id match_code)
@@ -1133,7 +1134,7 @@ matchSimplys :: [CoreExpr]              -- Scrutinees
 matchSimplys [] _ctxt [] result_expr _fail_expr = return result_expr
 matchSimplys (exp:exps) ctxt (pat:pats) result_expr fail_expr = do
     match_code <- matchSimplys exps ctxt pats result_expr fail_expr
-    matchSimply exp ctxt pat match_code fail_expr
+    matchSimply exp ctxt pat match_code fail_expr Nothing
 matchSimplys _ _ _ _ _ = panic "matchSimplys"
 
 -- List of leaf expressions, with set of variables bound in each
@@ -1150,7 +1151,7 @@ leavesMatch (dL->L _ (Match { m_pats = pats
     [(body,
       mkVarSet (collectLStmtsBinders stmts)
         `unionVarSet` defined_vars)
-    | (dL->L _ (GRHS _ stmts body)) <- grhss]
+    | (dL->L _ (GRHS _ stmts body _weight)) <- grhss]
 leavesMatch _ = panic "leavesMatch"
 
 -- Replace the leaf commands in a match
@@ -1175,8 +1176,8 @@ replaceLeavesGRHS
         -> LGRHS GhcTc (Located (body GhcTc))     -- rhss of a case command
         -> ([Located (body' GhcTc)],              -- remaining leaf expressions
             LGRHS GhcTc (Located (body' GhcTc)))  -- updated GRHS
-replaceLeavesGRHS (leaf:leaves) (dL->L loc (GRHS x stmts _))
-  = (leaves, cL loc (GRHS x stmts leaf))
+replaceLeavesGRHS (leaf:leaves) (dL->L loc (GRHS x stmts _ weight))
+  = (leaves, cL loc (GRHS x stmts leaf weight))
 replaceLeavesGRHS [] _ = panic "replaceLeavesGRHS []"
 replaceLeavesGRHS _ _ = panic "replaceLeavesGRHS"
 

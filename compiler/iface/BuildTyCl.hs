@@ -111,6 +111,7 @@ buildDataCon :: FamInstEnvs
            -> KnotTied TyCon           -- Rep tycon
            -> NameEnv ConTag           -- Maps the Name of each DataCon to its
                                        -- ConTag
+           -> Maybe BranchWeight
            -> TcRnIf m n DataCon
 -- A wrapper for DataCon.mkDataCon that
 --   a) makes the worker Id
@@ -118,7 +119,7 @@ buildDataCon :: FamInstEnvs
 --      allocating its unique (hence monadic)
 buildDataCon fam_envs src_name declared_infix prom_info src_bangs impl_bangs
              field_lbls univ_tvs ex_tvs user_tvbs eq_spec ctxt arg_tys res_ty
-             rep_tycon tag_map
+             rep_tycon tag_map weight
   = do  { wrap_name <- newImplicitBinder src_name mkDataConWrapperOcc
         ; work_name <- newImplicitBinder src_name mkDataConWorkerOcc
         -- This last one takes the name of the data constructor in the source
@@ -135,7 +136,7 @@ buildDataCon fam_envs src_name declared_infix prom_info src_bangs impl_bangs
                                    src_bangs field_lbls
                                    univ_tvs ex_tvs user_tvbs eq_spec ctxt
                                    arg_tys res_ty NoRRI rep_tycon tag
-                                   stupid_ctxt dc_wrk dc_rep
+                                   stupid_ctxt dc_wrk dc_rep weight
               dc_wrk = mkDataConWorkId work_name data_con
               dc_rep = initUs_ us (mkDataConRep dflags fam_envs wrap_name
                                                 impl_bangs data_con)
@@ -316,6 +317,7 @@ buildClass tycon_name binders roles fds
                                    (mkTyConApp rec_tycon (mkTyVarTys univ_tvs))
                                    rec_tycon
                                    (mkTyConTagMap rec_tycon)
+                                   Nothing
 
         ; rhs <- case () of
                   _ | use_newtype

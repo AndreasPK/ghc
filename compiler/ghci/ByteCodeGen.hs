@@ -641,7 +641,7 @@ schemeE d s p (AnnTick _ (_, rhs)) = schemeE d s p rhs
 schemeE d s p (AnnCase (_,scrut) _ _ []) = schemeE d s p scrut
         -- no alts: scrut is guaranteed to diverge
 
-schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1, bind2], rhs)])
+schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc dw, [bind1, bind2], rhs)])
    | isUnboxedTupleCon dc -- handles pairs with one void argument (e.g. state token)
         -- Convert
         --      case .... of x { (# V'd-thing, a #) -> ... }
@@ -653,18 +653,18 @@ schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1, bind2], rhs)])
         -- envt (it won't be bound now) because we never look such things up.
    , Just res <- case (typePrimRep (idType bind1), typePrimRep (idType bind2)) of
                    ([], [_])
-                     -> Just $ doCase d s p scrut bind2 [(DEFAULT, [], rhs)] (Just bndr)
+                     -> Just $ doCase d s p scrut bind2 [(DEFAULT dw, [], rhs)] (Just bndr)
                    ([_], [])
-                     -> Just $ doCase d s p scrut bind1 [(DEFAULT, [], rhs)] (Just bndr)
+                     -> Just $ doCase d s p scrut bind1 [(DEFAULT dw, [], rhs)] (Just bndr)
                    _ -> Nothing
    = res
 
-schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc, [bind1], rhs)])
+schemeE d s p (AnnCase scrut bndr _ [(DataAlt dc w, [bind1], rhs)])
    | isUnboxedTupleCon dc
    , typePrimRep (idType bndr) `lengthAtMost` 1 -- handles unit tuples
-   = doCase d s p scrut bind1 [(DEFAULT, [], rhs)] (Just bndr)
+   = doCase d s p scrut bind1 [(DEFAULT w, [], rhs)] (Just bndr)
 
-schemeE d s p (AnnCase scrut bndr _ alt@[(DEFAULT, [], _)])
+schemeE d s p (AnnCase scrut bndr _ alt@[(DEFAULT _w, [], _)])
    | isUnboxedTupleType (idType bndr)
    , Just ty <- case typePrimRep (idType bndr) of
        [_]  -> Just (unwrapType (idType bndr))
@@ -951,7 +951,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
         isAlgCase = not (isUnliftedType bndr_ty) && isNothing is_unboxed_tuple
 
         -- given an alt, return a discr and code for it.
-        codeAlt (DEFAULT, _, (_,rhs))
+        codeAlt (DEFAULT _w, _, (_,rhs))
            = do rhs_code <- schemeE d_alts s p_alts rhs
                 return (NoDiscr, rhs_code)
 
@@ -989,13 +989,13 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
            where
              real_bndrs = filterOut isTyVar bndrs
 
-        my_discr (DEFAULT, _, _) = NoDiscr {-shouldn't really happen-}
-        my_discr (DataAlt dc, _, _)
+        my_discr (DEFAULT _w, _, _) = NoDiscr {-shouldn't really happen-}
+        my_discr (DataAlt dc _w, _, _)
            | isUnboxedTupleCon dc || isUnboxedSumCon dc
            = multiValException
            | otherwise
            = DiscrP (fromIntegral (dataConTag dc - fIRST_TAG))
-        my_discr (LitAlt l, _, _)
+        my_discr (LitAlt l _, _, _)
            = case l of LitNumber LitNumInt i  _  -> DiscrI (fromInteger i)
                        LitNumber LitNumWord w _  -> DiscrW (fromInteger w)
                        LitFloat r   -> DiscrF (fromRational r)
@@ -1006,7 +1006,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
         maybe_ncons
            | not isAlgCase = Nothing
            | otherwise
-           = case [dc | (DataAlt dc, _, _) <- alts] of
+           = case [dc | (DataAlt dc _w, _, _) <- alts] of
                 []     -> Nothing
                 (dc:_) -> Just (tyConFamilySize (dataConTyCon dc))
 
