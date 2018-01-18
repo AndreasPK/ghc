@@ -872,7 +872,8 @@ wrapCo co rep_ty (unbox_rep, box_rep)  -- co :: arg_ty ~ rep_ty
 
 ------------------------
 seqUnboxer :: Unboxer
-seqUnboxer v = return ([v], \e -> Case (Var v) v (exprType e) [(DEFAULT, [], e)])
+seqUnboxer v = return
+              ([v], \e -> Case (Var v) v (exprType e) [(DEFAULT, [], e)])
 
 unitUnboxer :: Unboxer
 unitUnboxer v = return ([v], \e -> e)
@@ -1287,7 +1288,8 @@ seqId = pcMiscPrelId seqName ty info
                           (mkFunTy alphaTy (mkFunTy betaTy betaTy))
 
     [x,y] = mkTemplateLocals [alphaTy, betaTy]
-    rhs = mkLams [alphaTyVar,betaTyVar,x,y] (Case (Var x) x betaTy [(DEFAULT, [], Var y)])
+    rhs = mkLams [alphaTyVar,betaTyVar,x,y]
+          (Case (Var x) x betaTy [(DEFAULT, [], Var y)])
 
 ------------------------------------------------
 lazyId :: Id    -- See Note [lazyId magic]

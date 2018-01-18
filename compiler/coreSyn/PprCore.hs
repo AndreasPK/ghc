@@ -611,4 +611,6 @@ instance Outputable id => Outputable (Tickish id) where
          _            -> hcat [text "scc<",     ppr cc, char '>']
   ppr (SourceNote span _) =
       hcat [ text "src<", pprUserRealSpan True span, char '>']
+  ppr (WeightHint w) =
+      hcat [ text "WeightHint:", ppr w]
 

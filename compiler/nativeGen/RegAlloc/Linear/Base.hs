@@ -136,6 +136,6 @@ data RA_State freeRegs
         , ra_DynFlags   :: DynFlags
 
         -- | (from,fixup,to) : We inserted fixup code between from and to
-        , ra_fixups     :: [(BlockId,BlockId,BlockId)] }
+        , ra_fixups     :: [(BlockId,BlockId,BlockId)]}
 
 

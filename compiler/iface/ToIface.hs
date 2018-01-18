@@ -521,6 +521,7 @@ toIfaceTickish :: Tickish Id -> Maybe IfaceTickish
 toIfaceTickish (ProfNote cc tick push) = Just (IfaceSCC cc tick push)
 toIfaceTickish (HpcTick modl ix)       = Just (IfaceHpcTick modl ix)
 toIfaceTickish (SourceNote src names)  = Just (IfaceSource src names)
+toIfaceTickish (WeightHint w)          = Just (IfaceBranchWeight w)
 toIfaceTickish (Breakpoint {})         = Nothing
    -- Ignore breakpoints, since they are relevant only to GHCi, and
    -- should not be serialised (Trac #8333)

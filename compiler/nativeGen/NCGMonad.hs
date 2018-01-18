@@ -18,6 +18,7 @@ module NCGMonad (
         addNodeBetweenNat,
         addImmediateSuccessorNat,
         updateCfgNat,
+        getCfgNat,
         getUniqueNat,
         mapAccumLNat,
         setDeltaNat,
@@ -203,6 +204,9 @@ getThisModuleNat = NatM $ \ st -> (natm_this_module st, st)
 addImportNat :: CLabel -> NatM ()
 addImportNat imp
         = NatM $ \ st -> ((), st {natm_imports = imp : natm_imports st})
+
+getCfgNat :: NatM CFG
+getCfgNat = NatM $ \ st -> (natm_cfg st, st)
 
 updateCfgNat :: (CFG -> CFG) -> NatM ()
 updateCfgNat f

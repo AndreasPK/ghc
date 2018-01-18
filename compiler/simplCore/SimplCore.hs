@@ -136,6 +136,8 @@ getCoreToDo dflags
     eta_expand_on = gopt Opt_DoLambdaEtaExpansion         dflags
     ww_on         = gopt Opt_WorkerWrapper                dflags
     static_ptrs   = xopt LangExt.StaticPointers           dflags
+    -- likely_rec    = gopt Opt_LikelyRecursion              dflags
+    --TODO: Make this a proper core pass
 
     maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
 
