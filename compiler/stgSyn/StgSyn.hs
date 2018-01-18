@@ -47,6 +47,7 @@ module StgSyn (
 
 import GhcPrelude
 
+import BasicTypes  (Freq, defFreq, neverFreq)
 import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
@@ -481,7 +482,7 @@ rhsHasCafRefs (StgRhsCon _ _ args)
   = any stgArgHasCafRefs args
 
 altHasCafRefs :: GenStgAlt bndr Id -> Bool
-altHasCafRefs (_, _, rhs) = exprHasCafRefs rhs
+altHasCafRefs (_, _, rhs, _) = exprHasCafRefs rhs
 
 stgArgHasCafRefs :: GenStgArg Id -> Bool
 stgArgHasCafRefs (StgVarArg id)
@@ -545,7 +546,8 @@ rather than from the scrutinee type.
 type GenStgAlt bndr occ
   = (AltCon,            -- alts: data constructor,
      [bndr],            -- constructor's parameters,
-     GenStgExpr bndr occ)       -- ...right-hand side.
+     GenStgExpr bndr occ, -- ..right-hand side,
+     Freq)              -- relative chance to take this alt.
 
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
@@ -786,8 +788,11 @@ pprStgExpr (StgCase expr bndr alt_type alts)
 
 pprStgAlt :: (OutputableBndr bndr, Outputable occ, Ord occ)
           => GenStgAlt bndr occ -> SDoc
-pprStgAlt (con, params, expr)
-  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), text "->"])
+pprStgAlt (con, params, expr, f)
+  = hang (hsep [ppr con,
+                sep (map (pprBndr CasePatBind) params),
+                parens (text "likely:" <> ppr f) ,
+                text "->"])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc

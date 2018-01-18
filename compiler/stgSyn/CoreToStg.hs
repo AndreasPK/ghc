@@ -18,7 +18,7 @@ module CoreToStg ( coreToStg ) where
 import GhcPrelude
 
 import CoreSyn
-import CoreUtils        ( exprType, findDefault, isJoinBind
+import CoreUtils        ( exprType, findDefault, isJoinBind, exprIsBottom
                         , exprIsTickedString_maybe )
 import CoreArity        ( manifestArity )
 import StgSyn
@@ -35,7 +35,7 @@ import VarEnv
 import Module
 import Name             ( isExternalName, nameOccName, nameModule_maybe )
 import OccName          ( occNameFS )
-import BasicTypes       ( Arity )
+import BasicTypes       ( Arity, neverFreq, defFreq )
 import TysWiredIn       ( unboxedUnitDataCon )
 import Literal
 import Outputable
@@ -471,6 +471,9 @@ coreToStgExpr (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
+    alt_freq rhs
+      | exprIsBottom rhs = neverFreq
+      | otherwise = defFreq
     vars_alt (con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon
       = -- This case is a bit smelly.
@@ -478,14 +481,14 @@ coreToStgExpr (Case scrut bndr _ alts) = do
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
         do { (rhs2, rhs_fvs) <- coreToStgExpr rhs
-           ; return ((DEFAULT, [], rhs2), rhs_fvs) }
+           ; return ((DEFAULT, [], rhs2, alt_freq rhs), rhs_fvs) }
       | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
         extendVarEnvCts [(b, LambdaBound) | b <- binders'] $ do
         (rhs2, rhs_fvs) <- coreToStgExpr rhs
-        return ( (con, binders', rhs2),
+        return ( (con, binders', rhs2, alt_freq rhs),
                  binders' `minusFVBinders` rhs_fvs )
 
 coreToStgExpr (Let bind body) = do

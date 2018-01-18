@@ -38,7 +38,11 @@ import GhcPrelude
 
 import StgSyn
 
+<<<<<<< HEAD
 import DynFlags
+=======
+import BasicTypes       ( Freq )
+>>>>>>> Add freq to Switchplan.
 import Bag              ( Bag, emptyBag, isEmptyBag, snocBag, bagToList )
 import Id               ( Id, idType, isLocalId, isJoinId )
 import VarSet

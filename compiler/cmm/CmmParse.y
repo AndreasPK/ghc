@@ -1359,8 +1359,7 @@ withSourceNote a b parse = do
 -- -----------------------------------------------------------------------------
 -- Table jumps
 
--- We use a simplified form of C-- switch statements for now.  A
--- switch statement always compiles to a table jump.  Each arm can
+-- We use a simplified form of C-- switch statements for now. Each arm can
 -- specify a list of values (not ranges), and there can be a single
 -- default branch.  The range of the table is given either by the
 -- optional range on the switch (eg. switch [0..7] {...}), or by
@@ -1376,18 +1375,20 @@ doSwitch mb_range scrut arms deflt
         dflt_entry <- 
                 case deflt of
                   Nothing -> return Nothing
-                  Just e  -> do b <- forkLabelledCode e; return (Just b)
+                  Just e  -> do b <- forkLabelledCode e; return (Just (b,defFreq))
 
+        --TODOF: Parse likely branches
         -- Compile each case branch
         table_entries <- mapM emitArm arms
         let table = M.fromList (concat table_entries)
+        let ftable = fmap (\c -> (c,defFreq)) table
 
         dflags <- getDynFlags
         let range = fromMaybe (0, tARGET_MAX_WORD dflags) mb_range
 
         expr <- scrut
         -- ToDo: check for out of range and jump to default if necessary
-        emit $ mkSwitch expr (mkSwitchTargets False range dflt_entry table)
+        emit $ mkSwitch expr (mkSwitchTargets False range dflt_entry ftable)
    where
         emitArm :: ([Integer],Either BlockId (CmmParse ())) -> CmmParse [(Integer,BlockId)]
         emitArm (ints,Left blockid) = return [ (i,blockid) | i <- ints ]
