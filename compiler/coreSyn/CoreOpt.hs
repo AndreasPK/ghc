@@ -253,7 +253,7 @@ simple_opt_expr env expr
         (env', b') = subst_opt_bndr env b
 
     ----------------------
-    go_alt env (con, bndrs, rhs, freq)
+    go_alt env (con, bndrs, rhs, freq) --TODOF: Can we make a simple check for a error branch here?
       = (con, bndrs', simple_opt_expr env' rhs, freq)
       where
         (env', bndrs') = subst_opt_bndrs env bndrs
