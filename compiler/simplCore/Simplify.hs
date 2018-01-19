@@ -2468,7 +2468,6 @@ simplAlts env0 scrut case_bndr alts cont'
                                       , text "cont':" <+> ppr cont'
                                       , text "in_scope" <+> ppr (seInScope env0) ])
         ; (env1, case_bndr1) <- simplBinder env0 case_bndr
-        ; traceM "I was here first1"
         ; let case_bndr2 = case_bndr1 `setIdUnfolding` evaldUnfolding
               env2       = modifyInScope env1 case_bndr2
               -- See Note [Case binder evaluated-ness]
@@ -2527,14 +2526,12 @@ simplAlt env _ imposs_deflt_cons case_bndr' cont' (DEFAULT, bndrs, rhs, freq)
                                         (mkOtherCon imposs_deflt_cons)
                 -- Record the constructors that the case-binder *can't* be.
         ; rhs' <- simplExprC env' rhs cont'
-        ; traceM "I was here1"
         ; return (DEFAULT, [], rhs', improveFreq freq rhs') }
 
 simplAlt env scrut' _ case_bndr' cont' (LitAlt lit, bndrs, rhs, freq)
   = ASSERT( null bndrs )
     do  { env' <- addAltUnfoldings env scrut' case_bndr' (Lit lit)
         ; rhs' <- simplExprC env' rhs cont'
-        ; traceM "I was here2"
         ; return (LitAlt lit, [], rhs', improveFreq freq rhs') }
 
 simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs, freq)
@@ -2552,7 +2549,6 @@ simplAlt env scrut' _ case_bndr' cont' (DataAlt con, vs, rhs, freq)
 
         ; env'' <- addAltUnfoldings env' scrut' case_bndr' con_app
         ; rhs' <- simplExprC env'' rhs cont'
-        ; traceM "I was here3"
         ; return (DataAlt con, vs', rhs', improveFreq freq rhs') }
   where
         -- add_evals records the evaluated-ness of the bound variables of

@@ -2777,7 +2777,9 @@ genSwitch dflags expr targets
                     JMP_TBL op ids (Section ReadOnlyData lbl) lbl
                  ]
         return code
-  where (offset, ids) = switchTargetsToTable targets
+  where
+    (offset, lblInfos) = switchTargetsToTable targets :: (Int, [Maybe LabelInfo])
+    ids = map (fmap liLbl) lblInfos --TODOF: Documents why we have that info
 
 generateJumpTableForInstr :: DynFlags -> Instr -> Maybe (NatCmmDecl (Alignment, CmmStatics) Instr)
 generateJumpTableForInstr dflags (JMP_TBL _ ids section lbl)
