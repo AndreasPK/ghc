@@ -61,7 +61,7 @@ implementSwitchPlan dflags scope expr = go
       = return (emptyBlock `blockJoinTail` CmmBranch l, [])
     go (JumpTable ids)
       = return (emptyBlock `blockJoinTail` CmmSwitch expr ids, [])
-    go (IfLT signed i ids1 ids2)
+    go (IfLT signed i ids1 ids2 freq)
       = do
         (bid1, newBlocks1) <- go' ids1
         (bid2, newBlocks2) <- go' ids2
@@ -69,15 +69,17 @@ implementSwitchPlan dflags scope expr = go
         let lt | signed    = cmmSLtWord
                | otherwise = cmmULtWord
             scrut = lt dflags expr $ CmmLit $ mkWordCLit dflags i
-            lastNode = CmmCondBranch scrut bid1 bid2 Nothing
+            --TODOF: Revisit when we have a no-info value
+            lastNode = CmmCondBranch scrut bid1 bid2 (if freq >= 0 then Just True else Just False)
             lastBlock = emptyBlock `blockJoinTail` lastNode
         return (lastBlock, newBlocks1++newBlocks2)
-    go (IfEqual i l ids2)
+    go (IfEqual i l ids2 freq)
       = do
         (bid2, newBlocks2) <- go' ids2
 
         let scrut = cmmNeWord dflags expr $ CmmLit $ mkWordCLit dflags i
-            lastNode = CmmCondBranch scrut bid2 l Nothing
+            --TODOF: If freq >= 0 should be made a utility
+            lastNode = CmmCondBranch scrut bid2 l (if freq >= 0 then Just True else Just False)
             lastBlock = emptyBlock `blockJoinTail` lastNode
         return (lastBlock, newBlocks2)
 

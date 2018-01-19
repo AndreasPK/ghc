@@ -1079,10 +1079,11 @@ genSwitch cond ids = do
     (vc, stmts, top) <- exprToVar cond
     let ty = getVarType vc
 
+    --TODOF: Maybe llvm can use this info as well
     let labels = [ (mkIntLit ty ix, blockIdToLlvm b)
-                 | (ix, b) <- switchTargetsCases ids ]
+                 | (ix, (b,_f)) <- switchTargetsCases ids ]
     -- out of range is undefined, so let's just branch to first label
-    let defLbl | Just l <- switchTargetsDefault ids = blockIdToLlvm l
+    let defLbl | Just (l,_f) <- switchTargetsDefault ids = blockIdToLlvm l
                | otherwise                          = snd (head labels)
 
     let s1 = Switch vc defLbl labels

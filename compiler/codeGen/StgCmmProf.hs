@@ -355,6 +355,7 @@ ldvEnter cl_ptr = do
         emit =<< mkCmmIfThenElse (CmmMachOp (mo_wordUGt dflags) [loadEra dflags, CmmLit (zeroCLit dflags)])
                      (mkStore ldv_wd new_ldv_wd)
                      mkNop
+                     Nothing --TODOF: Any idea if this is likely?
 
 loadEra :: DynFlags -> CmmExpr
 loadEra dflags = CmmMachOp (MO_UU_Conv (cIntWidth dflags) (wordWidth dflags))

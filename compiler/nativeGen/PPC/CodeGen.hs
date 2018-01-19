@@ -2081,7 +2081,9 @@ genSwitch dflags expr targets
                             BCTR ids (Just lbl)
                     ]
         return code
-  where (offset, ids) = switchTargetsToTable targets
+  where 
+    (offset, lblInfos) = switchTargetsToTable targets :: (Int, [Maybe LabelInfo])
+    ids = map (fmap liLbl) lblInfos --TODOF: Documents why we have that info
 
 generateJumpTableForInstr :: DynFlags -> Instr
                           -> Maybe (NatCmmDecl CmmStatics Instr)

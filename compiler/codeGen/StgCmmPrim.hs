@@ -1124,9 +1124,9 @@ genericFabsOp w [res_r] [aa]
       let g3 = catAGraphs [mkAssign res_t aa,
                            mkAssign (CmmLocal res_r) (neg (CmmReg res_t))]
 
-      g4 <- mkCmmIfThenElse (gt aa zero) g2 g3
-
-      emit =<< mkCmmIfThenElse (eq aa zero) g1 g4
+      g4 <- mkCmmIfThenElse (gt aa zero) g2 g3 Nothing
+        --TODOF: What are the odds
+      emit =<< mkCmmIfThenElse (eq aa zero) g1 g4 Nothing
 
 genericFabsOp _ _ _ = panic "genericFabsOp"
 
@@ -1825,7 +1825,8 @@ doCopyMutableByteArrayOp = emitCopyByteArray copy
             getCode $ emitMemmoveCall dst_p src_p bytes 1,
             getCode $ emitMemcpyCall  dst_p src_p bytes 1
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
+        --TODOF: What are the odds
 
 emitCopyByteArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr
                       -> FCode ())
@@ -1971,7 +1972,8 @@ doCopyMutableArrayOp = emitCopyArray copy
             getCode $ emitMemcpyCall  dst_p src_p (mkIntExpr dflags bytes)
             (wORD_SIZE dflags)
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
+        --TODOF: What are the odds
 
 emitCopyArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> ByteOff
                   -> FCode ())  -- ^ copy function
@@ -2034,7 +2036,8 @@ doCopySmallMutableArrayOp = emitCopySmallArray copy
             , getCode $ emitMemcpyCall  dst_p src_p (mkIntExpr dflags bytes)
               (wORD_SIZE dflags)
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
+        --TODOF: What are the odds
 
 emitCopySmallArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> ByteOff
                        -> FCode ())  -- ^ copy function
