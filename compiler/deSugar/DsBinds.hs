@@ -30,7 +30,6 @@ import DsUtils
 
 import HsSyn            -- lots of things
 import CoreSyn          -- lots of things
-import Literal          ( Literal(MachStr) )
 import CoreOpt          ( simpleOptExpr )
 import OccurAnal        ( occurAnalyseExpr )
 import MkCore
@@ -40,16 +39,12 @@ import CoreUnfold
 import CoreFVs
 import Digraph
 
-import PrelNames
 import TyCon
 import TcEvidence
 import TcType
 import Type
 import Coercion
-import TysWiredIn ( typeNatKind, typeSymbolKind )
 import Id
-import MkId(proxyHashId)
-import Class
 import Name
 import VarSet
 import Rules
@@ -186,7 +181,7 @@ dsHsBind dflags (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
                                    -- addDictsDs: push type constraints deeper
                                    --             for inner pattern match check
 
-       ; ds_ev_binds <- dsTcEvBinds_s ev_binds
+       ; let ds_ev_binds = dsTcEvBinds_s ev_binds
 
        -- dsAbsBinds does the hard work
        ; dsAbsBinds dflags tyvars dicts exports ds_ev_binds ds_binds has_sig }
@@ -1107,7 +1102,7 @@ dsHsWrapper WpHole            = return $ \e -> e
 dsHsWrapper (WpTyApp ty)      = return $ \e -> App e (Type ty)
 dsHsWrapper (WpEvLam ev)      = return $ Lam ev
 dsHsWrapper (WpTyLam tv)      = return $ Lam tv
-dsHsWrapper (WpLet ev_binds)  = do { bs <- dsTcEvBinds ev_binds
+dsHsWrapper (WpLet ev_binds)  = do { let bs = dsTcEvBinds ev_binds
                                    ; return (mkCoreLets bs) }
 dsHsWrapper (WpCompose c1 c2) = do { w1 <- dsHsWrapper c1
                                    ; w2 <- dsHsWrapper c2
@@ -1126,28 +1121,27 @@ dsHsWrapper (WpFun c1 c2 t1 doc)
                                      else return id }  -- this return is irrelevant
 dsHsWrapper (WpCast co)       = ASSERT(coercionRole co == Representational)
                                 return $ \e -> mkCastDs e co
-dsHsWrapper (WpEvApp tm)      = do { core_tm <- dsEvTerm tm
-                                   ; return (\e -> App e core_tm) }
+dsHsWrapper (WpEvApp tm)      = do { return (\e -> App e tm) }
 
 --------------------------------------
-dsTcEvBinds_s :: [TcEvBinds] -> DsM [CoreBind]
-dsTcEvBinds_s []       = return []
+dsTcEvBinds_s :: [TcEvBinds] -> [CoreBind]
+dsTcEvBinds_s []       = []
 dsTcEvBinds_s (b:rest) = ASSERT( null rest )  -- Zonker ensures null
                          dsTcEvBinds b
 
-dsTcEvBinds :: TcEvBinds -> DsM [CoreBind]
+dsTcEvBinds :: TcEvBinds -> [CoreBind]
 dsTcEvBinds (TcEvBinds {}) = panic "dsEvBinds"    -- Zonker has got rid of this
 dsTcEvBinds (EvBinds bs)   = dsEvBinds bs
 
-dsEvBinds :: Bag EvBind -> DsM [CoreBind]
-dsEvBinds bs = mapM ds_scc (sccEvBinds bs)
+dsEvBinds :: Bag EvBind -> [CoreBind]
+dsEvBinds bs = map ds_scc (sccEvBinds bs)
   where
     ds_scc (AcyclicSCC (EvBind { eb_lhs = v, eb_rhs = r}))
-                          = liftM (NonRec v) (dsEvTerm r)
-    ds_scc (CyclicSCC bs) = liftM Rec (mapM dsEvBind bs)
+                          = (NonRec v r)
+    ds_scc (CyclicSCC bs) = Rec (map dsEvBind bs)
 
-dsEvBind :: EvBind -> DsM (Id, CoreExpr)
-dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = liftM ((,) v) (dsEvTerm r)
+dsEvBind :: EvBind -> (Id, CoreExpr)
+dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = (v,r)
 
 {-**********************************************************************
 *                                                                      *
@@ -1155,6 +1149,7 @@ dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = liftM ((,) v) (dsEvTerm r)
 *                                                                      *
 **********************************************************************-}
 
+{-
 dsEvTerm :: EvTerm -> DsM CoreExpr
 dsEvTerm (EvId v)           = return (Var v)
 dsEvTerm (EvCallStack cs)   = dsEvCallStack cs
@@ -1367,3 +1362,4 @@ dsEvCallStack cs = do
   case cs of
     EvCsPushCall name loc tm -> mkPush (occNameFS $ getOccName name) loc tm
     EvCsEmpty -> return emptyCS
+-}

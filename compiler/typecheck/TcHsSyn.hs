@@ -333,12 +333,14 @@ zonkEvBndr env var
            zonkTcTypeToType env var_ty
        ; return (setVarType var ty) }
 
+{-
 zonkEvVarOcc :: ZonkEnv -> EvVar -> TcM EvTerm
 zonkEvVarOcc env v
   | isCoVar v
   = EvCoercion <$> zonkCoVarOcc env v
   | otherwise
   = return (EvId $ zonkIdOcc env v)
+-}
 
 zonkTyBndrsX :: ZonkEnv -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
 zonkTyBndrsX = mapAccumLM zonkTyBndrX
@@ -1417,6 +1419,8 @@ zonkVect _ (HsVectInstIn _) = panic "TcHsSyn.zonkVect: HsVectInstIn"
 ************************************************************************
 -}
 
+zonkEvTerm env et = error "zonkEvTerm"
+{-
 zonkEvTerm :: ZonkEnv -> EvTerm -> TcM EvTerm
 zonkEvTerm env (EvId v)           = ASSERT2( isId v, ppr v )
                                     zonkEvVarOcc env v
@@ -1451,6 +1455,7 @@ zonkEvTerm env (EvSelector sel_id tys tms)
        ; tys'    <- zonkTcTypeToTypes env tys
        ; tms' <- mapM (zonkEvTerm env) tms
        ; return (EvSelector sel_id' tys' tms') }
+-}
 
 zonkEvTypeable :: ZonkEnv -> EvTypeable -> TcM EvTypeable
 zonkEvTypeable env (EvTypeableTyCon tycon e)
@@ -1507,7 +1512,7 @@ zonkEvBind env bind@(EvBind { eb_lhs = var, eb_rhs = term })
 
        ; term' <- case getEqPredTys_maybe (idType var') of
            Just (r, ty1, ty2) | ty1 `eqType` ty2
-                  -> return (EvCoercion (mkTcReflCo r ty1))
+                  -> return (evCoercion (mkTcReflCo r ty1))
            _other -> zonkEvTerm env term
 
        ; return (bind { eb_lhs = var', eb_rhs = term' }) }

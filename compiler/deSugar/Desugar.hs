@@ -128,7 +128,7 @@ deSugar hsc_env
                                        export_set (typeEnvTyCons type_env) binds
                               else return (binds, hpcInfo, Nothing)
         ; (msgs, mb_res) <- initDs hsc_env tcg_env $
-                       do { ds_ev_binds <- dsEvBinds ev_binds
+                       do { let ds_ev_binds = dsEvBinds ev_binds
                           ; core_prs <- dsTopLHsBinds binds_cvr
                           ; (spec_prs, spec_rules) <- dsImpSpecs imp_specs
                           ; (ds_fords, foreign_prs) <- dsForeigns fords

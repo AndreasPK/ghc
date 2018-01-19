@@ -806,7 +806,7 @@ addDeferredBinding ctxt err ct
        ; let err_msg = pprLocErrMsg err
              err_fs  = mkFastString $ showSDoc dflags $
                        err_msg $$ text "(deferred type error)"
-             err_tm  = EvDelayedError pred err_fs
+             err_tm  = evDelayedError pred err_fs
              ev_binds_var = cec_binds ctxt
 
        ; case dest of

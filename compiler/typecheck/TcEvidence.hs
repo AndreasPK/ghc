@@ -17,7 +17,13 @@ module TcEvidence (
   isEmptyEvBindMap,
   EvBind(..), emptyTcEvBinds, isEmptyTcEvBinds, mkGivenEvBind, mkWantedEvBind,
   sccEvBinds, evBindVar,
-  EvTerm(..), mkEvCast, evVarsOfTerm, mkEvScSelectors,
+
+  -- EvTerm (already a CoreExpr)
+  EvTerm,
+  evId, evCoercion, evCast, evDFunApp, evDelayedError, evSuperClass,
+  evLit, evCallStack, evTypeable, evSelector,
+  mkEvCast, evVarsOfTerm, mkEvScSelectors,
+
   EvLit(..), evTermCoercion,
   EvCallStack(..),
   EvTypeable(..),
@@ -56,6 +62,10 @@ import VarEnv
 import VarSet
 import Name
 import Pair
+
+import CoreSyn
+import Id (isEvVar)
+import CoreFVs (exprSomeFreeVars)
 
 import Util
 import Bag
@@ -310,7 +320,7 @@ mkWpEvApps :: [EvTerm] -> HsWrapper
 mkWpEvApps args = mk_co_app_fn WpEvApp args
 
 mkWpEvVarApps :: [EvVar] -> HsWrapper
-mkWpEvVarApps vs = mk_co_app_fn WpEvApp (map EvId vs)
+mkWpEvVarApps vs = mk_co_app_fn WpEvApp (map evId vs)
 
 mkWpTyLams :: [TyVar] -> HsWrapper
 mkWpTyLams ids = mk_co_lam_fn WpTyLam ids
@@ -469,39 +479,60 @@ mkWantedEvBind ev tm = EvBind { eb_is_given = False, eb_lhs = ev, eb_rhs = tm }
 mkGivenEvBind :: EvVar -> EvTerm -> EvBind
 mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = tm }
 
-data EvTerm
-  = EvId EvId                    -- Any sort of evidence Id, including coercions
 
-  | EvCoercion TcCoercion        -- coercion bindings
-                                 -- See Note [Coercion evidence terms]
+type EvTerm = CoreExpr
 
-  | EvCast EvTerm TcCoercionR    -- d |> co
+-- An EvTerm is (usually) constructed by any of these smart constructors:
 
-  | EvDFunApp DFunId             -- Dictionary instance application
-       [Type] [EvTerm]
+-- | Any sort of evidence Id, including coercions
+evId ::  EvId -> EvTerm
+evId eid = undefined
 
-  | EvDelayedError Type FastString  -- Used with Opt_DeferTypeErrors
-                               -- See Note [Deferring coercion errors to runtime]
-                               -- in TcSimplify
+-- coercion bindings
+-- See Note [Coercion evidence terms]
+evCoercion :: TcCoercion -> EvTerm
+evCoercion tc = undefined
 
-  | EvSuperClass EvTerm Int      -- n'th superclass. Used for both equalities and
-                                 -- dictionaries, even though the former have no
-                                 -- selector Id.  We count up from _0_
 
-  | EvLit EvLit       -- Dictionary for KnownNat and KnownSymbol classes.
-                      -- Note [KnownNat & KnownSymbol and EvLit]
+-- | d |> co
+evCast :: EvTerm -> TcCoercion -> EvTerm
+evCast et tc = undefined
 
-  | EvCallStack EvCallStack      -- Dictionary for CallStack implicit parameters
+-- Dictionary instance application
+evDFunApp :: DFunId -> [Type] -> [EvTerm] -> EvTerm
+evDFunApp dfunid tys ets = undefined
 
-  | EvTypeable Type EvTypeable   -- Dictionary for (Typeable ty)
+-- Used with Opt_DeferTypeErrors
+-- See Note [Deferring coercion errors to runtime]
+-- in TcSimplify
+evDelayedError :: Type -> FastString -> EvTerm
+evDelayedError = undefined
 
-  | EvSelector Id [Type] [EvTerm] -- Selector id plus the types at which it
-                                  -- should be instantiated, used for HasField
-                                  -- dictionaries; see Note [HasField instances]
-                                  -- in TcInterface
+-- n'th superclass. Used for both equalities and
+-- dictionaries, even though the former have no
+-- selector Id.  We count up from _0_
+evSuperClass :: EvTerm -> Int -> EvTerm
+evSuperClass = undefined
 
-  deriving Data.Data
+-- Dictionary for KnownNat and KnownSymbol classes.
+-- Note [KnownNat & KnownSymbol and EvLit]
+evLit :: EvLit -> EvTerm
+evLit = undefined
 
+-- Dictionary for CallStack implicit parameters
+evCallStack :: EvCallStack -> EvTerm
+evCallStack = undefined
+
+-- Dictionary for (Typeable ty)
+evTypeable :: Type -> EvTypeable -> EvTerm
+evTypeable = undefined
+
+-- Selector id plus the types at which it
+-- should be instantiated, used for HasField
+-- dictionaries; see Note [HasField instances]
+-- in TcInterface
+evSelector :: Id -> [Type] -> [EvTerm] -> EvTerm
+evSelector = undefined
 
 -- | Instructions on how to make a 'Typeable' dictionary.
 -- See Note [Typeable evidence terms]
@@ -773,13 +804,13 @@ mkEvCast :: EvTerm -> TcCoercion -> EvTerm
 mkEvCast ev lco
   | ASSERT2(tcCoercionRole lco == Representational, (vcat [text "Coercion of wrong role passed to mkEvCast:", ppr ev, ppr lco]))
     isTcReflCo lco = ev
-  | otherwise      = EvCast ev lco
+  | otherwise      = evCast ev lco
 
 mkEvScSelectors :: EvTerm -> Class -> [TcType] -> [(TcPredType, EvTerm)]
 mkEvScSelectors ev cls tys
    = zipWith mk_pr (immSuperClasses cls tys) [0..]
   where
-    mk_pr pred i = (pred, EvSuperClass ev i)
+    mk_pr pred i = (pred, evSuperClass ev i)
 
 emptyTcEvBinds :: TcEvBinds
 emptyTcEvBinds = EvBinds emptyBag
@@ -788,26 +819,16 @@ isEmptyTcEvBinds :: TcEvBinds -> Bool
 isEmptyTcEvBinds (EvBinds b)    = isEmptyBag b
 isEmptyTcEvBinds (TcEvBinds {}) = panic "isEmptyTcEvBinds"
 
-
 evTermCoercion :: EvTerm -> TcCoercion
 -- Applied only to EvTerms of type (s~t)
 -- See Note [Coercion evidence terms]
-evTermCoercion (EvId v)        = mkCoVarCo v
-evTermCoercion (EvCoercion co) = co
-evTermCoercion (EvCast tm co)  = mkCoCast (evTermCoercion tm) co
-evTermCoercion tm = pprPanic "evTermCoercion" (ppr tm)
+evTermCoercion (Var v)       = mkCoVarCo v
+evTermCoercion (Coercion co) = co
+evTermCoercion (Cast tm co)  = mkCoCast (evTermCoercion tm) co
+evTermCoercion tm            = pprPanic "evTermCoercion" (ppr tm)
 
 evVarsOfTerm :: EvTerm -> VarSet
-evVarsOfTerm (EvId v)             = unitVarSet v
-evVarsOfTerm (EvCoercion co)      = coVarsOfCo co
-evVarsOfTerm (EvDFunApp _ _ evs)  = mapUnionVarSet evVarsOfTerm evs
-evVarsOfTerm (EvSuperClass v _)   = evVarsOfTerm v
-evVarsOfTerm (EvCast tm co)       = evVarsOfTerm tm `unionVarSet` coVarsOfCo co
-evVarsOfTerm (EvDelayedError _ _) = emptyVarSet
-evVarsOfTerm (EvLit _)            = emptyVarSet
-evVarsOfTerm (EvCallStack cs)     = evVarsOfCallStack cs
-evVarsOfTerm (EvTypeable _ ev)    = evVarsOfTypeable ev
-evVarsOfTerm (EvSelector _ _ evs) = mapUnionVarSet evVarsOfTerm evs
+evVarsOfTerm = exprSomeFreeVars isEvVar
 
 evVarsOfTerms :: [EvTerm] -> VarSet
 evVarsOfTerms = mapUnionVarSet evVarsOfTerm
@@ -902,19 +923,6 @@ instance Outputable EvBind where
      where
        pp_gw = brackets (if is_given then char 'G' else char 'W')
    -- We cheat a bit and pretend EqVars are CoVars for the purposes of pretty printing
-
-instance Outputable EvTerm where
-  ppr (EvId v)              = ppr v
-  ppr (EvCast v co)         = ppr v <+> (text "`cast`") <+> pprParendCo co
-  ppr (EvCoercion co)       = text "CO" <+> ppr co
-  ppr (EvSuperClass d n)    = text "sc" <> parens (ppr (d,n))
-  ppr (EvDFunApp df tys ts) = ppr df <+> sep [ char '@' <> ppr tys, ppr ts ]
-  ppr (EvLit l)             = ppr l
-  ppr (EvCallStack cs)      = ppr cs
-  ppr (EvDelayedError ty msg) =     text "error"
-                                <+> sep [ char '@' <> ppr ty, ppr msg ]
-  ppr (EvTypeable ty ev)      = ppr ev <+> dcolon <+> text "Typeable" <+> ppr ty
-  ppr (EvSelector sel tys ts) = ppr sel <+> sep [ char '@' <> ppr tys, ppr ts]
 
 instance Outputable EvLit where
   ppr (EvNum n) = integer n
