@@ -277,7 +277,8 @@ mkCoPrimCaseMatchResult var ty match_alts
 data CaseAlt a = MkCaseAlt{ alt_pat :: a,
                             alt_bndrs :: [Var],
                             alt_wrapper :: HsWrapper,
-                            alt_result :: MatchResult }
+                            alt_result :: MatchResult,
+                            alt_freq :: Maybe Freq }
 
 mkCoAlgCaseMatchResult
   :: DynFlags
