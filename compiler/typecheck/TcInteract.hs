@@ -47,6 +47,7 @@ import FamInstEnv
 import Unify ( tcUnifyTyWithTFs )
 
 import TcEvidence
+import TcEvTerm
 import Outputable
 
 import TcRnTypes

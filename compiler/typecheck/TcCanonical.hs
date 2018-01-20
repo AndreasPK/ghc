@@ -19,6 +19,7 @@ import Type
 import TcFlatten
 import TcSMonad
 import TcEvidence
+import TcEvTerm
 import Class
 import TyCon
 import TyCoRep   -- cleverly decomposes types, good for completeness checking

@@ -31,6 +31,7 @@ import TyCon
 import Class
 import DataCon
 import TcEvidence
+import TcEvTerm
 import HsExpr  ( UnboundVar(..) )
 import HsBinds ( PatSynBind(..) )
 import Name

@@ -20,8 +20,7 @@ module TcEvidence (
 
   -- EvTerm (already a CoreExpr)
   EvTerm,
-  evId, evCoercion, evCast, evDFunApp, evDelayedError, evSuperClass,
-  evLit, evCallStack, evTypeable, evSelector,
+  evId, evCoercion, evCast, evDFunApp,  evSuperClass, evSelector,
   mkEvCast, evVarsOfTerm, mkEvScSelectors,
 
   EvLit(..), evTermCoercion,
@@ -64,8 +63,10 @@ import Name
 import Pair
 
 import CoreSyn
-import Id (isEvVar)
-import CoreFVs (exprSomeFreeVars)
+import CoreUtils
+import Class ( classSCSelId )
+import Id ( isEvVar )
+import CoreFVs ( exprSomeFreeVars )
 
 import Util
 import Bag
@@ -482,57 +483,43 @@ mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = tm }
 
 type EvTerm = CoreExpr
 
--- An EvTerm is (usually) constructed by any of these smart constructors:
+-- An EvTerm is (usually) constructed by any of the constructors here
+-- and those more complicates ones who were moved to module TcEvTerm
 
 -- | Any sort of evidence Id, including coercions
 evId ::  EvId -> EvTerm
-evId eid = undefined
+evId = Var
 
 -- coercion bindings
 -- See Note [Coercion evidence terms]
 evCoercion :: TcCoercion -> EvTerm
-evCoercion tc = undefined
-
+evCoercion = Coercion
 
 -- | d |> co
 evCast :: EvTerm -> TcCoercion -> EvTerm
-evCast et tc = undefined
+evCast et tc | isReflCo tc = et
+             | otherwise   = Cast et tc
 
 -- Dictionary instance application
 evDFunApp :: DFunId -> [Type] -> [EvTerm] -> EvTerm
-evDFunApp dfunid tys ets = undefined
-
--- Used with Opt_DeferTypeErrors
--- See Note [Deferring coercion errors to runtime]
--- in TcSimplify
-evDelayedError :: Type -> FastString -> EvTerm
-evDelayedError = undefined
+evDFunApp df tys ets = Var df `mkTyApps` tys `mkApps` ets
 
 -- n'th superclass. Used for both equalities and
 -- dictionaries, even though the former have no
 -- selector Id.  We count up from _0_
 evSuperClass :: EvTerm -> Int -> EvTerm
-evSuperClass = undefined
-
--- Dictionary for KnownNat and KnownSymbol classes.
--- Note [KnownNat & KnownSymbol and EvLit]
-evLit :: EvLit -> EvTerm
-evLit = undefined
-
--- Dictionary for CallStack implicit parameters
-evCallStack :: EvCallStack -> EvTerm
-evCallStack = undefined
-
--- Dictionary for (Typeable ty)
-evTypeable :: Type -> EvTypeable -> EvTerm
-evTypeable = undefined
+evSuperClass d n = Var sc_sel_id `mkTyApps` tys `App` d
+  where
+    (cls, tys) = getClassPredTys (exprType d)
+    sc_sel_id  = classSCSelId cls n -- Zero-indexed
 
 -- Selector id plus the types at which it
 -- should be instantiated, used for HasField
 -- dictionaries; see Note [HasField instances]
 -- in TcInterface
 evSelector :: Id -> [Type] -> [EvTerm] -> EvTerm
-evSelector = undefined
+evSelector sel_id tys tms = Var sel_id `mkTyApps` tys `mkApps` tms
+
 
 -- | Instructions on how to make a 'Typeable' dictionary.
 -- See Note [Typeable evidence terms]
@@ -830,9 +817,6 @@ evTermCoercion tm            = pprPanic "evTermCoercion" (ppr tm)
 evVarsOfTerm :: EvTerm -> VarSet
 evVarsOfTerm = exprSomeFreeVars isEvVar
 
-evVarsOfTerms :: [EvTerm] -> VarSet
-evVarsOfTerms = mapUnionVarSet evVarsOfTerm
-
 -- | Do SCC analysis on a bag of 'EvBind's.
 sccEvBinds :: Bag EvBind -> [SCC EvBind]
 sccEvBinds bs = stronglyConnCompFromEdgedVerticesUniq edges
@@ -847,19 +831,6 @@ sccEvBinds bs = stronglyConnCompFromEdgedVerticesUniq edges
       -- It's OK to use nonDetEltsUniqSet here as stronglyConnCompFromEdgedVertices
       -- is still deterministic even if the edges are in nondeterministic order
       -- as explained in Note [Deterministic SCC] in Digraph.
-
-evVarsOfCallStack :: EvCallStack -> VarSet
-evVarsOfCallStack cs = case cs of
-  EvCsEmpty -> emptyVarSet
-  EvCsPushCall _ _ tm -> evVarsOfTerm tm
-
-evVarsOfTypeable :: EvTypeable -> VarSet
-evVarsOfTypeable ev =
-  case ev of
-    EvTypeableTyCon _ e   -> mapUnionVarSet evVarsOfTerm e
-    EvTypeableTyApp e1 e2 -> evVarsOfTerms [e1,e2]
-    EvTypeableTrFun e1 e2 -> evVarsOfTerms [e1,e2]
-    EvTypeableTyLit e     -> evVarsOfTerm e
 
 {-
 ************************************************************************
