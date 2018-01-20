@@ -2588,8 +2588,10 @@ makeLitDict clas ty el
                       $ idType meth         -- forall n. KnownNat n => SNat n
     , Just (_, co_rep) <- tcInstNewTyCon_maybe tcRep [ty]
           -- SNat n ~ Integer
-    , let ev_tm = mkEvCast (evLit el) (mkTcSymCo (mkTcTransCo co_dict co_rep))
-    = return $ GenInst { lir_new_theta = []
+    = do
+      litExpr <- evLit el
+      let ev_tm = mkEvCast (litExpr :: EvTerm) (mkTcSymCo (mkTcTransCo co_dict co_rep))
+      return $ GenInst { lir_new_theta = []
                        , lir_mk_ev     = \_ -> ev_tm
                        , lir_safe_over = True }
 

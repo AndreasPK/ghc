@@ -8,16 +8,12 @@ where
 import GhcPrelude
 
 import FastString
-import Var
 import Type
 import CoreSyn
-import CoreUtils
-import Class ( classSCSelId )
-import Id ( isEvVar )
-import CoreFVs ( exprSomeFreeVars )
-import MkCore ( tYPE_ERROR_ID )
+import MkCore ( tYPE_ERROR_ID, mkStringExprFS, mkNaturalExpr )
 import Literal ( Literal(..) )
 import TcEvidence
+import HscTypes
 
 -- Used with Opt_DeferTypeErrors
 -- See Note [Deferring coercion errors to runtime]
@@ -31,8 +27,9 @@ evDelayedError ty msg
 
 -- Dictionary for KnownNat and KnownSymbol classes.
 -- Note [KnownNat & KnownSymbol and EvLit]
-evLit :: EvLit -> EvTerm
-evLit = undefined
+evLit :: MonadThings m => EvLit -> m EvTerm
+evLit (EvNum n) = mkNaturalExpr n
+evLit (EvStr n) = mkStringExprFS n
 
 -- Dictionary for CallStack implicit parameters
 evCallStack :: EvCallStack -> EvTerm
