@@ -48,6 +48,7 @@ import Unify ( tcUnifyTyWithTFs )
 
 import TcEvidence
 import TcEvTerm
+import MkCore ( mkStringExprFS, mkNaturalExpr )
 import Outputable
 
 import TcRnTypes
@@ -2557,17 +2558,70 @@ matchCTuple clas tys   -- (isCTupleClass clas) holds
 *                                                                     *
 ***********************************************************************-}
 
+{-
+Note [KnownNat & KnownSymbol and EvLit]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A part of the type-level literals implementation are the classes
+"KnownNat" and "KnownSymbol", which provide a "smart" constructor for
+defining singleton values.  Here is the key stuff from GHC.TypeLits
+
+  class KnownNat (n :: Nat) where
+    natSing :: SNat n
+
+  newtype SNat (n :: Nat) = SNat Integer
+
+Conceptually, this class has infinitely many instances:
+
+  instance KnownNat 0       where natSing = SNat 0
+  instance KnownNat 1       where natSing = SNat 1
+  instance KnownNat 2       where natSing = SNat 2
+  ...
+
+In practice, we solve `KnownNat` predicates in the type-checker
+(see typecheck/TcInteract.hs) because we can't have infinitely many instances.
+The evidence (aka "dictionary") for `KnownNat` is of the form `EvLit (EvNum n)`.
+
+We make the following assumptions about dictionaries in GHC:
+  1. The "dictionary" for classes with a single method---like `KnownNat`---is
+     a newtype for the type of the method, so using a evidence amounts
+     to a coercion, and
+  2. Newtypes use the same representation as their definition types.
+
+So, the evidence for `KnownNat` is just a value of the representation type,
+wrapped in two newtype constructors: one to make it into a `SNat` value,
+and another to make it into a `KnownNat` dictionary.
+
+Also note that `natSing` and `SNat` are never actually exposed from the
+library---they are just an implementation detail.  Instead, users see
+a more convenient function, defined in terms of `natSing`:
+
+  natVal :: KnownNat n => proxy n -> Integer
+
+The reason we don't use this directly in the class is that it is simpler
+and more efficient to pass around an integer rather than an entire function,
+especially when the `KnowNat` evidence is packaged up in an existential.
+
+The story for kind `Symbol` is analogous:
+  * class KnownSymbol
+  * newtype SSymbol
+  * Evidence: a Core literal (e.g. mkNaturalExpr)
+-}
+
 matchKnownNat :: Class -> [Type] -> TcS LookupInstResult
 matchKnownNat clas [ty]     -- clas = KnownNat
-  | Just n <- isNumLitTy ty = makeLitDict clas ty (EvNum n)
+  | Just n <- isNumLitTy ty = do
+        et <- mkNaturalExpr n
+        makeLitDict clas ty et
 matchKnownNat _ _           = return NoInstance
 
 matchKnownSymbol :: Class -> [Type] -> TcS LookupInstResult
 matchKnownSymbol clas [ty]  -- clas = KnownSymbol
-  | Just n <- isStrLitTy ty = makeLitDict clas ty (EvStr n)
+  | Just s <- isStrLitTy ty = do
+        et <- mkStringExprFS s
+        makeLitDict clas ty et
 matchKnownSymbol _ _       = return NoInstance
 
-makeLitDict :: Class -> Type -> EvLit -> TcS LookupInstResult
+makeLitDict :: Class -> Type -> EvTerm -> TcS LookupInstResult
 -- makeLitDict adds a coercion that will convert the literal into a dictionary
 -- of the appropriate type.  See Note [KnownNat & KnownSymbol and EvLit]
 -- in TcEvidence.  The coercion happens in 2 steps:
@@ -2578,7 +2632,7 @@ makeLitDict :: Class -> Type -> EvLit -> TcS LookupInstResult
 --     The process is mirrored for Symbols:
 --     String    -> SSymbol n
 --     SSymbol n -> KnownSymbol n
-makeLitDict clas ty el
+makeLitDict clas ty et
     | Just (_, co_dict) <- tcInstNewTyCon_maybe (classTyCon clas) [ty]
           -- co_dict :: KnownNat n ~ SNat n
     , [ meth ]   <- classMethods clas
@@ -2588,10 +2642,8 @@ makeLitDict clas ty el
                       $ idType meth         -- forall n. KnownNat n => SNat n
     , Just (_, co_rep) <- tcInstNewTyCon_maybe tcRep [ty]
           -- SNat n ~ Integer
-    = do
-      litExpr <- evLit el
-      let ev_tm = mkEvCast (litExpr :: EvTerm) (mkTcSymCo (mkTcTransCo co_dict co_rep))
-      return $ GenInst { lir_new_theta = []
+    , let ev_tm = mkEvCast et (mkTcSymCo (mkTcTransCo co_dict co_rep))
+    = return $ GenInst { lir_new_theta = []
                        , lir_mk_ev     = \_ -> ev_tm
                        , lir_safe_over = True }
 
