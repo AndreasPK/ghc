@@ -1307,6 +1307,7 @@ tyConRep tc
        ; return (Var tc_rep_id) }
   | otherwise
   = pprPanic "tyConRep" (ppr tc)
+-}
 
 {- Note [Memoising typeOf]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1317,49 +1318,3 @@ the proxy argument.  This is what went wrong in #3245 and #9203. So we
 help GHC by manually keeping the 'rep' *outside* the lambda.
 -}
 
-
-{-**********************************************************************
-*                                                                      *
-           Desugaring EvCallStack evidence
-*                                                                      *
-**********************************************************************-}
-
-dsEvCallStack :: EvCallStack -> DsM CoreExpr
--- See Note [Overview of implicit CallStacks] in TcEvidence.hs
-dsEvCallStack cs = do
-  df            <- getDynFlags
-  m             <- getModule
-  srcLocDataCon <- dsLookupDataCon srcLocDataConName
-  let mkSrcLoc l =
-        liftM (mkCoreConApps srcLocDataCon)
-              (sequence [ mkStringExprFS (unitIdFS $ moduleUnitId m)
-                        , mkStringExprFS (moduleNameFS $ moduleName m)
-                        , mkStringExprFS (srcSpanFile l)
-                        , return $ mkIntExprInt df (srcSpanStartLine l)
-                        , return $ mkIntExprInt df (srcSpanStartCol l)
-                        , return $ mkIntExprInt df (srcSpanEndLine l)
-                        , return $ mkIntExprInt df (srcSpanEndCol l)
-                        ])
-
-  emptyCS <- Var <$> dsLookupGlobalId emptyCallStackName
-
-  pushCSVar <- dsLookupGlobalId pushCallStackName
-  let pushCS name loc rest =
-        mkCoreApps (Var pushCSVar) [mkCoreTup [name, loc], rest]
-
-  let mkPush name loc tm = do
-        nameExpr <- mkStringExprFS name
-        locExpr <- mkSrcLoc loc
-        case tm of
-          EvCallStack EvCsEmpty -> return (pushCS nameExpr locExpr emptyCS)
-          _ -> do tmExpr  <- dsEvTerm tm
-                  -- at this point tmExpr :: IP sym CallStack
-                  -- but we need the actual CallStack to pass to pushCS,
-                  -- so we use unwrapIP to strip the dictionary wrapper
-                  -- See Note [Overview of implicit CallStacks]
-                  let ip_co = unwrapIP (exprType tmExpr)
-                  return (pushCS nameExpr locExpr (mkCastDs tmExpr ip_co))
-  case cs of
-    EvCsPushCall name loc tm -> mkPush (occNameFS $ getOccName name) loc tm
-    EvCsEmpty -> return emptyCS
--}
