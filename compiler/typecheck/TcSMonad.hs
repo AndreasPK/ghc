@@ -128,8 +128,7 @@ import FamInstEnv
 import qualified TcRnMonad as TcM
 import qualified TcMType as TcM
 import qualified TcEnv as TcM
-       ( checkWellStaged, topIdLvl, tcGetDefaultTys
-       , tcLookupClass, tcLookupId, tcLookupGlobal )
+       ( checkWellStaged, topIdLvl, tcGetDefaultTys, tcLookupClass, tcLookupId )
 import PrelNames( heqTyConKey, eqTyConKey )
 import Kind
 import TcType
@@ -2391,7 +2390,7 @@ instance HasModule TcS where
    getModule = wrapTcS getModule
 
 instance MonadThings TcS where
-   lookupThing n = wrapTcS (TcM.tcLookupGlobal n)
+   lookupThing n = wrapTcS (lookupThing n)
 
 -- Basic functionality
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
