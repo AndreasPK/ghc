@@ -681,9 +681,9 @@ interactIrred inerts workItem@(CIrredCan { cc_ev = ev_w, cc_insol = insoluble })
     do { what_next <- solveOneFromTheOther ev_i ev_w
        ; traceTcS "iteractIrred" (ppr workItem $$ ppr what_next $$ ppr ct_i)
        ; case what_next of
-            KeepInert -> do { setEvBindIfWanted ev_w (EvExpr (swap_me swap ev_i))
+            KeepInert -> do { setEvBindIfWanted ev_w (swap_me swap ev_i)
                             ; return (Stop ev_w (text "Irred equal" <+> parens (ppr what_next))) }
-            KeepWork ->  do { setEvBindIfWanted ev_i (EvExpr (swap_me swap ev_w))
+            KeepWork ->  do { setEvBindIfWanted ev_i (swap_me swap ev_w)
                             ; updInertIrreds (\_ -> others)
                             ; continueWith workItem } }
 
@@ -1001,9 +1001,9 @@ interactDict inerts workItem@(CDictCan { cc_ev = ev_w, cc_class = cls, cc_tyargs
              { what_next <- solveOneFromTheOther ev_i ev_w
              ; traceTcS "lookupInertDict" (ppr what_next)
              ; case what_next of
-                 KeepInert -> do { setEvBindIfWanted ev_w (EvExpr $ ctEvTerm ev_i)
+                 KeepInert -> do { setEvBindIfWanted ev_w (ctEvTerm ev_i)
                                  ; return $ Stop ev_w (text "Dict equal" <+> parens (ppr what_next)) }
-                 KeepWork  -> do { setEvBindIfWanted ev_i (EvExpr $ ctEvTerm ev_w)
+                 KeepWork  -> do { setEvBindIfWanted ev_i (ctEvTerm ev_w)
                                  ; updInertDicts $ \ ds -> delDict ds cls tys
                                  ; continueWith workItem } } }
 
@@ -1550,7 +1550,7 @@ interactTyVarEq inerts workItem@(CTyEqCan { cc_tyvar = tv
   | Just (ev_i, swapped, keep_deriv)
        <- inertsCanDischarge inerts tv rhs (ctEvFlavour ev, eq_rel)
   = do { setEvBindIfWanted ev $
-         EvExpr $ evCoercion (maybeSym swapped $
+         evCoercion (maybeSym swapped $
                      tcDowngradeRole (eqRelRole eq_rel)
                                      (ctEvRole ev_i)
                                      (ctEvCoercion ev_i))
@@ -1616,7 +1616,7 @@ solveByUnification wd tv xi
                              text "Right Kind is:" <+> ppr (typeKind xi) ]
 
        ; unifyTyVar tv xi
-       ; setEvBindIfWanted wd (EvExpr (evCoercion (mkTcNomReflCo xi))) }
+       ; setEvBindIfWanted wd (evCoercion (mkTcNomReflCo xi)) }
 
 ppr_kicked :: Int -> SDoc
 ppr_kicked 0 = empty
@@ -2202,7 +2202,7 @@ doTopReactDict inerts work_item@(CDictCan { cc_ev = fl, cc_class = cls
        ; continueWith work_item }
 
   | Just ev <- lookupSolvedDict inerts dict_loc cls xis   -- Cached
-  = do { setEvBindIfWanted fl (EvExpr (ctEvTerm ev))
+  = do { setEvBindIfWanted fl (ctEvTerm ev)
        ; stopWith fl "Dict/Top (cached)" }
 
   | otherwise  -- Wanted or Derived, but not cached

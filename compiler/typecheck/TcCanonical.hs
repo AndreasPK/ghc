@@ -19,6 +19,7 @@ import Type
 import TcFlatten
 import TcSMonad
 import TcEvidence
+import TcEvTerm
 import Class
 import TyCon
 import TyCoRep   -- cleverly decomposes types, good for completeness checking
@@ -152,7 +153,7 @@ canClassNC ev cls tys
 
          -- Then we solve the wanted by pushing the call-site
          -- onto the newly emitted CallStack
-       ; let ev_cs = EvCsPushCall func (ctLocSpan loc) (EvExpr (ctEvTerm new_ev))
+       ; let ev_cs = EvCsPushCall func (ctLocSpan loc) (ctEvTerm new_ev)
        ; solveCallStack ev ev_cs
 
        ; canClass new_ev cls tys False }
@@ -171,7 +172,9 @@ solveCallStack ev ev_cs = do
   -- We're given ev_cs :: CallStack, but the evidence term should be a
   -- dictionary, so we have to coerce ev_cs to a dictionary for
   -- `IP ip CallStack`. See Note [Overview of implicit CallStacks]
-  setWantedEvBind (ctEvEvId ev) (EvCallStack (ctEvPred ev) ev_cs)
+  cs_tm <- evCallStack ev_cs
+  let ev_tm = mkEvCast cs_tm (wrapIP (ctEvPred ev))
+  setWantedEvBind (ctEvEvId ev) (EvExpr ev_tm)
 
 canClass :: CtEvidence
          -> Class -> [Type]
@@ -1588,7 +1591,7 @@ canEqReflexive :: CtEvidence    -- ty ~ ty
                -> TcType        -- ty
                -> TcS (StopOrContinue Ct)   -- always Stop
 canEqReflexive ev eq_rel ty
-  = do { setEvBindIfWanted ev (EvExpr $ evCoercion $
+  = do { setEvBindIfWanted ev (evCoercion $
                                mkTcReflCo (eqRelRole eq_rel) ty)
        ; stopWith ev "Solved by reflexivity" }
 
@@ -1864,8 +1867,8 @@ rewriteEvidence ev@(CtWanted { ctev_dest = dest
   = do { mb_new_ev <- newWanted loc new_pred
        ; MASSERT( tcCoercionRole co == ctEvRole ev )
        ; setWantedEvTerm dest
-            (EvExpr (mkEvCast (getEvExpr mb_new_ev)
-                              (tcDowngradeRole Representational (ctEvRole ev) co)))
+            (EvExpr $ mkEvCast (getEvExpr mb_new_ev)
+                               (tcDowngradeRole Representational (ctEvRole ev) co))
        ; case mb_new_ev of
             Fresh  new_ev -> continueWith new_ev
             Cached _      -> stopWith ev "Cached wanted" }

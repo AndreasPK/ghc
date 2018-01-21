@@ -3038,11 +3038,11 @@ setWantedEvTerm (EvVarDest ev) tm = setWantedEvBind ev tm
 setWantedEvBind :: EvVar -> EvTerm -> TcS ()
 setWantedEvBind ev_id tm = setEvBind (mkWantedEvBind ev_id tm)
 
-setEvBindIfWanted :: CtEvidence -> EvTerm -> TcS ()
+setEvBindIfWanted :: CtEvidence -> EvExpr -> TcS ()
 setEvBindIfWanted ev tm
   = case ev of
       CtWanted { ctev_dest = dest }
-        -> setWantedEvTerm dest tm
+        -> setWantedEvTerm dest (EvExpr tm)
       _ -> return ()
 
 newTcEvBinds :: TcS EvBindsVar
@@ -3065,7 +3065,7 @@ newGivenEvVar loc (pred, rhs)
 newBoundEvVarId :: TcPredType -> EvExpr -> TcS EvVar
 newBoundEvVarId pred rhs
   = do { new_ev <- newEvVar pred
-       ; setEvBind (mkGivenEvBind new_ev (EvExpr rhs))
+       ; setEvBind (mkGivenEvBind new_ev rhs)
        ; return new_ev }
 
 newGivenEvVars :: CtLoc -> [(TcPredType, EvExpr)] -> TcS [CtEvidence]

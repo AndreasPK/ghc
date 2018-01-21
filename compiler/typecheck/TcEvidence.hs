@@ -475,9 +475,9 @@ evBindVar = eb_lhs
 mkWantedEvBind :: EvVar -> EvTerm -> EvBind
 mkWantedEvBind ev tm = EvBind { eb_is_given = False, eb_lhs = ev, eb_rhs = tm }
 
-
-mkGivenEvBind :: EvVar -> EvTerm -> EvBind
-mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = tm }
+-- EvTypeable are never given, so we can work with EvExpr here instead of EvTerm
+mkGivenEvBind :: EvVar -> EvExpr -> EvBind
+mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = EvExpr tm }
 
 
 -- An EvTerm is, conceptually, a CoreExpr that implements the constraint.
@@ -486,9 +486,6 @@ mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = tm }
 -- Because of staging problems issues around EvTypeable
 data EvTerm
     = EvExpr EvExpr
-    | EvCallStack TcPredType EvCallStack
-        -- Dictionary for CallStack implicit parameters, toether with the
-        -- Predtype for coercion
     | EvTypeable Type EvTypeable   -- Dictionary for (Typeable ty)
   deriving Data.Data
 
@@ -563,7 +560,7 @@ data EvTypeable
 data EvCallStack
   -- See Note [Overview of implicit CallStacks]
   = EvCsEmpty
-  | EvCsPushCall Name RealSrcSpan EvTerm
+  | EvCsPushCall Name RealSrcSpan EvExpr
     -- ^ @EvCsPushCall name loc stk@ represents a call to @name@, occurring at
     -- @loc@, in a calling context @stk@.
   deriving Data.Data
@@ -778,16 +775,10 @@ evTermCoercion tm                     = pprPanic "evTermCoercion" (ppr tm)
 
 evVarsOfTerm :: EvTerm -> VarSet
 evVarsOfTerm (EvExpr e)         = exprSomeFreeVars isEvVar e
-evVarsOfTerm (EvCallStack _ cs) = evVarsOfCallStack cs
 evVarsOfTerm (EvTypeable _ ev)  = evVarsOfTypeable ev
 
 evVarsOfTerms :: [EvTerm] -> VarSet
 evVarsOfTerms = mapUnionVarSet evVarsOfTerm
-
-evVarsOfCallStack :: EvCallStack -> VarSet
-evVarsOfCallStack cs = case cs of
-  EvCsEmpty -> emptyVarSet
-  EvCsPushCall _ _ tm -> evVarsOfTerm tm
 
 evVarsOfTypeable :: EvTypeable -> VarSet
 evVarsOfTypeable ev =
@@ -877,7 +868,6 @@ instance Outputable EvBind where
 
 instance Outputable EvTerm where
   ppr (EvExpr e)         = ppr e
-  ppr (EvCallStack _ cs) = ppr cs
   ppr (EvTypeable ty ev) = ppr ev <+> dcolon <+> text "Typeable" <+> ppr ty
 
 instance Outputable EvCallStack where
