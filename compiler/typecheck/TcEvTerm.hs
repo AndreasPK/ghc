@@ -1,20 +1,17 @@
 
 -- (those who have too heavy dependencies for TcEvidence)
 module TcEvTerm
-    ( evDelayedError, evCallStack, evTypeable)
-
+    ( evCallStack, evTypeable)
 where
 
 import GhcPrelude
 
-import FastString
+import TcSMonad
 import Type
 import CoreSyn
 import MkCore
-import Literal ( Literal(..) )
 import TcEvidence
 import HscTypes
-import DynFlags
 import Name
 import Module
 import CoreUtils
@@ -26,19 +23,8 @@ import MkId
 import TysWiredIn
 import Control.Monad (zipWithM)
 
--- Used with Opt_DeferTypeErrors
--- See Note [Deferring coercion errors to runtime]
--- in TcSimplify
-evDelayedError :: Type -> FastString -> EvTerm
-evDelayedError ty msg
-  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
-  where
-    errorId = tYPE_ERROR_ID
-    litMsg  = Lit (MachStr (fastStringToByteString msg))
-
 -- Dictionary for CallStack implicit parameters
-evCallStack :: (MonadThings m, HasModule m, HasDynFlags m) =>
-    EvCallStack -> m CoreExpr
+evCallStack :: EvCallStack -> TcS CoreExpr
 -- See Note [Overview of implicit CallStacks] in TcEvidence.hs
 evCallStack cs = do
   df            <- getDynFlags
@@ -74,12 +60,12 @@ evCallStack cs = do
     EvCsPushCall name loc tm -> mkPush (occNameFS $ getOccName name) loc tm
     EvCsEmpty -> return emptyCS
 
-evTypeable :: MonadThings m => Type -> EvTypeable -> m CoreExpr
+evTypeable :: Type -> EvTypeable -> TcS CoreExpr
 -- Return a CoreExpr :: Typeable ty
 -- This code is tightly coupled to the representation
 -- of TypeRep, in base library Data.Typeable.Internals
 evTypeable ty ev
-  = do { tyCl <- lookupTyCon typeableClassName    -- Typeable
+  = do { tyCl <- tcLookupTyCon typeableClassName    -- Typeable
        ; let kind = typeKind ty
              Just typeable_data_con
                  = tyConSingleDataCon_maybe tyCl    -- "Data constructor"
@@ -93,11 +79,11 @@ evTypeable ty ev
 type TypeRepExpr = CoreExpr
 
 -- | Returns a @CoreExpr :: TypeRep ty@
-ds_ev_typeable :: MonadThings m => Type -> EvTypeable -> m CoreExpr
+ds_ev_typeable :: Type -> EvTypeable -> TcS CoreExpr
 ds_ev_typeable ty (EvTypeableTyCon tc kind_ev)
   = do { mkTrCon <- lookupId mkTrConName
                     -- mkTrCon :: forall k (a :: k). TyCon -> TypeRep k -> TypeRep a
-       ; someTypeRepTyCon <- lookupTyCon someTypeRepTyConName
+       ; someTypeRepTyCon <- tcLookupTyCon someTypeRepTyConName
        ; someTypeRepDataCon <- lookupDataCon someTypeRepDataConName
                     -- SomeTypeRep :: forall k (a :: k). TypeRep a -> SomeTypeRep
 

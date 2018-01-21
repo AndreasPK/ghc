@@ -34,7 +34,7 @@ module TcEnv(
         isTypeClosedLetBndr,
 
         tcLookup, tcLookupLocated, tcLookupLocalIds,
-        tcLookupId, tcLookupIdMaybe, tcLookupTyVar,
+        tcLookupId, tcLookupIdMaybe, tcLookupTyVar, tcLookupTyConLocal,
         tcLookupLcl_maybe,
         getInLocalScope,
         wrongThingErr, pprBinders,
@@ -364,6 +364,15 @@ tcLookupIdMaybe name
            ATcId { tct_id = id} -> return $ Just id
            AGlobal (AnId id)    -> return $ Just id
            _                    -> return Nothing }
+
+tcLookupTyConLocal :: Name -> TcM TyCon
+tcLookupTyConLocal name
+  = do { thing <- tcLookup name
+       ; case thing of
+           ATcTyCon tycon         -> return tycon
+           AGlobal (ATyCon tycon) -> return tycon
+           _                      -> pprPanic "tcLookupTyCon" (ppr thing) }
+
 
 tcLookupLocalIds :: [Name] -> TcM [TcId]
 -- We expect the variables to all be bound, and all at
