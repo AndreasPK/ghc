@@ -1309,12 +1309,3 @@ tyConRep tc
   = pprPanic "tyConRep" (ppr tc)
 -}
 
-{- Note [Memoising typeOf]
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-See #3245, #9203
-
-IMPORTANT: we don't want to recalculate the TypeRep once per call with
-the proxy argument.  This is what went wrong in #3245 and #9203. So we
-help GHC by manually keeping the 'rep' *outside* the lambda.
--}
-
