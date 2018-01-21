@@ -1094,8 +1094,9 @@ shortCutSolver dflags ev_w ev_i
                                   -- so we can solve recursive dictionaries.
                        ; subgoalBinds <- mapM (try_solve_from_instance loc' cache')
                                               (freshGoals evc_vs)
-                       ; return $ (mk_ev (map getEvTerm evc_vs), ev, cls, preds)
-                                : concat subgoalBinds }
+                       ; ev_expr <- lift $ mk_ev (map getEvTerm evc_vs)
+                       ; return $ (ev_expr, ev, cls, preds) : concat subgoalBinds
+                       }
 
                  | otherwise -> mzero
                _ -> mzero }
@@ -2236,12 +2237,13 @@ doTopReactDict inerts work_item@(CDictCan { cc_ev = fl, cc_class = cls
        = loc
 
      finish_wanted :: [TcPredType]
-                   -> ([EvTerm] -> EvTerm) -> TcS (StopOrContinue Ct)
+                   -> ([EvTerm] -> TcS EvTerm) -> TcS (StopOrContinue Ct)
       -- Precondition: evidence term matches the predicate workItem
      finish_wanted theta mk_ev
         = do { addSolvedDict fl cls xis
              ; evc_vars <- mapM (newWanted deeper_loc) theta
-             ; setWantedEvBind (ctEvEvId fl) (mk_ev (map getEvTerm evc_vars))
+             ; ev_expr <- mk_ev (map getEvTerm evc_vars)
+             ; setWantedEvBind (ctEvEvId fl) ev_expr
              ; emitWorkNC (freshGoals evc_vars)
              ; stopWith fl "Dict/Top (solved wanted)" }
 
@@ -2288,7 +2290,7 @@ type SafeOverlapping = Bool
 data LookupInstResult
   = NoInstance
   | GenInst { lir_new_theta :: [TcPredType]
-            , lir_mk_ev     :: [EvTerm] -> EvTerm
+            , lir_mk_ev     :: [EvTerm] -> TcS EvTerm
             , lir_safe_over :: SafeOverlapping }
 
 instance Outputable LookupInstResult where
@@ -2532,7 +2534,7 @@ matchInstEnv dflags short_cut_solver clas tys loc
        = do { checkWellStagedDFun pred dfun_id loc
             ; (tys, theta) <- instDFunType dfun_id mb_inst_tys
             ; return $ GenInst { lir_new_theta = theta
-                               , lir_mk_ev     = evDFunApp dfun_id tys
+                               , lir_mk_ev     = return . evDFunApp dfun_id tys
                                , lir_safe_over = so } }
 
 
@@ -2545,7 +2547,7 @@ matchInstEnv dflags short_cut_solver clas tys loc
 matchCTuple :: Class -> [Type] -> TcS LookupInstResult
 matchCTuple clas tys   -- (isCTupleClass clas) holds
   = return (GenInst { lir_new_theta = tys
-                    , lir_mk_ev     = tuple_ev
+                    , lir_mk_ev     = return . tuple_ev
                     , lir_safe_over = True })
             -- The dfun *is* the data constructor!
   where
@@ -2644,7 +2646,7 @@ makeLitDict clas ty et
           -- SNat n ~ Integer
     , let ev_tm = mkEvCast et (mkTcSymCo (mkTcTransCo co_dict co_rep))
     = return $ GenInst { lir_new_theta = []
-                       , lir_mk_ev     = \_ -> ev_tm
+                       , lir_mk_ev     = \_ -> return ev_tm
                        , lir_safe_over = True }
 
     | otherwise
@@ -2785,15 +2787,14 @@ a TypeRep for them.  For qualified but not polymorphic types, like
 matchLiftedEquality :: [Type] -> TcS LookupInstResult
 matchLiftedEquality args
   = return (GenInst { lir_new_theta = [ mkTyConApp eqPrimTyCon args ]
-                    , lir_mk_ev     = evDFunApp (dataConWrapId heqDataCon) args
+                    , lir_mk_ev     = return . evDFunApp (dataConWrapId heqDataCon) args
                     , lir_safe_over = True })
 
 -- See also Note [The equality types story] in TysPrim
 matchLiftedCoercible :: [Type] -> TcS LookupInstResult
 matchLiftedCoercible args@[k, t1, t2]
   = return (GenInst { lir_new_theta = [ mkTyConApp eqReprPrimTyCon args' ]
-                    , lir_mk_ev     = evDFunApp (dataConWrapId coercibleDataCon)
-                                                args
+                    , lir_mk_ev     = return . evDFunApp (dataConWrapId coercibleDataCon) args
                     , lir_safe_over = True })
   where
     args' = [k, k, t1, t2]
@@ -2894,7 +2895,7 @@ matchHasField dflags short_cut clas tys loc
                          -- Use the equality proof to cast the selector Id to
                          -- type (r -> a), then use the newtype coercion to cast
                          -- it to a HasField dictionary.
-                         mk_ev (ev1:evs) = evSelector sel_id tvs evs `evCast` co
+                         mk_ev (ev1:evs) = return $ evSelector sel_id tvs evs `evCast` co
                            where
                              co = mkTcSubCo (evTermCoercion ev1)
                                       `mkTcTransCo` mkTcSymCo co2
