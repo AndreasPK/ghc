@@ -26,7 +26,7 @@ module TcSMonad (
     wrapErrTcS, wrapWarnTcS,
 
     -- Evidence creation and transformation
-    MaybeNew(..), freshGoals, isFresh, getEvTerm,
+    MaybeNew(..), freshGoals, isFresh, getEvExpr,
 
     newTcEvBinds,
     newWantedEq, emitNewWantedEq,
@@ -143,6 +143,7 @@ import TyCon
 import TcErrors   ( solverDepthErrorTcS )
 
 import Name
+import Module ( HasModule, getModule )
 import RdrName ( GlobalRdrEnv, GlobalRdrElt )
 import qualified RnEnv as TcM
 import Var
@@ -2385,6 +2386,12 @@ instance MonadFail.MonadFail TcS where
 instance MonadUnique TcS where
    getUniqueSupplyM = wrapTcS getUniqueSupplyM
 
+instance HasModule TcS where
+   getModule = wrapTcS getModule
+
+instance MonadThings TcS where
+   lookupThing n = wrapTcS (lookupThing n)
+
 -- Basic functionality
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 wrapTcS :: TcM a -> TcS a
@@ -2869,7 +2876,7 @@ newFlattenSkolem flav loc tc xis
            -- Construct the Refl evidence
            ; let pred = mkPrimEqPred fam_ty (mkTyVarTy fsk)
                  co   = mkNomReflCo fam_ty
-           ; ev  <- newGivenEvVar loc (pred, EvCoercion co)
+           ; ev  <- newGivenEvVar loc (pred, EvExpr (evCoercion co))
            ; return (ev, co, fsk) }
 
       | otherwise  -- Generate a [WD] for both Wanted and Derived
@@ -2981,7 +2988,7 @@ tcInstSkolTyVarsX subst tvs = wrapTcS $ TcM.tcInstSkolTyVarsX subst tvs
 -- Creating and setting evidence variables and CtFlavors
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-data MaybeNew = Fresh CtEvidence | Cached EvTerm
+data MaybeNew = Fresh CtEvidence | Cached EvExpr
 
 isFresh :: MaybeNew -> Bool
 isFresh (Fresh {})  = True
@@ -2990,9 +2997,9 @@ isFresh (Cached {}) = False
 freshGoals :: [MaybeNew] -> [CtEvidence]
 freshGoals mns = [ ctev | Fresh ctev <- mns ]
 
-getEvTerm :: MaybeNew -> EvTerm
-getEvTerm (Fresh ctev) = ctEvTerm ctev
-getEvTerm (Cached evt) = evt
+getEvExpr :: MaybeNew -> EvExpr
+getEvExpr (Fresh ctev) = ctEvTerm ctev
+getEvExpr (Cached evt) = evt
 
 setEvBind :: EvBind -> TcS ()
 setEvBind ev_bind

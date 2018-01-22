@@ -30,7 +30,6 @@ import DsUtils
 
 import HsSyn            -- lots of things
 import CoreSyn          -- lots of things
-import Literal          ( Literal(MachStr) )
 import CoreOpt          ( simpleOptExpr )
 import OccurAnal        ( occurAnalyseExpr )
 import MkCore
@@ -49,7 +48,6 @@ import Coercion
 import TysWiredIn ( typeNatKind, typeSymbolKind )
 import Id
 import MkId(proxyHashId)
-import Class
 import Name
 import VarSet
 import Rules
@@ -1156,42 +1154,9 @@ dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = liftM ((,) v) (dsEvTerm r)
 **********************************************************************-}
 
 dsEvTerm :: EvTerm -> DsM CoreExpr
-dsEvTerm (EvId v)           = return (Var v)
-dsEvTerm (EvCallStack cs)   = dsEvCallStack cs
-dsEvTerm (EvTypeable ty ev) = dsEvTypeable ty ev
-dsEvTerm (EvLit (EvNum n))  = mkNaturalExpr n
-dsEvTerm (EvLit (EvStr s))  = mkStringExprFS s
-
-dsEvTerm (EvCast tm co)
-  = do { tm' <- dsEvTerm tm
-       ; return $ mkCastDs tm' co }
-
-dsEvTerm (EvDFunApp df tys tms)
-  = do { tms' <- mapM dsEvTerm tms
-       ; return $ Var df `mkTyApps` tys `mkApps` tms' }
-  -- The use of mkApps here is OK vis-a-vis levity polymorphism because
-  -- the terms are always evidence variables with types of kind Constraint
-
-dsEvTerm (EvCoercion co) = return (Coercion co)
-dsEvTerm (EvSuperClass d n)
-  = do { d' <- dsEvTerm d
-       ; let (cls, tys) = getClassPredTys (exprType d')
-             sc_sel_id  = classSCSelId cls n    -- Zero-indexed
-       ; return $ Var sc_sel_id `mkTyApps` tys `App` d' }
-
-dsEvTerm (EvSelector sel_id tys tms)
-  = do { tms' <- mapM dsEvTerm tms
-       ; return $ Var sel_id `mkTyApps` tys `mkApps` tms' }
-
-dsEvTerm (EvDelayedError ty msg) = return $ dsEvDelayedError ty msg
-dsEvTerm (EvExpr e)         = return e
-
-dsEvDelayedError :: Type -> FastString -> CoreExpr
-dsEvDelayedError ty msg
-  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
-  where
-    errorId = tYPE_ERROR_ID
-    litMsg  = Lit (MachStr (fastStringToByteString msg))
+dsEvTerm (EvExpr e)          = return e
+dsEvTerm (EvCallStack ty cs) = dsEvCallStack ty cs
+dsEvTerm (EvTypeable ty ev)  = dsEvTypeable ty ev
 
 {-**********************************************************************
 *                                                                      *
@@ -1320,9 +1285,9 @@ tyConRep tc
 *                                                                      *
 **********************************************************************-}
 
-dsEvCallStack :: EvCallStack -> DsM CoreExpr
+dsEvCallStack :: PredType -> EvCallStack -> DsM CoreExpr
 -- See Note [Overview of implicit CallStacks] in TcEvidence.hs
-dsEvCallStack cs = do
+dsEvCallStack ty cs = do
   df            <- getDynFlags
   m             <- getModule
   srcLocDataCon <- dsLookupDataCon srcLocDataConName
@@ -1347,7 +1312,7 @@ dsEvCallStack cs = do
         nameExpr <- mkStringExprFS name
         locExpr <- mkSrcLoc loc
         case tm of
-          EvCallStack EvCsEmpty -> return (pushCS nameExpr locExpr emptyCS)
+          EvCallStack _ EvCsEmpty -> return (pushCS nameExpr locExpr emptyCS)
           _ -> do tmExpr  <- dsEvTerm tm
                   -- at this point tmExpr :: IP sym CallStack
                   -- but we need the actual CallStack to pass to pushCS,
@@ -1355,6 +1320,7 @@ dsEvCallStack cs = do
                   -- See Note [Overview of implicit CallStacks]
                   let ip_co = unwrapIP (exprType tmExpr)
                   return (pushCS nameExpr locExpr (mkCastDs tmExpr ip_co))
-  case cs of
+  cs_expr <- case cs of
     EvCsPushCall name loc tm -> mkPush (occNameFS $ getOccName name) loc tm
     EvCsEmpty -> return emptyCS
+  return $ Cast cs_expr (wrapIP ty)

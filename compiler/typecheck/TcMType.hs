@@ -203,7 +203,7 @@ cloneWC wc@(WC { wc_simple = simples, wc_impl = implics })
            ; return (implic { ic_wanted = inner_wanted' }) }
 
 -- | Emits a new Wanted. Deals with both equalities and non-equalities.
-emitWanted :: CtOrigin -> TcPredType -> TcM EvTerm
+emitWanted :: CtOrigin -> TcPredType -> TcM EvExpr
 emitWanted origin pty
   = do { ev <- newWanted origin Nothing pty
        ; emitSimple $ mkNonCanonical ev

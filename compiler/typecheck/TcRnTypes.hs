@@ -2674,9 +2674,9 @@ ctEvEqRel = predTypeEqRel . ctEvPred
 ctEvRole :: CtEvidence -> Role
 ctEvRole = eqRelRole . ctEvEqRel
 
-ctEvTerm :: CtEvidence -> EvTerm
-ctEvTerm ev@(CtWanted { ctev_dest = HoleDest _ }) = EvCoercion $ ctEvCoercion ev
-ctEvTerm ev = EvId (ctEvEvId ev)
+ctEvTerm :: CtEvidence -> EvExpr
+ctEvTerm ev@(CtWanted { ctev_dest = HoleDest _ }) = evCoercion $ ctEvCoercion ev
+ctEvTerm ev = evId (ctEvEvId ev)
 
 -- Always returns a coercion whose type is precisely ctev_pred of the CtEvidence.
 -- See also Note [Given in ctEvCoercion]
