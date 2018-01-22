@@ -31,6 +31,7 @@ import TyCon
 import Class
 import DataCon
 import TcEvidence
+import TcEvTerm
 import HsExpr  ( UnboundVar(..) )
 import HsBinds ( PatSynBind(..) )
 import Name
@@ -59,10 +60,6 @@ import Maybes
 import Pair
 import qualified GHC.LanguageExtensions as LangExt
 import FV ( fvVarList, fvVarSet, unionFV )
-
-import CoreSyn
-import MkCore
-import Literal
 
 import Control.Monad    ( when )
 import Data.Foldable    ( toList )
@@ -3154,14 +3151,3 @@ solverDepthErrorTcS loc ty
       , text "(any upper bound you could choose might fail unpredictably with"
       , text " minor updates to GHC, so disabling the check is recommended if"
       , text " you're sure that type checking should terminate)" ]
-
-
--- Used with Opt_DeferTypeErrors
--- See Note [Deferring coercion errors to runtime]
--- in TcSimplify
-evDelayedError :: Type -> FastString -> EvTerm
-evDelayedError ty msg
-  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
-  where
-    errorId = tYPE_ERROR_ID
-    litMsg  = Lit (MachStr (fastStringToByteString msg))

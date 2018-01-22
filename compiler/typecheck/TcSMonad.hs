@@ -43,7 +43,7 @@ module TcSMonad (
     getTopEnv, getGblEnv, getLclEnv,
     getTcEvBindsVar, getTcLevel,
     getTcEvTyCoVars, getTcEvBindsMap, setTcEvBindsMap,
-    tcLookupClass, tcLookupId, tcLookupTyCon,
+    tcLookupClass, tcLookupId,
 
     -- Inerts
     InertSet(..), InertCans(..),
@@ -128,7 +128,7 @@ import FamInstEnv
 import qualified TcRnMonad as TcM
 import qualified TcMType as TcM
 import qualified TcEnv as TcM
-       ( checkWellStaged, topIdLvl, tcGetDefaultTys, tcLookupClass, tcLookupId, tcLookupTyConLocal )
+       ( checkWellStaged, topIdLvl, tcGetDefaultTys, tcLookupClass, tcLookupId )
 import PrelNames( heqTyConKey, eqTyConKey )
 import Kind
 import TcType
@@ -2780,9 +2780,6 @@ tcLookupClass c = wrapTcS $ TcM.tcLookupClass c
 
 tcLookupId :: Name -> TcS Id
 tcLookupId n = wrapTcS $ TcM.tcLookupId n
-
-tcLookupTyCon :: Name -> TcS TyCon
-tcLookupTyCon n = wrapTcS $ TcM.tcLookupTyConLocal n
 
 -- Setting names as used (used in the deriving of Coercible evidence)
 -- Too hackish to expose it to TcS? In that case somehow extract the used
