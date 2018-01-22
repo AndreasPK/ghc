@@ -228,7 +228,7 @@ deListComp (LastStmt body _ _ : quals) list
 deListComp (BodyStmt guard _ _ _ : quals) list = do  -- rule B above
     core_guard <- dsLExpr guard
     core_rest <- deListComp quals list
-    return (mkIfThenElse core_guard core_rest list)
+    return (mkIfThenElse core_guard core_rest list Nothing)
 
 -- [e | let B, qs] = let B in [e | qs]
 deListComp (LetStmt binds : quals) list = do
@@ -335,7 +335,7 @@ dfListComp c_id n_id (LastStmt body _ _ : quals)
 dfListComp c_id n_id (BodyStmt guard _ _ _  : quals) = do
     core_guard <- dsLExpr guard
     core_rest <- dfListComp c_id n_id quals
-    return (mkIfThenElse core_guard core_rest (Var n_id))
+    return (mkIfThenElse core_guard core_rest (Var n_id) Nothing)
 
 dfListComp c_id n_id (LetStmt binds : quals) = do
     -- new in 1.3, local bindings

@@ -108,7 +108,8 @@ module BasicTypes(
 
         SpliceExplicitFlag(..),
 
-        Freq, neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq, alwaysFreq
+        Freq, neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq,
+        alwaysFreq, combineFreqs
    ) where
 
 import GhcPrelude
@@ -1649,3 +1650,14 @@ usuallyFreq = defFreq * 10
 --Don't go crazy here, for large switches we otherwise we might run into
 --integer overflow issues on 32bit platforms.
 alwaysFreq = defFreq * 50
+
+-- | Add up frequencies respecting never.
+-- Combining two frequencies where one is never results on the other one.
+combineFreqs :: Freq -> Freq -> Freq
+combineFreqs f1 f2 
+  | f1 < 0 && f2 >= 0 = f2
+  | f2 < 0 && f1 >= 0 = f1
+  | otherwise = f1 + f2
+
+
+  
