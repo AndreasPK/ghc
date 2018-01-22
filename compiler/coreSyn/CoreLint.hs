@@ -1105,8 +1105,6 @@ checkCaseAlts :: CoreExpr -> OutType -> [CoreAlt] -> LintM ()
 -- NB: Algebraic cases are not necessarily exhaustive, because
 --     the simplifier correctly eliminates case that can't
 --     possibly match.
-
---TODOF: Check that sum of alternatives is >0
 checkCaseAlts e ty alts =
   do { checkL (all non_deflt con_alts) (mkNonDefltMsg e)
      ; checkL (increasing_tag con_alts) (mkNonIncreasingAltsMsg e)
