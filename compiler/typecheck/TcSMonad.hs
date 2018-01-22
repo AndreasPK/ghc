@@ -143,7 +143,6 @@ import TyCon
 import TcErrors   ( solverDepthErrorTcS )
 
 import Name
-import Module ( HasModule, getModule )
 import RdrName ( GlobalRdrEnv, GlobalRdrElt )
 import qualified RnEnv as TcM
 import Var
@@ -2386,12 +2385,6 @@ instance MonadFail.MonadFail TcS where
 instance MonadUnique TcS where
    getUniqueSupplyM = wrapTcS getUniqueSupplyM
 
-instance HasModule TcS where
-   getModule = wrapTcS getModule
-
-instance MonadThings TcS where
-   lookupThing n = wrapTcS (lookupThing n)
-
 -- Basic functionality
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 wrapTcS :: TcM a -> TcS a
@@ -2876,7 +2869,7 @@ newFlattenSkolem flav loc tc xis
            -- Construct the Refl evidence
            ; let pred = mkPrimEqPred fam_ty (mkTyVarTy fsk)
                  co   = mkNomReflCo fam_ty
-           ; ev  <- newGivenEvVar loc (pred, EvExpr (evCoercion co))
+           ; ev  <- newGivenEvVar loc (pred, EvCoercion co)
            ; return (ev, co, fsk) }
 
       | otherwise  -- Generate a [WD] for both Wanted and Derived

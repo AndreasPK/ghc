@@ -84,7 +84,7 @@ dsValBinds (ValBindsIn {})       _    = panic "dsValBinds ValBindsIn"
 -------------------------
 dsIPBinds :: HsIPBinds GhcTc -> CoreExpr -> DsM CoreExpr
 dsIPBinds (IPBinds ip_binds ev_binds) body
-  = do  { let ds_binds = dsTcEvBinds ev_binds
+  = do  { ds_binds <- dsTcEvBinds ev_binds
         ; let inner = mkCoreLets ds_binds body
                 -- The dict bindings may not be in
                 -- dependency order; hence Rec
@@ -183,7 +183,7 @@ dsUnliftedBind (AbsBinds { abs_tvs = [], abs_ev_vars = []
              bind_export export b = bindNonRec (abe_poly export) (Var (abe_mono export)) b
        ; body2 <- foldlBagM (\body lbind -> dsUnliftedBind (unLoc lbind) body)
                             body1 lbinds
-       ; let ds_binds = dsTcEvBinds_s ev_binds
+       ; ds_binds <- dsTcEvBinds_s ev_binds
        ; return (mkCoreLets ds_binds body2) }
 
 dsUnliftedBind (FunBind { fun_id = L l fun

@@ -30,6 +30,7 @@ import DsUtils
 
 import HsSyn            -- lots of things
 import CoreSyn          -- lots of things
+import Literal          ( Literal(MachStr) )
 import CoreOpt          ( simpleOptExpr )
 import OccurAnal        ( occurAnalyseExpr )
 import MkCore
@@ -48,6 +49,7 @@ import Coercion
 import TysWiredIn ( typeNatKind, typeSymbolKind )
 import Id
 import MkId(proxyHashId)
+import Class
 import Name
 import VarSet
 import Rules
@@ -1154,9 +1156,42 @@ dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = liftM ((,) v) (dsEvTerm r)
 **********************************************************************-}
 
 dsEvTerm :: EvTerm -> DsM CoreExpr
-dsEvTerm (EvExpr e)         = return e
+dsEvTerm (EvId v)           = return (Var v)
 dsEvTerm (EvCallStack cs)   = dsEvCallStack cs
 dsEvTerm (EvTypeable ty ev) = dsEvTypeable ty ev
+dsEvTerm (EvLit (EvNum n))  = mkNaturalExpr n
+dsEvTerm (EvLit (EvStr s))  = mkStringExprFS s
+
+dsEvTerm (EvCast tm co)
+  = do { tm' <- dsEvTerm tm
+       ; return $ mkCastDs tm' co }
+
+dsEvTerm (EvDFunApp df tys tms)
+  = do { tms' <- mapM dsEvTerm tms
+       ; return $ Var df `mkTyApps` tys `mkApps` tms' }
+  -- The use of mkApps here is OK vis-a-vis levity polymorphism because
+  -- the terms are always evidence variables with types of kind Constraint
+
+dsEvTerm (EvCoercion co) = return (Coercion co)
+dsEvTerm (EvSuperClass d n)
+  = do { d' <- dsEvTerm d
+       ; let (cls, tys) = getClassPredTys (exprType d')
+             sc_sel_id  = classSCSelId cls n    -- Zero-indexed
+       ; return $ Var sc_sel_id `mkTyApps` tys `App` d' }
+
+dsEvTerm (EvSelector sel_id tys tms)
+  = do { tms' <- mapM dsEvTerm tms
+       ; return $ Var sel_id `mkTyApps` tys `mkApps` tms' }
+
+dsEvTerm (EvDelayedError ty msg) = return $ dsEvDelayedError ty msg
+dsEvTerm (EvExpr e)         = return e
+
+dsEvDelayedError :: Type -> FastString -> CoreExpr
+dsEvDelayedError ty msg
+  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
+  where
+    errorId = tYPE_ERROR_ID
+    litMsg  = Lit (MachStr (fastStringToByteString msg))
 
 {-**********************************************************************
 *                                                                      *

@@ -334,14 +334,12 @@ zonkEvBndr env var
            zonkTcTypeToType env var_ty
        ; return (setVarType var ty) }
 
-{-
 zonkEvVarOcc :: ZonkEnv -> EvVar -> TcM EvTerm
 zonkEvVarOcc env v
   | isCoVar v
   = EvCoercion <$> zonkCoVarOcc env v
   | otherwise
   = return (EvId $ zonkIdOcc env v)
--}
 
 zonkTyBndrsX :: ZonkEnv -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
 zonkTyBndrsX = mapAccumLM zonkTyBndrX
@@ -1423,8 +1421,36 @@ zonkVect _ (HsVectInstIn _) = panic "TcHsSyn.zonkVect: HsVectInstIn"
 zonkEvTerm :: ZonkEnv -> EvTerm -> TcM EvTerm
 zonkEvTerm env (EvExpr e) =
   EvExpr <$> zonkCoreExpr env e
+zonkEvTerm env (EvId v)           = ASSERT2( isId v, ppr v )
+                                    zonkEvVarOcc env v
+zonkEvTerm env (EvCoercion co)    = do { co' <- zonkCoToCo env co
+                                       ; return (EvCoercion co') }
+zonkEvTerm env (EvCast tm co)     = do { tm' <- zonkEvTerm env tm
+                                       ; co' <- zonkCoToCo env co
+                                       ; return (mkEvCast tm' co') }
+zonkEvTerm _   (EvLit l)          = return (EvLit l)
 zonkEvTerm env (EvTypeable ty ev) =
   EvTypeable <$> zonkTcTypeToType env ty <*> zonkEvTypeable env ev
+zonkEvTerm env (EvCallStack cs)
+  = case cs of
+      EvCsEmpty -> return (EvCallStack cs)
+      EvCsPushCall n l tm -> do { tm' <- zonkEvTerm env tm
+                                ; return (EvCallStack (EvCsPushCall n l tm')) }
+
+zonkEvTerm env (EvSuperClass d n) = do { d' <- zonkEvTerm env d
+                                       ; return (EvSuperClass d' n) }
+zonkEvTerm env (EvDFunApp df tys tms)
+  = do { tys' <- zonkTcTypeToTypes env tys
+       ; tms' <- mapM (zonkEvTerm env) tms
+       ; return (EvDFunApp (zonkIdOcc env df) tys' tms') }
+zonkEvTerm env (EvDelayedError ty msg)
+  = do { ty' <- zonkTcTypeToType env ty
+       ; return (EvDelayedError ty' msg) }
+zonkEvTerm env (EvSelector sel_id tys tms)
+  = do { sel_id' <- zonkIdBndr env sel_id
+       ; tys'    <- zonkTcTypeToTypes env tys
+       ; tms' <- mapM (zonkEvTerm env) tms
+       ; return (EvSelector sel_id' tys' tms') }
 
 zonkCoreExpr :: ZonkEnv -> CoreExpr -> TcM CoreExpr
 zonkCoreExpr env (Var v)
@@ -1541,7 +1567,7 @@ zonkEvBind env bind@(EvBind { eb_lhs = var, eb_rhs = term })
 
        ; term' <- case getEqPredTys_maybe (idType var') of
            Just (r, ty1, ty2) | ty1 `eqType` ty2
-                  -> return (EvExpr (evCoercion (mkTcReflCo r ty1)))
+                  -> return (EvCoercion (mkTcReflCo r ty1))
            _other -> zonkEvTerm env term
 
        ; return (bind { eb_lhs = var', eb_rhs = term' }) }

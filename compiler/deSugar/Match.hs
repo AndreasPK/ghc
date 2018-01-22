@@ -1053,8 +1053,8 @@ viewLExprEq (e1,_) (e2,_) = lexp e1 e2
 
     ---------
     ev_term :: EvTerm -> EvTerm -> Bool
-    ev_term (Var a)      (Var b)      = a==b
-    ev_term (Coercion a) (Coercion b) = a `eqCoercion` b
+    ev_term (EvId a)       (EvId b)       = a==b
+    ev_term (EvCoercion a) (EvCoercion b) = a `eqCoercion` b
     ev_term _ _ = False
 
     ---------

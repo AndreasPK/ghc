@@ -117,7 +117,7 @@ tcInferPatSynDecl PSB{ psb_id = lname@(L _ name), psb_args = details,
                           (mkTyVarBinders Inferred univ_tvs
                             , req_theta,  ev_binds, req_dicts)
                           (mkTyVarBinders Inferred ex_tvs
-                            , mkTyVarTys ex_tvs, prov_theta, map evId filtered_prov_dicts)
+                            , mkTyVarTys ex_tvs, prov_theta, map EvId filtered_prov_dicts)
                           (map nlHsVar args, map idType args)
                           pat_ty rec_fields }
 

@@ -19,7 +19,6 @@ import Type
 import TcFlatten
 import TcSMonad
 import TcEvidence
-import TcEvTerm
 import Class
 import TyCon
 import TyCoRep   -- cleverly decomposes types, good for completeness checking
@@ -172,8 +171,7 @@ solveCallStack ev ev_cs = do
   -- We're given ev_cs :: CallStack, but the evidence term should be a
   -- dictionary, so we have to coerce ev_cs to a dictionary for
   -- `IP ip CallStack`. See Note [Overview of implicit CallStacks]
-  cs_tm <- evCallStack ev_cs
-  let ev_tm = mkEvCast cs_tm (wrapIP (ctEvPred ev))
+  let ev_tm = mkEvCast (EvCallStack ev_cs) (wrapIP (ctEvPred ev))
   setWantedEvBind (ctEvEvId ev) ev_tm
 
 canClass :: CtEvidence
@@ -445,7 +443,7 @@ mk_strict_superclasses :: NameSet -> CtEvidence -> Class -> [Type] -> TcS [Ct]
 mk_strict_superclasses rec_clss ev cls tys
   | CtGiven { ctev_evar = evar, ctev_loc = loc } <- ev
   = do { sc_evs <- newGivenEvVars (mk_given_loc loc)
-                                  (EvExpr (mkEvScSelectors (evId evar) cls tys))
+                                  (mkEvScSelectors (EvId evar) cls tys)
        ; concatMapM (mk_superclasses rec_clss) sc_evs }
 
   | all noFreeVarsOfType tys
@@ -994,9 +992,9 @@ can_eq_app ev NomEq s1 t1 s2 t2
              co_s = mkTcLRCo CLeft  co
              co_t = mkTcLRCo CRight co
        ; evar_s <- newGivenEvVar loc ( mkTcEqPredLikeEv ev s1 s2
-                                     , evCoercion co_s )
+                                     , EvCoercion co_s )
        ; evar_t <- newGivenEvVar loc ( mkTcEqPredLikeEv ev t1 t2
-                                     , evCoercion co_t )
+                                     , EvCoercion co_t )
        ; emitWorkNC [evar_t]
        ; canEqNC evar_s NomEq s1 s2 }
   | otherwise  -- Can't happen
@@ -1266,7 +1264,7 @@ canDecomposableTyConAppOK ev eq_rel tc tys1 tys2
         -> do { let ev_co = mkCoVarCo evar
               ; given_evs <- newGivenEvVars loc $
                              [ ( mkPrimEqPredRole r ty1 ty2
-                               , evCoercion (mkNthCo i ev_co) )
+                               , EvCoercion (mkNthCo i ev_co) )
                              | (r, ty1, ty2, i) <- zip4 tc_roles tys1 tys2 [0..]
                              , r /= Phantom
                              , not (isCoercionTy ty1) && not (isCoercionTy ty2) ]
@@ -1461,7 +1459,7 @@ canEqTyVar ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
     -- unswapped: tm :: (lhs :: k1) ~ (rhs :: k2)
     -- swapped  : tm :: (rhs :: k2) ~ (lhs :: k1)
   = do { kind_ev_id <- newBoundEvVarId kind_pty
-                                       (evCoercion $
+                                       (EvCoercion $
                                         if isSwapped swapped
                                         then mkTcSymCo $ mkTcKindCo $ mkTcCoVarCo evar
                                         else             mkTcKindCo $ mkTcCoVarCo evar)
@@ -1478,10 +1476,10 @@ canEqTyVar ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
        ; type_ev <- newGivenEvVar loc $
                     if isSwapped swapped
                     then ( mkTcEqPredLikeEv ev rhs' lhs
-                         , evCoercion $
+                         , EvCoercion $
                            mkTcCoherenceLeftCo (mkTcCoVarCo evar) homo_co )
                     else ( mkTcEqPredLikeEv ev lhs rhs'
-                         , evCoercion $
+                         , EvCoercion $
                            mkTcCoherenceRightCo (mkTcCoVarCo evar) homo_co )
           -- unswapped: type_ev :: (lhs :: k1) ~ ((rhs |> sym kind_ev_id) :: k1)
           -- swapped  : type_ev :: ((rhs |> sym kind_ev_id) :: k1) ~ (lhs :: k1)
@@ -1591,7 +1589,7 @@ canEqReflexive :: CtEvidence    -- ty ~ ty
                -> TcType        -- ty
                -> TcS (StopOrContinue Ct)   -- always Stop
 canEqReflexive ev eq_rel ty
-  = do { setEvBindIfWanted ev (evCoercion $
+  = do { setEvBindIfWanted ev (EvCoercion $
                                mkTcReflCo (eqRelRole eq_rel) ty)
        ; stopWith ev "Solved by reflexivity" }
 
@@ -1858,7 +1856,7 @@ rewriteEvidence ev@(CtGiven { ctev_evar = old_evar, ctev_loc = loc }) new_pred c
        ; continueWith new_ev }
   where
     -- mkEvCast optimises ReflCo
-    new_tm = mkEvCast (evId old_evar) (tcDowngradeRole Representational
+    new_tm = mkEvCast (EvId old_evar) (tcDowngradeRole Representational
                                                        (ctEvRole ev)
                                                        (mkTcSymCo co))
 
@@ -1907,10 +1905,10 @@ rewriteEqEvidence old_ev swapped nlhs nrhs lhs_co rhs_co
   = continueWith (old_ev { ctev_pred = new_pred })
 
   | CtGiven { ctev_evar = old_evar } <- old_ev
-  = do { let new_tm = evCoercion (lhs_co
+  = do { let new_tm = EvCoercion (lhs_co
                                   `mkTcTransCo` maybeSym swapped (mkTcCoVarCo old_evar)
                                   `mkTcTransCo` mkTcSymCo rhs_co)
-       ; new_ev <- newGivenEvVar loc' (new_pred, EvExpr new_tm)
+       ; new_ev <- newGivenEvVar loc' (new_pred, new_tm)
        ; continueWith new_ev }
 
   | CtWanted { ctev_dest = dest } <- old_ev

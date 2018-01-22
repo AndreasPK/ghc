@@ -47,8 +47,6 @@ import FamInstEnv
 import Unify ( tcUnifyTyWithTFs )
 
 import TcEvidence
-import TcEvTerm
-import MkCore ( mkStringExprFS, mkNaturalExpr )
 import Outputable
 
 import TcRnTypes
@@ -696,7 +694,7 @@ interactIrred inerts workItem@(CIrredCan { cc_ev = ev_w, cc_insol = insoluble })
     swap_me swap ev
       = case swap of
            NotSwapped -> ctEvTerm ev
-           IsSwapped  -> evCoercion (mkTcSymCo (evTermCoercion (ctEvTerm ev)))
+           IsSwapped  -> EvCoercion (mkTcSymCo (evTermCoercion (ctEvTerm ev)))
 
 interactIrred _ wi = pprPanic "interactIrred" (ppr wi)
 
@@ -1363,7 +1361,7 @@ reactFunEq from_this fsk1 solve_this fsk2
              fsk_eq_pred = mkTcEqPredLikeEv solve_this
                              (mkTyVarTy fsk2) (mkTyVarTy fsk1)
 
-       ; new_ev <- newGivenEvVar loc (fsk_eq_pred, evCoercion fsk_eq_co)
+       ; new_ev <- newGivenEvVar loc (fsk_eq_pred, EvCoercion fsk_eq_co)
        ; emitWorkNC [new_ev] }
 
   | CtDerived { ctev_loc = loc } <- solve_this
@@ -1551,7 +1549,7 @@ interactTyVarEq inerts workItem@(CTyEqCan { cc_tyvar = tv
   | Just (ev_i, swapped, keep_deriv)
        <- inertsCanDischarge inerts tv rhs (ctEvFlavour ev, eq_rel)
   = do { setEvBindIfWanted ev $
-         evCoercion (maybeSym swapped $
+         EvCoercion (maybeSym swapped $
                      tcDowngradeRole (eqRelRole eq_rel)
                                      (ctEvRole ev_i)
                                      (ctEvCoercion ev_i))
@@ -1617,7 +1615,7 @@ solveByUnification wd tv xi
                              text "Right Kind is:" <+> ppr (typeKind xi) ]
 
        ; unifyTyVar tv xi
-       ; setEvBindIfWanted wd (evCoercion (mkTcNomReflCo xi)) }
+       ; setEvBindIfWanted wd (EvCoercion (mkTcNomReflCo xi)) }
 
 ppr_kicked :: Int -> SDoc
 ppr_kicked 0 = empty
@@ -1827,7 +1825,7 @@ reduce_top_fun_eq old_ev fsk (ax_co, rhs_ty)
   = do { let final_co = mkTcSymCo (ctEvCoercion old_ev) `mkTcTransCo` ax_co
               -- final_co :: fsk ~ rhs_ty
        ; new_ev <- newGivenEvVar deeper_loc (mkPrimEqPred (mkTyVarTy fsk) rhs_ty,
-                                             evCoercion final_co)
+                                             EvCoercion final_co)
        ; emitWorkNC [new_ev] -- Non-cannonical; that will mean we flatten rhs_ty
        ; stopWith old_ev "Fun/Top (given)" }
 
@@ -1950,7 +1948,7 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
        ; new_ev <- case ctEvFlavour old_ev of
            Given -> newGivenEvVar deeper_loc
                          ( mkPrimEqPred (mkTyConApp fam_tc xis) (mkTyVarTy fsk)
-                         , evCoercion (mkTcTyConAppCo Nominal fam_tc cos
+                         , EvCoercion (mkTcTyConAppCo Nominal fam_tc cos
                                         `mkTcTransCo` mkTcSymCo ax_co
                                         `mkTcTransCo` ctEvCoercion old_ev) )
 
@@ -1986,7 +1984,7 @@ dischargeFmv :: CtEvidence -> TcTyVar -> TcCoercion -> TcType -> TcS ()
 -- Does not evaluate 'co' if 'ev' is Derived
 dischargeFmv ev@(CtWanted { ctev_dest = dest }) fmv co xi
   = ASSERT2( not (fmv `elemVarSet` tyCoVarsOfType xi), ppr ev $$ ppr fmv $$ ppr xi )
-    do { setWantedEvTerm dest (evCoercion co)
+    do { setWantedEvTerm dest (EvCoercion co)
        ; unflattenFmv fmv xi
        ; n_kicked <- kickOutAfterUnification fmv
        ; traceTcS "dischargeFmv" (ppr fmv <+> equals <+> ppr xi $$ ppr_kicked n_kicked) }
@@ -2532,7 +2530,7 @@ matchInstEnv dflags short_cut_solver clas tys loc
        = do { checkWellStagedDFun pred dfun_id loc
             ; (tys, theta) <- instDFunType dfun_id mb_inst_tys
             ; return $ GenInst { lir_new_theta = theta
-                               , lir_mk_ev     = evDFunApp dfun_id tys
+                               , lir_mk_ev     = EvDFunApp dfun_id tys
                                , lir_safe_over = so } }
 
 
@@ -2550,7 +2548,7 @@ matchCTuple clas tys   -- (isCTupleClass clas) holds
             -- The dfun *is* the data constructor!
   where
      data_con = tyConSingleDataCon (classTyCon clas)
-     tuple_ev = evDFunApp (dataConWrapId data_con) tys
+     tuple_ev = EvDFunApp (dataConWrapId data_con) tys
 
 {- ********************************************************************
 *                                                                     *
@@ -2558,70 +2556,17 @@ matchCTuple clas tys   -- (isCTupleClass clas) holds
 *                                                                     *
 ***********************************************************************-}
 
-{-
-Note [KnownNat & KnownSymbol and EvLit]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-A part of the type-level literals implementation are the classes
-"KnownNat" and "KnownSymbol", which provide a "smart" constructor for
-defining singleton values.  Here is the key stuff from GHC.TypeLits
-
-  class KnownNat (n :: Nat) where
-    natSing :: SNat n
-
-  newtype SNat (n :: Nat) = SNat Integer
-
-Conceptually, this class has infinitely many instances:
-
-  instance KnownNat 0       where natSing = SNat 0
-  instance KnownNat 1       where natSing = SNat 1
-  instance KnownNat 2       where natSing = SNat 2
-  ...
-
-In practice, we solve `KnownNat` predicates in the type-checker
-(see typecheck/TcInteract.hs) because we can't have infinitely many instances.
-The evidence (aka "dictionary") for `KnownNat` is of the form `EvLit (EvNum n)`.
-
-We make the following assumptions about dictionaries in GHC:
-  1. The "dictionary" for classes with a single method---like `KnownNat`---is
-     a newtype for the type of the method, so using a evidence amounts
-     to a coercion, and
-  2. Newtypes use the same representation as their definition types.
-
-So, the evidence for `KnownNat` is just a value of the representation type,
-wrapped in two newtype constructors: one to make it into a `SNat` value,
-and another to make it into a `KnownNat` dictionary.
-
-Also note that `natSing` and `SNat` are never actually exposed from the
-library---they are just an implementation detail.  Instead, users see
-a more convenient function, defined in terms of `natSing`:
-
-  natVal :: KnownNat n => proxy n -> Integer
-
-The reason we don't use this directly in the class is that it is simpler
-and more efficient to pass around an integer rather than an entire function,
-especially when the `KnowNat` evidence is packaged up in an existential.
-
-The story for kind `Symbol` is analogous:
-  * class KnownSymbol
-  * newtype SSymbol
-  * Evidence: a Core literal (e.g. mkNaturalExpr)
--}
-
 matchKnownNat :: Class -> [Type] -> TcS LookupInstResult
 matchKnownNat clas [ty]     -- clas = KnownNat
-  | Just n <- isNumLitTy ty = do
-        et <- mkNaturalExpr n
-        makeLitDict clas ty et
+  | Just n <- isNumLitTy ty = makeLitDict clas ty (EvNum n)
 matchKnownNat _ _           = return NoInstance
 
 matchKnownSymbol :: Class -> [Type] -> TcS LookupInstResult
 matchKnownSymbol clas [ty]  -- clas = KnownSymbol
-  | Just s <- isStrLitTy ty = do
-        et <- mkStringExprFS s
-        makeLitDict clas ty et
+  | Just n <- isStrLitTy ty = makeLitDict clas ty (EvStr n)
 matchKnownSymbol _ _       = return NoInstance
 
-makeLitDict :: Class -> Type -> EvTerm -> TcS LookupInstResult
+makeLitDict :: Class -> Type -> EvLit -> TcS LookupInstResult
 -- makeLitDict adds a coercion that will convert the literal into a dictionary
 -- of the appropriate type.  See Note [KnownNat & KnownSymbol and EvLit]
 -- in TcEvidence.  The coercion happens in 2 steps:
@@ -2632,7 +2577,7 @@ makeLitDict :: Class -> Type -> EvTerm -> TcS LookupInstResult
 --     The process is mirrored for Symbols:
 --     String    -> SSymbol n
 --     SSymbol n -> KnownSymbol n
-makeLitDict clas ty et
+makeLitDict clas ty evLit
     | Just (_, co_dict) <- tcInstNewTyCon_maybe (classTyCon clas) [ty]
           -- co_dict :: KnownNat n ~ SNat n
     , [ meth ]   <- classMethods clas
@@ -2642,7 +2587,7 @@ makeLitDict clas ty et
                       $ idType meth         -- forall n. KnownNat n => SNat n
     , Just (_, co_rep) <- tcInstNewTyCon_maybe tcRep [ty]
           -- SNat n ~ Integer
-    , let ev_tm = mkEvCast et (mkTcSymCo (mkTcTransCo co_dict co_rep))
+    , let ev_tm = mkEvCast (EvLit evLit) (mkTcSymCo (mkTcTransCo co_dict co_rep))
     = return $ GenInst { lir_new_theta = []
                        , lir_mk_ev     = \_ -> ev_tm
                        , lir_safe_over = True }
@@ -2681,7 +2626,7 @@ doFunTy :: Class -> Type -> Type -> Type -> TcS LookupInstResult
 doFunTy clas ty arg_ty ret_ty
   = do { let preds = map (mk_typeable_pred clas) [arg_ty, ret_ty]
              build_ev [arg_ev, ret_ev] =
-                 evTypeable ty $ EvTypeableTrFun arg_ev ret_ev
+                 EvTypeable ty $ EvTypeableTrFun arg_ev ret_ev
              build_ev _ = panic "TcInteract.doFunTy"
        ; return $ GenInst preds build_ev True
        }
@@ -2692,7 +2637,7 @@ doFunTy clas ty arg_ty ret_ty
 doTyConApp :: Class -> Type -> TyCon -> [Kind] -> TcS LookupInstResult
 doTyConApp clas ty tc kind_args
   = return $ GenInst (map (mk_typeable_pred clas) kind_args)
-                     (\kinds -> evTypeable ty $ EvTypeableTyCon tc kinds)
+                     (\kinds -> EvTypeable ty $ EvTypeableTyCon tc kinds)
                      True
 
 -- | Representation for TyCon applications of a concrete kind. We just use the
@@ -2719,7 +2664,7 @@ doTyApp clas ty f tk
   = return NoInstance -- We can't solve until we know the ctr.
   | otherwise
   = return $ GenInst (map (mk_typeable_pred clas) [f, tk])
-                     (\[t1,t2] -> evTypeable ty $ EvTypeableTyApp t1 t2)
+                     (\[t1,t2] -> EvTypeable ty $ EvTypeableTyApp t1 t2)
                      True
 
 -- Emit a `Typeable` constraint for the given type.
@@ -2732,7 +2677,7 @@ mk_typeable_pred clas ty = mkClassPred clas [ typeKind ty, ty ]
 doTyLit :: Name -> Type -> TcS LookupInstResult
 doTyLit kc t = do { kc_clas <- tcLookupClass kc
                   ; let kc_pred    = mkClassPred kc_clas [ t ]
-                        mk_ev [ev] = evTypeable t $ EvTypeableTyLit ev
+                        mk_ev [ev] = EvTypeable t $ EvTypeableTyLit ev
                         mk_ev _    = panic "doTyLit"
                   ; return (GenInst [kc_pred] mk_ev True) }
 
@@ -2785,14 +2730,14 @@ a TypeRep for them.  For qualified but not polymorphic types, like
 matchLiftedEquality :: [Type] -> TcS LookupInstResult
 matchLiftedEquality args
   = return (GenInst { lir_new_theta = [ mkTyConApp eqPrimTyCon args ]
-                    , lir_mk_ev     = evDFunApp (dataConWrapId heqDataCon) args
+                    , lir_mk_ev     = EvDFunApp (dataConWrapId heqDataCon) args
                     , lir_safe_over = True })
 
 -- See also Note [The equality types story] in TysPrim
 matchLiftedCoercible :: [Type] -> TcS LookupInstResult
 matchLiftedCoercible args@[k, t1, t2]
   = return (GenInst { lir_new_theta = [ mkTyConApp eqReprPrimTyCon args' ]
-                    , lir_mk_ev     = evDFunApp (dataConWrapId coercibleDataCon)
+                    , lir_mk_ev     = EvDFunApp (dataConWrapId coercibleDataCon)
                                                 args
                     , lir_safe_over = True })
   where
@@ -2894,7 +2839,7 @@ matchHasField dflags short_cut clas tys loc
                          -- Use the equality proof to cast the selector Id to
                          -- type (r -> a), then use the newtype coercion to cast
                          -- it to a HasField dictionary.
-                         mk_ev (ev1:evs) = evSelector sel_id tvs evs `evCast` co
+                         mk_ev (ev1:evs) = EvSelector sel_id tvs evs `EvCast` co
                            where
                              co = mkTcSubCo (evTermCoercion ev1)
                                       `mkTcTransCo` mkTcSymCo co2

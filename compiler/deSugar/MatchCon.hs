@@ -142,7 +142,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
               shift (_, eqn@(EqnInfo { eqn_pats = ConPatOut{ pat_tvs = tvs, pat_dicts = ds,
                                                              pat_binds = bind, pat_args = args
                                                   } : pats }))
-                = do let ds_bind = dsTcEvBinds bind
+                = do ds_bind <- dsTcEvBinds bind
                      return ( wrapBinds (tvs `zip` tvs1)
                             . wrapBinds (ds  `zip` dicts1)
                             . mkCoreLets ds_bind
