@@ -211,14 +211,8 @@ stmtToInstrs stmt = do
 
     CmmBranch id          -> genBranch id
 
-    --It's cheaper to fall through than to jump.
-    --So we make the less likely branch the one jumped to.
-    CmmCondBranch arg true false (Just True) -> do
-      let mInv = maybeInvertCmmExpr arg
-      case mInv of
-        Nothing ->  stmtToInstrs (CmmCondBranch arg true false Nothing)
-        (Just inv) -> stmtToInstrs (CmmCondBranch inv false true (Just False))
-
+    --We try to arrange blocks such that the likely branch is the fallthrough
+    --in CmmContFlowOpt. So we can assume the condition is likely false here.
     CmmCondBranch arg true false _ -> do
       b1 <- genCondJump true arg
       b2 <- genBranch false
