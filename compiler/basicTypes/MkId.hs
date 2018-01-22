@@ -861,7 +861,7 @@ dataConArgUnpack arg_ty
        do { rep_ids <- mapM newLocal rep_tys
           ; let unbox_fn body
                   = Case (Var arg_id) arg_id (exprType body)
-                         [(DataAlt con, rep_ids, body, defFreq)] --TODOF: Check this
+                         [(DataAlt con, rep_ids, body, defFreq)]
           ; return (rep_ids, unbox_fn) }
      , Boxer $ \ subst ->
        do { rep_ids <- mapM (newLocal . TcType.substTyUnchecked subst) rep_tys
