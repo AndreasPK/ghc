@@ -106,7 +106,9 @@ module BasicTypes(
 
         IntWithInf, infinity, treatZeroAsInf, mkIntWithInf, intGtLimit,
 
-        SpliceExplicitFlag(..)
+        SpliceExplicitFlag(..),
+
+        Freq, neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq, alwaysFreq
    ) where
 
 import GhcPrelude
@@ -1613,3 +1615,37 @@ data SpliceExplicitFlag
           = ExplicitSplice | -- ^ <=> $(f x y)
             ImplicitSplice   -- ^ <=> f x y,  i.e. a naked top level expression
     deriving Data
+
+{-
+************************************************************************
+*                                                                      *
+    Freq - Relative frequency with which a alternative is taken
+*                                                                      *
+************************************************************************
+
+Freq - Relative frequency with which a alternative is taken
+
+We use a Int for performance reasons, however only the named
+predefined values should be used.
+
+Meaning of values:
+* f < 0: Optimize for the assumption the alternative is never taken.
+* f >= 0: Values are relative to each other, for two alternatives:
+          (a1, f1) (a2,f1*10)
+          We assume a1 is taken once for every 10 times a2 is taken.
+-}
+
+-- | Frequency with which a alternative is taken, values are relative to each other. 
+type Freq = Int
+
+neverFreq, rareFreq, someFreq, defFreq,
+  oftenFreq, usuallyFreq, alwaysFreq :: Freq
+neverFreq = -1000
+rareFreq = div defFreq 5
+someFreq = div defFreq 2
+defFreq = 1000
+oftenFreq = defFreq * 2
+usuallyFreq = defFreq * 10
+--Don't go crazy here, for large switches we otherwise we might run into
+--integer overflow issues on 32bit platforms.
+alwaysFreq = defFreq * 50
