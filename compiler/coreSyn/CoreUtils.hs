@@ -515,14 +515,14 @@ This makes it easy to find, though it makes matching marginally harder.
 -}
 
 -- | Extract the default case alternative
-findDefault :: [(AltCon, [a], b, Freq)] -> ([(AltCon, [a], b,Freq)], Maybe b)
-findDefault ((DEFAULT,args,rhs,_freq) : alts) = ASSERT( null args ) (alts, Just rhs)
+findDefault :: [(AltCon, [a], b, Freq)] -> ([(AltCon, [a], b,Freq)], Maybe (b,Freq))
+findDefault ((DEFAULT,args,rhs,freq) : alts) = ASSERT( null args ) (alts, Just (rhs,freq))
 findDefault alts                        =                     (alts, Nothing)
 
 --TODOF: With frequency
-addDefault :: [(AltCon, [a], b, Freq)] -> Maybe b -> [(AltCon, [a], b, Freq)]
+addDefault :: [(AltCon, [a], b, Freq)] -> Maybe (b, Freq) -> [(AltCon, [a], b, Freq)]
 addDefault alts Nothing    = alts
-addDefault alts (Just rhs) = (DEFAULT, [], rhs, 0) : alts
+addDefault alts (Just (rhs,freq)) = (DEFAULT, [], rhs, freq) : alts
 
 isDefaultAlt :: (AltCon, a, b, Freq) -> Bool
 isDefaultAlt (DEFAULT, _, _, _) = True

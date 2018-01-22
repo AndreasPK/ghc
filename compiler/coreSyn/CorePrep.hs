@@ -647,7 +647,7 @@ cpeRhsE env (Case scrut bndr ty alts)
                  -- unexpectedly returns.
                | gopt Opt_CatchBottoms (cpe_dynFlags env)
                , not (altsAreExhaustive alts)
-               = addDefault alts (Just err)
+               = addDefault alts (Just (err, -1000))
                | otherwise = alts
                where err = mkRuntimeErrorApp rUNTIME_ERROR_ID ty
                                              "Bottoming expression returned"
