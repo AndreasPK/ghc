@@ -50,8 +50,6 @@ import Pair
 import Util
 import ErrUtils
 import Module          ( moduleName, pprModuleName )
-import Debug.Trace
-
 
 {-
 The guts of the simplifier is in this module, but the driver loop for

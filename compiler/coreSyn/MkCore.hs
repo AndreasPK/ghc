@@ -108,7 +108,6 @@ mkCoreLet :: CoreBind -> CoreExpr -> CoreExpr
 mkCoreLet (NonRec bndr rhs) body        -- See Note [CoreSyn let/app invariant]
   | needsCaseBinding (idType bndr) rhs
   , not (isJoinId bndr)
-  --TODOF: Check default value
   = Case rhs bndr (exprType body) [(DEFAULT,[],body,defFreq)]
 mkCoreLet bind body
   = Let bind body
@@ -173,7 +172,6 @@ mk_val_app fun arg arg_ty res_ty
   = App fun arg                -- The vastly common case
 
   | otherwise
-  --TODOF: Default value
   = Case arg arg_id res_ty [(DEFAULT,[],App fun (Var arg_id), defFreq)]
   where
     arg_id = mkWildValBinder arg_ty
@@ -204,13 +202,21 @@ mkWildCase :: CoreExpr -> Type -> Type -> [CoreAlt] -> CoreExpr
 mkWildCase scrut scrut_ty res_ty alts
   = Case scrut (mkWildValBinder scrut_ty) res_ty alts
 
---TODOF: Annotation
-mkIfThenElse :: CoreExpr -> CoreExpr -> CoreExpr -> CoreExpr
-mkIfThenElse guard then_expr else_expr
+-- | Create a core if/then/else expression
+-- Likelyhood is a pair of (condFreqTrue, condFreqTrue)
+-- So if false never happens its (alwaysFreq, neverFreq)
+mkIfThenElse :: CoreExpr -> CoreExpr -> CoreExpr -> Maybe (Freq, Freq) -> CoreExpr
+mkIfThenElse guard then_expr else_expr likelyhood
 -- Not going to be refining, so okay to take the type of the "then" clause
   = mkWildCase guard boolTy (exprType then_expr)
-         [ (DataAlt falseDataCon, [], else_expr, defFreq),       -- Increasing order of tag!
-           (DataAlt trueDataCon,  [], then_expr, defFreq) ]
+         [ (DataAlt falseDataCon, [], else_expr, freqFalse),       -- Increasing order of tag!
+           (DataAlt trueDataCon,  [], then_expr, freqTrue )]
+  where
+    freqFalse, freqTrue :: Freq
+    freqFalse  = maybe defFreq snd likelyhood
+    freqTrue   = maybe defFreq fst likelyhood
+    
+  
 
 castBottomExpr :: CoreExpr -> Type -> CoreExpr
 -- (castBottomExpr e ty), assuming that 'e' diverges,

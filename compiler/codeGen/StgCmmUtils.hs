@@ -544,7 +544,7 @@ type LitBound = (Maybe Literal, Maybe Literal)
 noBound :: LitBound
 noBound = (Nothing, Nothing)
 
---TODOF: Do: 
+--TODOF: Do: float_switch
 {-
   * Compute chance for the leaves
 

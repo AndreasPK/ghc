@@ -518,7 +518,7 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdIf mb_fun cond then_cmd else_cmd)
        Just fun -> do { fun_apps <- dsSyntaxExpr fun [core_cond, core_left, core_right]
                       ; matchEnvStack env_ids stack_id fun_apps }
        Nothing  -> matchEnvStack env_ids stack_id $
-                   mkIfThenElse core_cond core_left core_right
+                   mkIfThenElse core_cond core_left core_right Nothing
 
     return (do_premap ids in_ty sum_ty res_ty
                 core_if

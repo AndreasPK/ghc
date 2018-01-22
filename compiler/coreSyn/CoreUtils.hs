@@ -86,7 +86,7 @@ import DynFlags
 import FastString
 import Maybes
 import ListSetOps       ( minusList )
-import BasicTypes       ( Arity, isConLike )
+import BasicTypes       ( Arity, isConLike, combineFreqs, Freq )
 import Platform
 import Util
 import Pair
@@ -791,14 +791,8 @@ combineIdenticalAlts imposs_deflt_cons ((con1,bndrs1,rhs1,freq1) : rest_alts)
     -}
     deflt_alt = (DEFAULT, [], mkTicks (concat tickss) rhs1, combinedFreq) :: CoreAlt
 
-    combineFreq :: Freq -> Freq -> Freq
-    combineFreq f1 f2 
-      | f1 < 0 && f2 >= 0 = f2
-      | f2 < 0 && f1 >= 0 = f1
-      | otherwise = f1 + f2
-
     combinedFreq :: Int
-    combinedFreq = foldl' combineFreq freq1 (map (\(_,_,_,f) -> f) elim_rest)
+    combinedFreq = foldl' combineFreqs freq1 (map (\(_,_,_,f) -> f) elim_rest)
 
      -- See Note [Care with impossible-constructors when combining alternatives]
     imposs_deflt_cons' = imposs_deflt_cons `minusList` elim_cons

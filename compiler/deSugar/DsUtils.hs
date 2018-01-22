@@ -255,7 +255,7 @@ mkEvalMatchResult var ty
 mkGuardedMatchResult :: CoreExpr -> MatchResult -> MatchResult
 mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
   = MatchResult CanFail (\fail -> do body <- body_fn fail
-                                     return (mkIfThenElse pred_expr body fail))
+                                     return (mkIfThenElse pred_expr body fail Nothing))
 
 mkCoPrimCaseMatchResult :: Id                  -- Scrutinee
                         -> Type                      -- Type of the case
