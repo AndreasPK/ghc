@@ -1425,6 +1425,13 @@ zonkEvTerm env (EvExpr e) =
   EvExpr <$> zonkCoreExpr env e
 zonkEvTerm env (EvTypeable ty ev) =
   EvTypeable <$> zonkTcTypeToType env ty <*> zonkEvTypeable env ev
+zonkEvTerm env (EvCallStack ty cs)
+  = do ty' <- zonkTcTypeToType env ty
+       case cs of
+          EvCsEmpty -> return (EvCallStack ty' cs)
+          EvCsPushCall n l tm -> do { tm' <- zonkEvTerm env tm
+                                    ; return (EvCallStack ty' (EvCsPushCall n l tm')) }
+
 
 zonkCoreExpr :: ZonkEnv -> CoreExpr -> TcM CoreExpr
 zonkCoreExpr env (Var v)
