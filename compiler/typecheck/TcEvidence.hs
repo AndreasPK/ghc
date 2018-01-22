@@ -19,9 +19,9 @@ module TcEvidence (
   sccEvBinds, evBindVar,
 
   -- EvTerm (already a CoreExpr)
-  EvTerm,
+  EvTerm(..),
   evId, evCoercion, evCast, evDFunApp,  evSuperClass, evSelector,
-  mkEvCast, evVarsOfTerm, mkEvScSelectors,
+  mkEvCast, evVarsOfTerm, mkEvScSelectors, evTypeable, evCallStack,
 
   evTermCoercion,
   EvCallStack(..),
@@ -320,7 +320,7 @@ mkWpEvApps :: [EvTerm] -> HsWrapper
 mkWpEvApps args = mk_co_app_fn WpEvApp args
 
 mkWpEvVarApps :: [EvVar] -> HsWrapper
-mkWpEvVarApps vs = mk_co_app_fn WpEvApp (map evId vs)
+mkWpEvVarApps vs = mk_co_app_fn WpEvApp (map (EvExpr . evId) vs)
 
 mkWpTyLams :: [TyVar] -> HsWrapper
 mkWpTyLams ids = mk_co_lam_fn WpTyLam ids
@@ -480,33 +480,43 @@ mkGivenEvBind :: EvVar -> EvTerm -> EvBind
 mkGivenEvBind ev tm = EvBind { eb_is_given = True, eb_lhs = ev, eb_rhs = tm }
 
 
-type EvTerm = CoreExpr
+-- An EvTerm is, conceptually, a CoreExpr that implements the constraint.
+-- Unfortunately, we cannot just do
+--   type EvTerm  = CoreExpr
+-- Because of staging problems issues around EvTypeable
+data EvTerm
+    = EvExpr EvExpr
+    | EvCallStack EvCallStack      -- Dictionary for CallStack implicit parameters
+    | EvTypeable Type EvTypeable   -- Dictionary for (Typeable ty)
+  deriving Data.Data
+
+type EvExpr = CoreExpr
 
 -- An EvTerm is (usually) constructed by any of the constructors here
 -- and those more complicates ones who were moved to module TcEvTerm
 
 -- | Any sort of evidence Id, including coercions
-evId ::  EvId -> EvTerm
+evId ::  EvId -> EvExpr
 evId = Var
 
 -- coercion bindings
 -- See Note [Coercion evidence terms]
-evCoercion :: TcCoercion -> EvTerm
+evCoercion :: TcCoercion -> EvExpr
 evCoercion = Coercion
 
 -- | d |> co
-evCast :: EvTerm -> TcCoercion -> EvTerm
+evCast :: EvExpr -> TcCoercion -> EvExpr
 evCast et tc | isReflCo tc = et
              | otherwise   = Cast et tc
 
 -- Dictionary instance application
-evDFunApp :: DFunId -> [Type] -> [EvTerm] -> EvTerm
+evDFunApp :: DFunId -> [Type] -> [EvExpr] -> EvExpr
 evDFunApp df tys ets = Var df `mkTyApps` tys `mkApps` ets
 
 -- n'th superclass. Used for both equalities and
 -- dictionaries, even though the former have no
 -- selector Id.  We count up from _0_
-evSuperClass :: EvTerm -> Int -> EvTerm
+evSuperClass :: EvExpr -> Int -> EvExpr
 evSuperClass d n = Var sc_sel_id `mkTyApps` tys `App` d
   where
     (cls, tys) = getClassPredTys (exprType d)
@@ -516,9 +526,16 @@ evSuperClass d n = Var sc_sel_id `mkTyApps` tys `App` d
 -- should be instantiated, used for HasField
 -- dictionaries; see Note [HasField instances]
 -- in TcInterface
-evSelector :: Id -> [Type] -> [EvTerm] -> EvTerm
+evSelector :: Id -> [Type] -> [EvExpr] -> EvExpr
 evSelector sel_id tys tms = Var sel_id `mkTyApps` tys `mkApps` tms
 
+
+-- Dictionary for (Typeable ty)
+evTypeable :: Type -> EvTypeable -> EvTerm
+evTypeable = EvTypeable
+
+evCallStack :: EvCallStack -> EvTerm
+evCallStack = EvCallStack
 
 -- | Instructions on how to make a 'Typeable' dictionary.
 -- See Note [Typeable evidence terms]
@@ -733,13 +750,13 @@ Important Details:
 
 -}
 
-mkEvCast :: EvTerm -> TcCoercion -> EvTerm
+mkEvCast :: EvExpr -> TcCoercion -> EvExpr
 mkEvCast ev lco
   | ASSERT2(tcCoercionRole lco == Representational, (vcat [text "Coercion of wrong role passed to mkEvCast:", ppr ev, ppr lco]))
     isTcReflCo lco = ev
   | otherwise      = evCast ev lco
 
-mkEvScSelectors :: EvTerm -> Class -> [TcType] -> [(TcPredType, EvTerm)]
+mkEvScSelectors :: EvExpr -> Class -> [TcType] -> [(TcPredType, EvExpr)]
 mkEvScSelectors ev cls tys
    = zipWith mk_pr (immSuperClasses cls tys) [0..]
   where
@@ -755,13 +772,31 @@ isEmptyTcEvBinds (TcEvBinds {}) = panic "isEmptyTcEvBinds"
 evTermCoercion :: EvTerm -> TcCoercion
 -- Applied only to EvTerms of type (s~t)
 -- See Note [Coercion evidence terms]
-evTermCoercion (Var v)       = mkCoVarCo v
-evTermCoercion (Coercion co) = co
-evTermCoercion (Cast tm co)  = mkCoCast (evTermCoercion tm) co
-evTermCoercion tm            = pprPanic "evTermCoercion" (ppr tm)
+evTermCoercion (EvExpr (Var v))       = mkCoVarCo v
+evTermCoercion (EvExpr (Coercion co)) = co
+evTermCoercion (EvExpr (Cast tm co))  = mkCoCast (evTermCoercion (EvExpr tm)) co
+evTermCoercion tm                     = pprPanic "evTermCoercion" (ppr tm)
 
 evVarsOfTerm :: EvTerm -> VarSet
-evVarsOfTerm = exprSomeFreeVars isEvVar
+evVarsOfTerm (EvExpr e) = exprSomeFreeVars isEvVar e
+evVarsOfTerm (EvCallStack cs)  = evVarsOfCallStack cs
+evVarsOfTerm (EvTypeable _ ev) = evVarsOfTypeable ev
+
+evVarsOfTerms :: [EvTerm] -> VarSet
+evVarsOfTerms = mapUnionVarSet evVarsOfTerm
+
+evVarsOfCallStack :: EvCallStack -> VarSet
+evVarsOfCallStack cs = case cs of
+  EvCsEmpty -> emptyVarSet
+  EvCsPushCall _ _ tm -> evVarsOfTerm tm
+
+evVarsOfTypeable :: EvTypeable -> VarSet
+evVarsOfTypeable ev =
+  case ev of
+    EvTypeableTyCon _ e   -> mapUnionVarSet evVarsOfTerm e
+    EvTypeableTyApp e1 e2 -> evVarsOfTerms [e1,e2]
+    EvTypeableTrFun e1 e2 -> evVarsOfTerms [e1,e2]
+    EvTypeableTyLit e     -> evVarsOfTerm e
 
 -- | Do SCC analysis on a bag of 'EvBind's.
 sccEvBinds :: Bag EvBind -> [SCC EvBind]
@@ -840,6 +875,11 @@ instance Outputable EvBind where
      where
        pp_gw = brackets (if is_given then char 'G' else char 'W')
    -- We cheat a bit and pretend EqVars are CoVars for the purposes of pretty printing
+
+instance Outputable EvTerm where
+  ppr (EvExpr e)         = ppr e
+  ppr (EvCallStack cs)   = ppr cs
+  ppr (EvTypeable ty ev) = ppr ev <+> dcolon <+> text "Typeable" <+> ppr ty
 
 instance Outputable EvCallStack where
   ppr EvCsEmpty

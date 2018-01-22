@@ -445,7 +445,7 @@ mk_strict_superclasses :: NameSet -> CtEvidence -> Class -> [Type] -> TcS [Ct]
 mk_strict_superclasses rec_clss ev cls tys
   | CtGiven { ctev_evar = evar, ctev_loc = loc } <- ev
   = do { sc_evs <- newGivenEvVars (mk_given_loc loc)
-                                  (mkEvScSelectors (evId evar) cls tys)
+                                  (EvExpr (mkEvScSelectors (evId evar) cls tys))
        ; concatMapM (mk_superclasses rec_clss) sc_evs }
 
   | all noFreeVarsOfType tys
@@ -1910,7 +1910,7 @@ rewriteEqEvidence old_ev swapped nlhs nrhs lhs_co rhs_co
   = do { let new_tm = evCoercion (lhs_co
                                   `mkTcTransCo` maybeSym swapped (mkTcCoVarCo old_evar)
                                   `mkTcTransCo` mkTcSymCo rhs_co)
-       ; new_ev <- newGivenEvVar loc' (new_pred, new_tm)
+       ; new_ev <- newGivenEvVar loc' (new_pred, EvExpr new_tm)
        ; continueWith new_ev }
 
   | CtWanted { ctev_dest = dest } <- old_ev

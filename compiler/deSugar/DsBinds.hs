@@ -39,12 +39,15 @@ import CoreUnfold
 import CoreFVs
 import Digraph
 
+import PrelNames
 import TyCon
 import TcEvidence
 import TcType
 import Type
 import Coercion
+import TysWiredIn ( typeNatKind, typeSymbolKind )
 import Id
+import MkId(proxyHashId)
 import Name
 import VarSet
 import Rules
@@ -181,7 +184,7 @@ dsHsBind dflags (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
                                    -- addDictsDs: push type constraints deeper
                                    --             for inner pattern match check
 
-       ; let ds_ev_binds = dsTcEvBinds_s ev_binds
+       ; ds_ev_binds <- dsTcEvBinds_s ev_binds
 
        -- dsAbsBinds does the hard work
        ; dsAbsBinds dflags tyvars dicts exports ds_ev_binds ds_binds has_sig }
@@ -1102,7 +1105,7 @@ dsHsWrapper WpHole            = return $ \e -> e
 dsHsWrapper (WpTyApp ty)      = return $ \e -> App e (Type ty)
 dsHsWrapper (WpEvLam ev)      = return $ Lam ev
 dsHsWrapper (WpTyLam tv)      = return $ Lam tv
-dsHsWrapper (WpLet ev_binds)  = do { let bs = dsTcEvBinds ev_binds
+dsHsWrapper (WpLet ev_binds)  = do { bs <- dsTcEvBinds ev_binds
                                    ; return (mkCoreLets bs) }
 dsHsWrapper (WpCompose c1 c2) = do { w1 <- dsHsWrapper c1
                                    ; w2 <- dsHsWrapper c2
@@ -1121,27 +1124,28 @@ dsHsWrapper (WpFun c1 c2 t1 doc)
                                      else return id }  -- this return is irrelevant
 dsHsWrapper (WpCast co)       = ASSERT(coercionRole co == Representational)
                                 return $ \e -> mkCastDs e co
-dsHsWrapper (WpEvApp tm)      = do { return (\e -> App e tm) }
+dsHsWrapper (WpEvApp tm)      = do { core_tm <- dsEvTerm tm
+                                   ; return (\e -> App e core_tm) }
 
 --------------------------------------
-dsTcEvBinds_s :: [TcEvBinds] -> [CoreBind]
-dsTcEvBinds_s []       = []
+dsTcEvBinds_s :: [TcEvBinds] -> DsM [CoreBind]
+dsTcEvBinds_s []       = return []
 dsTcEvBinds_s (b:rest) = ASSERT( null rest )  -- Zonker ensures null
                          dsTcEvBinds b
 
-dsTcEvBinds :: TcEvBinds -> [CoreBind]
+dsTcEvBinds :: TcEvBinds -> DsM [CoreBind]
 dsTcEvBinds (TcEvBinds {}) = panic "dsEvBinds"    -- Zonker has got rid of this
 dsTcEvBinds (EvBinds bs)   = dsEvBinds bs
 
-dsEvBinds :: Bag EvBind -> [CoreBind]
-dsEvBinds bs = map ds_scc (sccEvBinds bs)
+dsEvBinds :: Bag EvBind -> DsM [CoreBind]
+dsEvBinds bs = mapM ds_scc (sccEvBinds bs)
   where
     ds_scc (AcyclicSCC (EvBind { eb_lhs = v, eb_rhs = r}))
-                          = (NonRec v r)
-    ds_scc (CyclicSCC bs) = Rec (map dsEvBind bs)
+                          = liftM (NonRec v) (dsEvTerm r)
+    ds_scc (CyclicSCC bs) = liftM Rec (mapM dsEvBind bs)
 
-dsEvBind :: EvBind -> (Id, CoreExpr)
-dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = (v,r)
+dsEvBind :: EvBind -> DsM (Id, CoreExpr)
+dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = liftM ((,) v) (dsEvTerm r)
 
 {-**********************************************************************
 *                                                                      *
@@ -1149,43 +1153,10 @@ dsEvBind (EvBind { eb_lhs = v, eb_rhs = r}) = (v,r)
 *                                                                      *
 **********************************************************************-}
 
-{-
 dsEvTerm :: EvTerm -> DsM CoreExpr
-dsEvTerm (EvId v)           = return (Var v)
+dsEvTerm (EvExpr e)         = return e
 dsEvTerm (EvCallStack cs)   = dsEvCallStack cs
 dsEvTerm (EvTypeable ty ev) = dsEvTypeable ty ev
-dsEvTerm (EvLit (EvNum n))  = mkNaturalExpr n
-dsEvTerm (EvLit (EvStr s))  = mkStringExprFS s
-
-dsEvTerm (EvCast tm co)
-  = do { tm' <- dsEvTerm tm
-       ; return $ mkCastDs tm' co }
-
-dsEvTerm (EvDFunApp df tys tms)
-  = do { tms' <- mapM dsEvTerm tms
-       ; return $ Var df `mkTyApps` tys `mkApps` tms' }
-  -- The use of mkApps here is OK vis-a-vis levity polymorphism because
-  -- the terms are always evidence variables with types of kind Constraint
-
-dsEvTerm (EvCoercion co) = return (Coercion co)
-dsEvTerm (EvSuperClass d n)
-  = do { d' <- dsEvTerm d
-       ; let (cls, tys) = getClassPredTys (exprType d')
-             sc_sel_id  = classSCSelId cls n    -- Zero-indexed
-       ; return $ Var sc_sel_id `mkTyApps` tys `App` d' }
-
-dsEvTerm (EvSelector sel_id tys tms)
-  = do { tms' <- mapM dsEvTerm tms
-       ; return $ Var sel_id `mkTyApps` tys `mkApps` tms' }
-
-dsEvTerm (EvDelayedError ty msg) = return $ dsEvDelayedError ty msg
-
-dsEvDelayedError :: Type -> FastString -> CoreExpr
-dsEvDelayedError ty msg
-  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
-  where
-    errorId = tYPE_ERROR_ID
-    litMsg  = Lit (MachStr (fastStringToByteString msg))
 
 {-**********************************************************************
 *                                                                      *
@@ -1307,5 +1278,48 @@ tyConRep tc
        ; return (Var tc_rep_id) }
   | otherwise
   = pprPanic "tyConRep" (ppr tc)
--}
 
+{-**********************************************************************
+*                                                                      *
+           Desugaring EvCallStack evidence
+*                                                                      *
+**********************************************************************-}
+
+dsEvCallStack :: EvCallStack -> DsM CoreExpr
+-- See Note [Overview of implicit CallStacks] in TcEvidence.hs
+dsEvCallStack cs = do
+  df            <- getDynFlags
+  m             <- getModule
+  srcLocDataCon <- dsLookupDataCon srcLocDataConName
+  let mkSrcLoc l =
+        liftM (mkCoreConApps srcLocDataCon)
+              (sequence [ mkStringExprFS (unitIdFS $ moduleUnitId m)
+                        , mkStringExprFS (moduleNameFS $ moduleName m)
+                        , mkStringExprFS (srcSpanFile l)
+                        , return $ mkIntExprInt df (srcSpanStartLine l)
+                        , return $ mkIntExprInt df (srcSpanStartCol l)
+                        , return $ mkIntExprInt df (srcSpanEndLine l)
+                        , return $ mkIntExprInt df (srcSpanEndCol l)
+                        ])
+
+  emptyCS <- Var <$> dsLookupGlobalId emptyCallStackName
+
+  pushCSVar <- dsLookupGlobalId pushCallStackName
+  let pushCS name loc rest =
+        mkCoreApps (Var pushCSVar) [mkCoreTup [name, loc], rest]
+
+  let mkPush name loc tm = do
+        nameExpr <- mkStringExprFS name
+        locExpr <- mkSrcLoc loc
+        case tm of
+          EvCallStack EvCsEmpty -> return (pushCS nameExpr locExpr emptyCS)
+          _ -> do tmExpr  <- dsEvTerm tm
+                  -- at this point tmExpr :: IP sym CallStack
+                  -- but we need the actual CallStack to pass to pushCS,
+                  -- so we use unwrapIP to strip the dictionary wrapper
+                  -- See Note [Overview of implicit CallStacks]
+                  let ip_co = unwrapIP (exprType tmExpr)
+                  return (pushCS nameExpr locExpr (mkCastDs tmExpr ip_co))
+  case cs of
+    EvCsPushCall name loc tm -> mkPush (occNameFS $ getOccName name) loc tm
+    EvCsEmpty -> return emptyCS
