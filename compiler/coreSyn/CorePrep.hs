@@ -1065,7 +1065,7 @@ saturateDataToTag sat_expr
         = do { arg_id <- newVar (exprType arg)
              ; let arg_id1 = setIdUnfolding arg_id evaldUnfolding
              ; return (Case arg arg_id1 (exprType app)
-                            [(DEFAULT, [], fun `App` Var arg_id1, defFreq)]) } --TODOF: Check
+                            [(DEFAULT, [], fun `App` Var arg_id1, defFreq)]) }
 
     eval_data2tag_arg (Tick t app)    -- Scc notes can appear
         = do { app' <- eval_data2tag_arg app

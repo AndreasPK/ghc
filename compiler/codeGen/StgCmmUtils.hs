@@ -503,17 +503,6 @@ mk_discrete_switch signed tag_expr branches mb_deflt range
       mkSwitchTargets signed range mb_deflt 
         (M.fromList $ map (\(i,e,f)-> (i,(e,f))) branches)
 
---TODOF: Check, might need freq fiddling
-divideBranches :: Ord a => [(a,b,c)] -> ([(a,b,c)], a, [(a,b,c)])
-divideBranches branches = (lo_branches, mid, hi_branches)
-  where
-    -- 2 branches => n_branches `div` 2 = 1
-    --            => branches !! 1 give the *second* tag
-    -- There are always at least 2 branches here
-    (mid,_,_) = branches !! (length branches `div` 2)
-    (lo_branches, hi_branches) = span is_lo branches
-    is_lo (t,_,_) = t < mid
-
 --------------
 emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
                -> [(Literal, CmmAGraphScoped, Freq)] -- Tagged branches
@@ -540,7 +529,6 @@ emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
               | otherwise = (0, tARGET_MAX_WORD dflags)
 
     if isFloatType cmm_ty
-    --TODOF: Check
     then emit =<< mk_float_switch rep scrut' (deflt_lbl, dfreq) noBound branches_lbls
     else emit $ mk_discrete_switch
         signed
@@ -556,14 +544,31 @@ type LitBound = (Maybe Literal, Maybe Literal)
 noBound :: LitBound
 noBound = (Nothing, Nothing)
 
---TODOF: Figure out and use freq
+--TODOF: Do: 
+{-
+  * Compute chance for the leaves
+
+  * Given a list of literals we currently just split the list in the middle.
+    When given weights we want to instead split to list such that each half
+    has the same weight.
+
+  Eg. given (lit,weight) of [(0,1),(1,1),(2,1),(3,99)] we want to split the
+  list into [(0,1),(1,1),(2,1)] and [(3,99)].
+
+  Things to consider:
+    * Weights indicating errors have to be rounded up to zero,
+      otherwise they would distort the results.
+    * How should entries with no information be treated?
+      -> Probably good enough to use the default value.
+    * Doing this exact could be expensive, especially for large lists when
+      done wrong. Enable this only at -O2?  
+-}
 mk_float_switch :: Width -> CmmExpr -> (BlockId, Freq)
               -> LitBound
               -> [(Literal,BlockId,Freq)]
               -> FCode CmmAGraph
 mk_float_switch rep scrut (deflt, dfrq) _bounds [(lit,blk,frq)]
   = do dflags <- getDynFlags
-      --TODOF: Use freq info here
        return $ mkCbranch (cond dflags) deflt blk Nothing
   where
     cond dflags = CmmMachOp ne [scrut, CmmLit cmm_lit]
@@ -575,12 +580,23 @@ mk_float_switch rep scrut (deflt_blk_id,dfreq) (lo_bound, hi_bound) branches
   = do dflags <- getDynFlags
        lo_blk <- mk_float_switch rep scrut (deflt_blk_id,dfreq) bounds_lo lo_branches
        hi_blk <- mk_float_switch rep scrut (deflt_blk_id,dfreq) bounds_hi hi_branches
-       mkCmmIfThenElse (cond dflags) lo_blk hi_blk Nothing --TODOF: Use Freq
+       mkCmmIfThenElse (cond dflags) lo_blk hi_blk Nothing
   where
+    
     (lo_branches, mid_lit, hi_branches) = divideBranches branches
 
     bounds_lo = (lo_bound, Just mid_lit)
     bounds_hi = (Just mid_lit, hi_bound)
+
+    divideBranches :: Ord a => [(a,b,c)] -> ([(a,b,c)], a, [(a,b,c)])
+    divideBranches branches = (lo_branches, mid, hi_branches)
+      where
+        -- 2 branches => n_branches `div` 2 = 1
+        --            => branches !! 1 give the *second* tag
+        -- There are always at least 2 branches here
+        (mid,_,_) = branches !! (length branches `div` 2)
+        (lo_branches, hi_branches) = span is_lo branches
+        is_lo (t,_,_) = t < mid
 
     cond dflags = CmmMachOp lt [scrut, CmmLit cmm_lit]
       where

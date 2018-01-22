@@ -225,10 +225,9 @@ simple_opt_expr env expr
     go lam@(Lam {})     = go_lam env [] lam
     go (Case e b ty as)
        -- See Note [Getting the map/coerce RULE to work]
-       -- TODOF: Update this
       | isDeadBinder b
       , Just (con, _tys, es) <- exprIsConApp_maybe in_scope_env e'
-      , Just (altcon, bs, rhs, _freq) <- findAlt (DataAlt con) as
+      , Just (altcon, bs, rhs, _) <- findAlt (DataAlt con) as
       = case altcon of
           DEFAULT -> go rhs
           _       -> foldr wrapLet (simple_opt_expr env' rhs) mb_prs
