@@ -519,7 +519,6 @@ findDefault :: [(AltCon, [a], b, Freq)] -> ([(AltCon, [a], b,Freq)], Maybe (b,Fr
 findDefault ((DEFAULT,args,rhs,freq) : alts) = ASSERT( null args ) (alts, Just (rhs,freq))
 findDefault alts                        =                     (alts, Nothing)
 
---TODOF: With frequency
 addDefault :: [(AltCon, [a], b, Freq)] -> Maybe (b, Freq) -> [(AltCon, [a], b, Freq)]
 addDefault alts Nothing    = alts
 addDefault alts (Just (rhs,freq)) = (DEFAULT, [], rhs, freq) : alts
@@ -779,15 +778,27 @@ combineIdenticalAlts :: [AltCon]    -- Constructors that cannot match DEFAULT
                          [CoreAlt]) -- New alternatives
 -- See Note [Combine identical alternatives]
 -- True <=> we did some combining, result is a single DEFAULT alternative
---TODOF: Combine frequencies as well
-combineIdenticalAlts imposs_deflt_cons ((con1,bndrs1,rhs1,_f1) : rest_alts)
+combineIdenticalAlts imposs_deflt_cons ((con1,bndrs1,rhs1,freq1) : rest_alts)
   | all isDeadBinder bndrs1    -- Remember the default
   , not (null elim_rest) -- alternative comes first
   = (True, imposs_deflt_cons', deflt_alt : filtered_rest)
   where
     (elim_rest, filtered_rest) = partition identical_to_alt1 rest_alts
     --TODOF: Sum up chance of eliminated alternatives
-    deflt_alt = (DEFAULT, [], mkTicks (concat tickss) rhs1, 0) :: CoreAlt
+    {- * Care is required when one of the alternatives is < zero,
+         in this case we want to just use the higher of the two values.
+         If both are pos/neg simply adding them up is fine.
+    -}
+    deflt_alt = (DEFAULT, [], mkTicks (concat tickss) rhs1, combinedFreq) :: CoreAlt
+
+    combineFreq :: Freq -> Freq -> Freq
+    combineFreq f1 f2 
+      | f1 < 0 && f2 >= 0 = f2
+      | f2 < 0 && f1 >= 0 = f1
+      | otherwise = f1 + f2
+
+    combinedFreq :: Int
+    combinedFreq = foldl' combineFreq freq1 (map (\(_,_,_,f) -> f) elim_rest)
 
      -- See Note [Care with impossible-constructors when combining alternatives]
     imposs_deflt_cons' = imposs_deflt_cons `minusList` elim_cons

@@ -343,14 +343,6 @@ type Arg b = Expr b
 -- the variables bound from the constructor, and the expression to be executed given that binding.
 -- The default alternative is @(DEFAULT, [], rhs)@
 
---Chance a given branch is taken, values should be relative to each other.
---Everything below zero is considered an error branch and shouldn't be taken
---under normal circumstances.
-type Freq = Int
-
-defFreq :: Freq
-defFreq = 0
-
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 type Alt b = (AltCon, [b], Expr b, Freq)

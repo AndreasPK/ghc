@@ -238,7 +238,7 @@ lintStgAlts alts scrut_ty = do
           -- We can't check that the alternatives have the
           -- same type, because they don't, with unsafeCoerce#
 
-lintAlt :: Type -> (AltCon, [Id], StgExpr, StgFreq) -> LintM (Maybe Type)
+lintAlt :: Type -> (AltCon, [Id], StgExpr, Freq) -> LintM (Maybe Type)
 lintAlt _ (DEFAULT, _, rhs, _)
  = lintStgExpr rhs
 

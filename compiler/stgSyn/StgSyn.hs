@@ -15,7 +15,7 @@ module StgSyn (
         GenStgArg(..),
 
         GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
-        GenStgAlt, AltType(..), StgFreq,
+        GenStgAlt, AltType(..),
 
         module CoreSyn, --TODOF: Seperate stg type? Move to basic types?
 
@@ -84,8 +84,6 @@ are the boring things [except note the @GenStgRhs@], parameterised
 with respect to binder and occurrence information (just as in
 @CoreSyn@):
 -}
-
-type StgFreq = Freq
 
 -- | A top-level binding.
 data GenStgTopBinding bndr occ
