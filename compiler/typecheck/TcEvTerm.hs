@@ -81,7 +81,7 @@ type TypeRepExpr = CoreExpr
 -- | Returns a @CoreExpr :: TypeRep ty@
 ds_ev_typeable :: Type -> EvTypeable -> TcS CoreExpr
 ds_ev_typeable ty (EvTypeableTyCon tc kind_ev)
-  = do { mkTrCon <- lookupId mkTrConName
+  = do { mkTrCon <- tcLookupId mkTrConName
                     -- mkTrCon :: forall k (a :: k). TyCon -> TypeRep k -> TypeRep a
        ; someTypeRepTyCon <- tcLookupTyCon someTypeRepTyConName
        ; someTypeRepDataCon <- lookupDataCon someTypeRepDataConName
@@ -90,7 +90,7 @@ ds_ev_typeable ty (EvTypeableTyCon tc kind_ev)
        ; tc_rep <- tyConRep tc                      -- :: TyCon
        ; let ks = tyConAppArgs ty
              -- Construct a SomeTypeRep
-             toSomeTypeRep :: MonadThings m => Type -> EvTerm -> m CoreExpr
+             toSomeTypeRep :: Type -> EvTerm -> TcS CoreExpr
              toSomeTypeRep t ev = do
                  rep <- getRep ev t
                  return $ mkCoreConApps someTypeRepDataCon [Type (typeKind t), Type t, rep]
@@ -113,7 +113,7 @@ ds_ev_typeable ty (EvTypeableTyApp ev1 ev2)
   | Just (t1,t2) <- splitAppTy_maybe ty
   = do { e1  <- getRep ev1 t1
        ; e2  <- getRep ev2 t2
-       ; mkTrApp <- lookupId mkTrAppName
+       ; mkTrApp <- tcLookupId mkTrAppName
                     -- mkTrApp :: forall k1 k2 (a :: k1 -> k2) (b :: k1).
                     --            TypeRep a -> TypeRep b -> TypeRep (a b)
        ; let (k1, k2) = splitFunTy (typeKind t1)
@@ -127,7 +127,7 @@ ds_ev_typeable ty (EvTypeableTrFun ev1 ev2)
   | Just (t1,t2) <- splitFunTy_maybe ty
   = do { e1 <- getRep ev1 t1
        ; e2 <- getRep ev2 t2
-       ; mkTrFun <- lookupId mkTrFunName
+       ; mkTrFun <- tcLookupId mkTrFunName
                     -- mkTrFun :: forall r1 r2 (a :: TYPE r1) (b :: TYPE r2).
                     --            TypeRep a -> TypeRep b -> TypeRep (a -> b)
        ; let r1 = getRuntimeRep t1
@@ -137,7 +137,7 @@ ds_ev_typeable ty (EvTypeableTrFun ev1 ev2)
        }
 
 ds_ev_typeable ty (EvTypeableTyLit dict)
-  = do { fun  <- lookupId tr_fun
+  = do { fun  <- tcLookupId tr_fun
        ; let proxy = mkTyApps (Var proxyHashId) [ty_kind, ty]
        ; return (mkApps (mkTyApps (Var fun) [ty]) [ dict, proxy ]) }
   where
@@ -153,23 +153,22 @@ ds_ev_typeable ty (EvTypeableTyLit dict)
 ds_ev_typeable ty ev
   = pprPanic "dsEvTypeable" (ppr ty $$ ppr ev)
 
-getRep :: MonadThings m
-       => EvTerm          -- ^ EvTerm for @Typeable ty@
+getRep :: EvTerm          -- ^ EvTerm for @Typeable ty@
        -> Type            -- ^ The type @ty@
-       -> m TypeRepExpr -- ^ Return @CoreExpr :: TypeRep ty@
+       -> TcS TypeRepExpr -- ^ Return @CoreExpr :: TypeRep ty@
                           -- namely @typeRep# dict@
 -- Remember that
 --   typeRep# :: forall k (a::k). Typeable k a -> TypeRep a
 getRep ev ty
-  = do { typeRepId     <- lookupId typeRepIdName
+  = do { typeRepId     <- tcLookupId typeRepIdName
        ; let ty_args = [typeKind ty, ty]
        ; return (mkApps (mkTyApps (Var typeRepId) ty_args) [ ev ]) }
 
-tyConRep :: MonadThings m => TyCon -> m CoreExpr
+tyConRep :: TyCon -> TcS CoreExpr
 -- Returns CoreExpr :: TyCon
 tyConRep tc
   | Just tc_rep_nm <- tyConRepName_maybe tc
-  = do { tc_rep_id <- lookupId tc_rep_nm
+  = do { tc_rep_id <- tcLookupId tc_rep_nm
        ; return (Var tc_rep_id) }
   | otherwise
   = pprPanic "tyConRep" (ppr tc)
