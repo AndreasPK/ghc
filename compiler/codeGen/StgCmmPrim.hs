@@ -1125,7 +1125,6 @@ genericFabsOp w [res_r] [aa]
                            mkAssign (CmmLocal res_r) (neg (CmmReg res_t))]
 
       g4 <- mkCmmIfThenElse (gt aa zero) g2 g3 Nothing
-        --TODOF: What are the odds
       emit =<< mkCmmIfThenElse (eq aa zero) g1 g4 Nothing
 
 genericFabsOp _ _ _ = panic "genericFabsOp"
@@ -1818,15 +1817,14 @@ doCopyMutableByteArrayOp = emitCopyByteArray copy
   where
     -- The only time the memory might overlap is when the two arrays
     -- we were provided are the same array!
-    -- TODO: Optimize branch for common case of no aliasing.
+    -- The common case is no aliasing so we set the likly value to `Just False`.
     copy src dst dst_p src_p bytes = do
         dflags <- getDynFlags
         [moveCall, cpyCall] <- forkAlts [
             getCode $ emitMemmoveCall dst_p src_p bytes 1,
             getCode $ emitMemcpyCall  dst_p src_p bytes 1
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
-        --TODOF: What are the odds
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall (Just False)
 
 emitCopyByteArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr
                       -> FCode ())
@@ -1963,7 +1961,8 @@ doCopyMutableArrayOp = emitCopyArray copy
   where
     -- The only time the memory might overlap is when the two arrays
     -- we were provided are the same array!
-    -- TODO: Optimize branch for common case of no aliasing.
+    -- Optimize branch for common case of no aliasing by setting likely
+    -- to `Just False`.
     copy src dst dst_p src_p bytes = do
         dflags <- getDynFlags
         [moveCall, cpyCall] <- forkAlts [
@@ -1972,8 +1971,7 @@ doCopyMutableArrayOp = emitCopyArray copy
             getCode $ emitMemcpyCall  dst_p src_p (mkIntExpr dflags bytes)
             (wORD_SIZE dflags)
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
-        --TODOF: What are the odds
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall (Just False)
 
 emitCopyArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> ByteOff
                   -> FCode ())  -- ^ copy function
@@ -2027,7 +2025,8 @@ doCopySmallMutableArrayOp = emitCopySmallArray copy
   where
     -- The only time the memory might overlap is when the two arrays
     -- we were provided are the same array!
-    -- TODO: Optimize branch for common case of no aliasing.
+    -- Optimize branch for common case of no aliasing by setting likelyhood
+    -- to `Just False`.
     copy src dst dst_p src_p bytes = do
         dflags <- getDynFlags
         [moveCall, cpyCall] <- forkAlts
@@ -2036,8 +2035,7 @@ doCopySmallMutableArrayOp = emitCopySmallArray copy
             , getCode $ emitMemcpyCall  dst_p src_p (mkIntExpr dflags bytes)
               (wORD_SIZE dflags)
             ]
-        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall Nothing
-        --TODOF: What are the odds
+        emit =<< mkCmmIfThenElse (cmmEqWord dflags src dst) moveCall cpyCall (Just False)
 
 emitCopySmallArray :: (CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> ByteOff
                        -> FCode ())  -- ^ copy function
