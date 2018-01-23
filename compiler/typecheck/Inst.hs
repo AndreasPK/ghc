@@ -350,7 +350,7 @@ instCallConstraints orig preds
   | otherwise
   = do { evs <- mapM go preds
        ; traceTc "instCallConstraints" (ppr evs)
-       ; return (mkWpEvApps (map EvExpr evs)) }
+       ; return (mkWpEvApps evs) }
   where
     go pred
      | Just (Nominal, ty1, ty2) <- getEqPredTys_maybe pred -- Try short-cut #1

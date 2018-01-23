@@ -2876,7 +2876,7 @@ newFlattenSkolem flav loc tc xis
            -- Construct the Refl evidence
            ; let pred = mkPrimEqPred fam_ty (mkTyVarTy fsk)
                  co   = mkNomReflCo fam_ty
-           ; ev  <- newGivenEvVar loc (pred, EvExpr (evCoercion co))
+           ; ev  <- newGivenEvVar loc (pred, evCoercion co)
            ; return (ev, co, fsk) }
 
       | otherwise  -- Generate a [WD] for both Wanted and Derived
@@ -3051,7 +3051,7 @@ newTcEvBinds = wrapTcS TcM.newTcEvBinds
 newEvVar :: TcPredType -> TcS EvVar
 newEvVar pred = wrapTcS (TcM.newEvVar pred)
 
-newGivenEvVar :: CtLoc -> (TcPredType, EvTerm) -> TcS CtEvidence
+newGivenEvVar :: CtLoc -> (TcPredType, EvExpr) -> TcS CtEvidence
 -- Make a new variable of the given PredType,
 -- immediately bind it to the given term
 -- and return its CtEvidence
@@ -3062,13 +3062,13 @@ newGivenEvVar loc (pred, rhs)
 
 -- | Make a new 'Id' of the given type, bound (in the monad's EvBinds) to the
 -- given term
-newBoundEvVarId :: TcPredType -> EvTerm -> TcS EvVar
+newBoundEvVarId :: TcPredType -> EvExpr -> TcS EvVar
 newBoundEvVarId pred rhs
   = do { new_ev <- newEvVar pred
-       ; setEvBind (mkGivenEvBind new_ev rhs)
+       ; setEvBind (mkGivenEvBind new_ev (EvExpr rhs))
        ; return new_ev }
 
-newGivenEvVars :: CtLoc -> [(TcPredType, EvTerm)] -> TcS [CtEvidence]
+newGivenEvVars :: CtLoc -> [(TcPredType, EvExpr)] -> TcS [CtEvidence]
 newGivenEvVars loc pts = mapM (newGivenEvVar loc) pts
 
 emitNewWantedEq :: CtLoc -> Role -> TcType -> TcType -> TcS Coercion

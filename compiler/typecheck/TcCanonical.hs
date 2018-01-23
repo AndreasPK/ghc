@@ -19,7 +19,6 @@ import Type
 import TcFlatten
 import TcSMonad
 import TcEvidence
-import TcEvTerm
 import Class
 import TyCon
 import TyCoRep   -- cleverly decomposes types, good for completeness checking
@@ -992,9 +991,9 @@ can_eq_app ev NomEq s1 t1 s2 t2
              co_s = mkTcLRCo CLeft  co
              co_t = mkTcLRCo CRight co
        ; evar_s <- newGivenEvVar loc ( mkTcEqPredLikeEv ev s1 s2
-                                     , EvExpr $ evCoercion co_s )
+                                     , evCoercion co_s )
        ; evar_t <- newGivenEvVar loc ( mkTcEqPredLikeEv ev t1 t2
-                                     , EvExpr $ evCoercion co_t )
+                                     , evCoercion co_t )
        ; emitWorkNC [evar_t]
        ; canEqNC evar_s NomEq s1 s2 }
   | otherwise  -- Can't happen
@@ -1264,7 +1263,7 @@ canDecomposableTyConAppOK ev eq_rel tc tys1 tys2
         -> do { let ev_co = mkCoVarCo evar
               ; given_evs <- newGivenEvVars loc $
                              [ ( mkPrimEqPredRole r ty1 ty2
-                               , EvExpr $ evCoercion $ mkNthCo i ev_co )
+                               , evCoercion $ mkNthCo i ev_co )
                              | (r, ty1, ty2, i) <- zip4 tc_roles tys1 tys2 [0..]
                              , r /= Phantom
                              , not (isCoercionTy ty1) && not (isCoercionTy ty2) ]
@@ -1459,7 +1458,7 @@ canEqTyVar ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
     -- unswapped: tm :: (lhs :: k1) ~ (rhs :: k2)
     -- swapped  : tm :: (rhs :: k2) ~ (lhs :: k1)
   = do { kind_ev_id <- newBoundEvVarId kind_pty
-                                       (EvExpr $ evCoercion $
+                                       (evCoercion $
                                         if isSwapped swapped
                                         then mkTcSymCo $ mkTcKindCo $ mkTcCoVarCo evar
                                         else             mkTcKindCo $ mkTcCoVarCo evar)
@@ -1476,10 +1475,10 @@ canEqTyVar ev eq_rel swapped tv1 co1 ps_ty1 xi2 ps_xi2
        ; type_ev <- newGivenEvVar loc $
                     if isSwapped swapped
                     then ( mkTcEqPredLikeEv ev rhs' lhs
-                         , EvExpr $ evCoercion $
+                         , evCoercion $
                            mkTcCoherenceLeftCo (mkTcCoVarCo evar) homo_co )
                     else ( mkTcEqPredLikeEv ev lhs rhs'
-                         , EvExpr $ evCoercion $
+                         , evCoercion $
                            mkTcCoherenceRightCo (mkTcCoVarCo evar) homo_co )
           -- unswapped: type_ev :: (lhs :: k1) ~ ((rhs |> sym kind_ev_id) :: k1)
           -- swapped  : type_ev :: ((rhs |> sym kind_ev_id) :: k1) ~ (lhs :: k1)
@@ -1852,7 +1851,7 @@ rewriteEvidence old_ev new_pred co
   = continueWith (old_ev { ctev_pred = new_pred })
 
 rewriteEvidence ev@(CtGiven { ctev_evar = old_evar, ctev_loc = loc }) new_pred co
-  = do { new_ev <- newGivenEvVar loc (new_pred, (EvExpr new_tm))
+  = do { new_ev <- newGivenEvVar loc (new_pred, new_tm)
        ; continueWith new_ev }
   where
     -- mkEvCast optimises ReflCo
@@ -1908,7 +1907,7 @@ rewriteEqEvidence old_ev swapped nlhs nrhs lhs_co rhs_co
   = do { let new_tm = evCoercion (lhs_co
                                   `mkTcTransCo` maybeSym swapped (mkTcCoVarCo old_evar)
                                   `mkTcTransCo` mkTcSymCo rhs_co)
-       ; new_ev <- newGivenEvVar loc' (new_pred, EvExpr new_tm)
+       ; new_ev <- newGivenEvVar loc' (new_pred, new_tm)
        ; continueWith new_ev }
 
   | CtWanted { ctev_dest = dest } <- old_ev

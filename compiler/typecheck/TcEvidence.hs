@@ -316,8 +316,8 @@ mkWpCastN co
 mkWpTyApps :: [Type] -> HsWrapper
 mkWpTyApps tys = mk_co_app_fn WpTyApp tys
 
-mkWpEvApps :: [EvTerm] -> HsWrapper
-mkWpEvApps args = mk_co_app_fn WpEvApp args
+mkWpEvApps :: [EvExpr] -> HsWrapper
+mkWpEvApps args = mk_co_app_fn WpEvApp (map EvExpr args)
 
 mkWpEvVarApps :: [EvVar] -> HsWrapper
 mkWpEvVarApps vs = mk_co_app_fn WpEvApp (map (EvExpr . evId) vs)
@@ -755,11 +755,11 @@ mkEvCast ev lco
     isTcReflCo lco = ev
   | otherwise      = evCast ev lco
 
-mkEvScSelectors :: EvExpr -> Class -> [TcType] -> [(TcPredType, EvTerm)]
+mkEvScSelectors :: EvExpr -> Class -> [TcType] -> [(TcPredType, EvExpr)]
 mkEvScSelectors ev cls tys
    = zipWith mk_pr (immSuperClasses cls tys) [0..]
   where
-    mk_pr pred i = (pred, EvExpr (evSuperClass ev i))
+    mk_pr pred i = (pred, evSuperClass ev i)
 
 emptyTcEvBinds :: TcEvBinds
 emptyTcEvBinds = EvBinds emptyBag

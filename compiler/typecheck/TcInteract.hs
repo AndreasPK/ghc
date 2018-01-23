@@ -1362,7 +1362,7 @@ reactFunEq from_this fsk1 solve_this fsk2
              fsk_eq_pred = mkTcEqPredLikeEv solve_this
                              (mkTyVarTy fsk2) (mkTyVarTy fsk1)
 
-       ; new_ev <- newGivenEvVar loc (fsk_eq_pred, EvExpr $ evCoercion fsk_eq_co)
+       ; new_ev <- newGivenEvVar loc (fsk_eq_pred, evCoercion fsk_eq_co)
        ; emitWorkNC [new_ev] }
 
   | CtDerived { ctev_loc = loc } <- solve_this
@@ -1826,7 +1826,7 @@ reduce_top_fun_eq old_ev fsk (ax_co, rhs_ty)
   = do { let final_co = mkTcSymCo (ctEvCoercion old_ev) `mkTcTransCo` ax_co
               -- final_co :: fsk ~ rhs_ty
        ; new_ev <- newGivenEvVar deeper_loc (mkPrimEqPred (mkTyVarTy fsk) rhs_ty,
-                                             EvExpr (evCoercion final_co))
+                                             evCoercion final_co)
        ; emitWorkNC [new_ev] -- Non-cannonical; that will mean we flatten rhs_ty
        ; stopWith old_ev "Fun/Top (given)" }
 
@@ -1949,7 +1949,7 @@ shortCutReduction old_ev fsk ax_co fam_tc tc_args
        ; new_ev <- case ctEvFlavour old_ev of
            Given -> newGivenEvVar deeper_loc
                          ( mkPrimEqPred (mkTyConApp fam_tc xis) (mkTyVarTy fsk)
-                         , EvExpr $ evCoercion (mkTcTyConAppCo Nominal fam_tc cos
+                         , evCoercion (mkTcTyConAppCo Nominal fam_tc cos
                                         `mkTcTransCo` mkTcSymCo ax_co
                                         `mkTcTransCo` ctEvCoercion old_ev) )
 

@@ -660,7 +660,7 @@ tcPatSynMatcher (L loc name) lpat
              matcher_id    = mkExportedVanillaId matcher_name matcher_sigma
                              -- See Note [Exported LocalIds] in Id
 
-             inst_wrap = mkWpEvApps (map EvExpr prov_dicts) <.> mkWpTyApps ex_tys
+             inst_wrap = mkWpEvApps prov_dicts <.> mkWpTyApps ex_tys
              cont' = foldl nlHsApp (mkLHsWrap inst_wrap (nlHsVar cont)) cont_args
 
              fail' = nlHsApps fail [nlHsVar voidPrimId]
