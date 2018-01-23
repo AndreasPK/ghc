@@ -20,7 +20,7 @@ module TcEvidence (
 
   -- EvTerm (already a CoreExpr)
   EvTerm(..), EvExpr,
-  evId, evCoercion, evCast, evDFunApp,  evSuperClass, evSelector,
+  evId, evCoercion, evCast, evDFunApp,  evSelector,
   mkEvCast, evVarsOfTerm, mkEvScSelectors, evTypeable,
 
   evTermCoercion,
@@ -63,7 +63,6 @@ import Name
 import Pair
 
 import CoreSyn
-import CoreUtils
 import Class ( classSCSelId )
 import Id ( isEvVar )
 import CoreFVs ( exprSomeFreeVars )
@@ -512,15 +511,6 @@ evCast et tc | isReflCo tc = et
 evDFunApp :: DFunId -> [Type] -> [EvExpr] -> EvExpr
 evDFunApp df tys ets = Var df `mkTyApps` tys `mkApps` ets
 
--- n'th superclass. Used for both equalities and
--- dictionaries, even though the former have no
--- selector Id.  We count up from _0_
-evSuperClass :: EvExpr -> Int -> EvExpr
-evSuperClass d n = Var sc_sel_id `mkTyApps` tys `App` d
-  where
-    (cls, tys) = getClassPredTys (exprType d)
-    sc_sel_id  = classSCSelId cls n -- Zero-indexed
-
 -- Selector id plus the types at which it
 -- should be instantiated, used for HasField
 -- dictionaries; see Note [HasField instances]
@@ -756,7 +746,9 @@ mkEvScSelectors :: EvExpr -> Class -> [TcType] -> [(TcPredType, EvExpr)]
 mkEvScSelectors ev cls tys
    = zipWith mk_pr (immSuperClasses cls tys) [0..]
   where
-    mk_pr pred i = (pred, evSuperClass ev i)
+    mk_pr pred i = (pred, Var sc_sel_id `mkTyApps` tys `App` ev)
+      where
+        sc_sel_id  = classSCSelId cls i -- Zero-indexed
 
 emptyTcEvBinds :: TcEvBinds
 emptyTcEvBinds = EvBinds emptyBag
