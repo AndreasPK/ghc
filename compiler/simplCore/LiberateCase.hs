@@ -244,9 +244,9 @@ libCase env (Case scrut bndr ty alts)
     mk_alt_env (Cast scrut _)  = mk_alt_env scrut       -- Note [Scrutinee with cast]
     mk_alt_env _               = env
 
-libCaseAlt :: LibCaseEnv -> (AltCon, [CoreBndr], CoreExpr, Freq)
-                         -> (AltCon, [CoreBndr], CoreExpr, Freq)
-libCaseAlt env (con,args,rhs,freq) = (con, args, libCase (addBinders env args) rhs, freq)
+libCaseAlt :: LibCaseEnv -> (AltCon, [CoreBndr], CoreExpr)
+                         -> (AltCon, [CoreBndr], CoreExpr)
+libCaseAlt env (con,args,rhs) = (con, args, libCase (addBinders env args) rhs)
 
 {-
 Ids

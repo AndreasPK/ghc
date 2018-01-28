@@ -81,9 +81,9 @@ tidyExpr env (Lam b e)
 
 ------------  Case alternatives  --------------
 tidyAlt :: TidyEnv -> CoreAlt -> CoreAlt
-tidyAlt env (con, vs, rhs, f)
+tidyAlt env (con, vs, rhs)
   = tidyBndrs env vs    =: \ (env', vs) ->
-    (con, vs, tidyExpr env' rhs, f)
+    (con, vs, tidyExpr env' rhs)
 
 ------------  Tickish  --------------
 tidyTickish :: TidyEnv -> Tickish Id -> Tickish Id

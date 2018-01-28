@@ -135,12 +135,12 @@ wwExpr dflags fam_envs (Case expr binder ty alts) = do
       -- See Note [Zapping Used Once info in WorkWrap]
     return (Case new_expr new_binder ty new_alts)
   where
-    ww_alt (con, binders, rhs, freq) = do
+    ww_alt (con, binders, rhs) = do
         new_rhs <- wwExpr dflags fam_envs rhs
         let new_binders = [ if isId b then zapIdUsedOnceInfo b else b
                           | b <- binders ]
            -- See Note [Zapping Used Once info in WorkWrap]
-        return (con, new_binders, new_rhs, freq)
+        return (con, new_binders, new_rhs)
 
 {-
 ************************************************************************

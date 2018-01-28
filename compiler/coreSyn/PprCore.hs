@@ -201,8 +201,7 @@ ppr_expr add_par expr@(App {})
         _ -> parens (hang (pprParendExpr fun) 2 pp_args)
     }
 
---TODOF: Print frequency
-ppr_expr add_par (Case expr var ty [(con,args,rhs,_freq)])
+ppr_expr add_par (Case expr var ty [(con,args,rhs)])
   = sdocWithDynFlags $ \dflags ->
     if gopt Opt_PprCaseAsLet dflags
     then add_par $  -- See Note [Print case as let]
@@ -282,9 +281,9 @@ ppr_expr add_par (Tick tickish expr)
   then ppr_expr add_par expr
   else add_par (sep [ppr tickish, pprCoreExpr expr])
 
-pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a, Freq) -> SDoc
-pprCoreAlt (con, args, rhs, f)
-  = hang (ppr_case_pat con args <+> parens (text "likely:" <> ppr f) <+> arrow) 2 (pprCoreExpr rhs)
+pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a) -> SDoc
+pprCoreAlt (con, args, rhs)
+  = hang (ppr_case_pat con args <+> arrow) 2 (pprCoreExpr rhs)
 
 ppr_case_pat :: OutputableBndr a => AltCon -> [a] -> SDoc
 ppr_case_pat (DataAlt dc) args

@@ -12,6 +12,7 @@ import GhcPrelude
 
 import StgSyn
 
+import BasicTypes       ( Freq )
 import Bag              ( Bag, emptyBag, isEmptyBag, snocBag, bagToList )
 import Id               ( Id, idType, isLocalId, isJoinId )
 import VarSet

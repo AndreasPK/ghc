@@ -143,15 +143,15 @@ buildEnv vs
           lenv       = Var (dataConWrapId lenv_con)
                        `mkTyApps` lenv_tyargs
                        `mkApps`   map Var lvs
-            --TODOF: Check if this generates at most one alt
+
           vbind env body = mkWildCase env ty (exprType body)
-                           [(DataAlt venv_con, vvs, body, defFreq)]
+                           [(DataAlt venv_con, vvs, body)]
 
           lbind env body =
             let scrut = unwrapFamInstScrut lenv_tc lenv_tyargs env
             in
             mkWildCase scrut (exprType scrut) (exprType body)
-              [(DataAlt lenv_con, lvs, body, defFreq)]
+              [(DataAlt lenv_con, lvs, body)]
 
           bind (venv, lenv) (vbody, lbody) = (vbind venv vbody,
                                               lbind lenv lbody)

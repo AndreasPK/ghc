@@ -804,8 +804,8 @@ lintCoreExpr e@(Case scrut var alt_ty alts) =
      -- See Note [No alternatives lint check] for details.
 
      -- See Note [Rules for floating-point comparisons] in PrelRules
-     ; let isLitPat (LitAlt _, _ , _, _) = True
-           isLitPat _                    = False
+     ; let isLitPat (LitAlt _, _ , _) = True
+           isLitPat _                 = False
      ; checkL (not $ isFloatingTy scrut_ty && any isLitPat alts)
          (ptext (sLit $ "Lint warning: Scrutinising floating-point " ++
                         "expression with literal pattern in case " ++
@@ -1105,6 +1105,7 @@ checkCaseAlts :: CoreExpr -> OutType -> [CoreAlt] -> LintM ()
 -- NB: Algebraic cases are not necessarily exhaustive, because
 --     the simplifier correctly eliminates case that can't
 --     possibly match.
+
 checkCaseAlts e ty alts =
   do { checkL (all non_deflt con_alts) (mkNonDefltMsg e)
      ; checkL (increasing_tag con_alts) (mkNonIncreasingAltsMsg e)
@@ -1126,8 +1127,8 @@ checkCaseAlts e ty alts =
     increasing_tag (alt1 : rest@( alt2 : _)) = alt1 `ltAlt` alt2 && increasing_tag rest
     increasing_tag _                         = True
 
-    non_deflt (DEFAULT, _, _, _) = False
-    non_deflt _                  = True
+    non_deflt (DEFAULT, _, _) = False
+    non_deflt _               = True
 
     is_infinite_ty = case tyConAppTyCon_maybe ty of
                         Nothing    -> False
@@ -1144,11 +1145,11 @@ lintCoreAlt :: OutType          -- Type of scrutinee
             -> LintM ()
 -- If you edit this function, you may need to update the GHC formalism
 -- See Note [GHC Formalism]
-lintCoreAlt _ alt_ty (DEFAULT, args, rhs, _freq) =
+lintCoreAlt _ alt_ty (DEFAULT, args, rhs) =
   do { lintL (null args) (mkDefaultArgsMsg args)
      ; lintAltExpr rhs alt_ty }
 
-lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs, _freq)
+lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs)
   | litIsLifted lit
   = failWithL integerScrutinisedMsg
   | otherwise
@@ -1158,7 +1159,7 @@ lintCoreAlt scrut_ty alt_ty (LitAlt lit, args, rhs, _freq)
   where
     lit_ty = literalType lit
 
-lintCoreAlt scrut_ty alt_ty alt@(DataAlt con, args, rhs, _freq)
+lintCoreAlt scrut_ty alt_ty alt@(DataAlt con, args, rhs)
   | isNewTyCon (dataConTyCon con)
   = addErrL (mkNewTyDataConAltMsg scrut_ty alt)
   | Just (tycon, tycon_arg_tys) <- splitTyConApp_maybe scrut_ty
@@ -2195,10 +2196,10 @@ dumpLoc (BodyOfLetRec bs@(_:_))
 dumpLoc (AnExpr e)
   = (noSrcLoc, text "In the expression:" <+> ppr e)
 
-dumpLoc (CaseAlt (con, args, _, _))
+dumpLoc (CaseAlt (con, args, _))
   = (noSrcLoc, text "In a case alternative:" <+> parens (ppr con <+> pp_binders args))
 
-dumpLoc (CasePat (con, args, _, _))
+dumpLoc (CasePat (con, args, _))
   = (noSrcLoc, text "In the pattern of a case alternative:" <+> parens (ppr con <+> pp_binders args))
 
 dumpLoc (ImportedUnfolding locn)

@@ -387,7 +387,7 @@ subst_expr doc subst expr
                                  where
                                  (subst', bndr') = substBndr subst bndr
 
-    go_alt subst (con, bndrs, rhs, freq) = (con, bndrs', subst_expr doc subst' rhs, freq)
+    go_alt subst (con, bndrs, rhs) = (con, bndrs', subst_expr doc subst' rhs)
                                  where
                                    (subst', bndrs') = substBndrs subst bndrs
 

@@ -843,9 +843,8 @@ dffvExpr (Let (Rec prs) e)    = extendScopeList (map fst prs) $
 dffvExpr (Case e b _ as)      = dffvExpr e >> extendScope b (mapM_ dffvAlt as)
 dffvExpr _other               = return ()
 
---TODOF: Check
-dffvAlt :: (t, [Var], CoreExpr, Freq) -> DFFV ()
-dffvAlt (_,xs,r,_) = extendScopeList xs (dffvExpr r)
+dffvAlt :: (t, [Var], CoreExpr) -> DFFV ()
+dffvAlt (_,xs,r) = extendScopeList xs (dffvExpr r)
 
 dffvBind :: (Id, CoreExpr) -> DFFV ()
 dffvBind(x,r)

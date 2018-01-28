@@ -9,7 +9,7 @@
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
         -- * Main data types
-        Expr(..), Alt, Freq, Bind(..), AltCon(..), Arg,
+        Expr(..), Alt, Bind(..), AltCon(..), Arg,
         Tickish(..), TickishScoping(..), TickishPlacement(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
@@ -23,8 +23,6 @@ module CoreSyn (
         -- ** 'Expr' construction
         mkLet, mkLets, mkLetNonRec, mkLetRec, mkLams,
         mkApps, mkTyApps, mkCoApps, mkVarApps, mkTyArg,
-
-        defFreq,
 
         mkIntLit, mkIntLitInt,
         mkWordLit, mkWordLitWord,
@@ -270,56 +268,6 @@ These data types are the heart of the compiler
 --
 -- *  A coercion
 
-{-
-
-Results without info, with running deezer
-
-time ~/ghc/inplace/bin/ghc-stage2.exe Main.hs -O2 -fforce-recomp +RTS -s
-[1 of 1] Compiling Main             ( Main.hs, Main.o )
-
-Main.hs:59:1: warning: [-Wtabs]
-    Tab character found here, and in 72 further locations.
-    Please use spaces instead.
-   |
-59 |
-   | ^^^^^^^^
-Linking Main.exe ...
-  14,269,934,160 bytes allocated in the heap
-   1,527,272,952 bytes copied during GC
-      86,461,256 bytes maximum residency (20 sample(s))
-         574,648 bytes maximum slop
-             238 MB total memory in use (0 MB lost due to fragmentation)
-
-                                     Tot time (elapsed)  Avg pause  Max pause
-  Gen  0      1463 colls,     0 par    1.438s   1.426s     0.0010s    0.0145s
-  Gen  1        20 colls,     0 par    0.859s   0.858s     0.0429s    0.1049s
-
-  TASKS: 5 (1 bound, 4 peak workers (4 total), using -N1)
-
-  SPARKS: 0 (0 converted, 0 overflowed, 0 dud, 0 GC'd, 0 fizzled)
-
-  INIT    time    0.000s  (  0.000s elapsed)
-  MUT     time    8.672s  ( 10.073s elapsed)
-  GC      time    2.297s  (  2.283s elapsed)
-  EXIT    time    0.000s  (  0.000s elapsed)
-  Total   time   10.969s  ( 12.356s elapsed)
-
-  Alloc rate    1,645,541,957 bytes per MUT second
-
-  Productivity  79.1% of total user, 81.5% of total elapsed
-
-gc_alloc_block_sync: 0
-whitehole_spin: 0
-gen[0].sync: 0
-gen[1].sync: 0
-
-real    0m12.379s
-user    0m0.015s
-sys     0m0.016s
-
-
--}
-
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
 data Expr b
@@ -345,9 +293,7 @@ type Arg b = Expr b
 
 -- If you edit this type, you may need to update the GHC formalism
 -- See Note [GHC Formalism] in coreSyn/CoreLint.hs
-type Alt b = (AltCon, [b], Expr b, Freq)
-
-
+type Alt b = (AltCon, [b], Expr b)
 
 -- | A case alternative constructor (i.e. pattern match)
 
@@ -1763,10 +1709,10 @@ instance Outputable AltCon where
   ppr (LitAlt lit) = ppr lit
   ppr DEFAULT      = text "__DEFAULT"
 
-cmpAlt :: (AltCon, a, b, Freq) -> (AltCon, a, b, Freq) -> Ordering
-cmpAlt (con1, _, _, _) (con2, _, _, _) = con1 `cmpAltCon` con2
+cmpAlt :: (AltCon, a, b) -> (AltCon, a, b) -> Ordering
+cmpAlt (con1, _, _) (con2, _, _) = con1 `cmpAltCon` con2
 
-ltAlt :: (AltCon, a, b, Freq) -> (AltCon, a, b, Freq) -> Bool
+ltAlt :: (AltCon, a, b) -> (AltCon, a, b) -> Bool
 ltAlt a1 a2 = (a1 `cmpAlt` a2) == LT
 
 cmpAltCon :: AltCon -> AltCon -> Ordering
@@ -1865,7 +1811,7 @@ deTagBind (NonRec (TB b _) rhs) = NonRec b (deTagExpr rhs)
 deTagBind (Rec prs)             = Rec [(b, deTagExpr rhs) | (TB b _, rhs) <- prs]
 
 deTagAlt :: TaggedAlt t -> CoreAlt
-deTagAlt (con, bndrs, rhs, f) = (con, [b | TB b _ <- bndrs], deTagExpr rhs, f)
+deTagAlt (con, bndrs, rhs) = (con, [b | TB b _ <- bndrs], deTagExpr rhs)
 
 {-
 ************************************************************************
@@ -2058,7 +2004,7 @@ rhssOfBind (NonRec _ rhs) = [rhs]
 rhssOfBind (Rec pairs)    = [rhs | (_,rhs) <- pairs]
 
 rhssOfAlts :: [Alt b] -> [Expr b]
-rhssOfAlts alts = [e | (_,_,e,_) <- alts]
+rhssOfAlts alts = [e | (_,_,e) <- alts]
 
 -- | Collapse all the bindings in the supplied groups into a single
 -- list of lhs\/rhs pairs suitable for binding in a 'Rec' binding group
@@ -2205,7 +2151,7 @@ data AnnExpr' bndr annot
   | AnnCoercion Coercion
 
 -- | A clone of the 'Alt' type but allowing annotation at every tree node
-type AnnAlt bndr annot = (AltCon, [bndr], AnnExpr bndr annot, Freq)
+type AnnAlt bndr annot = (AltCon, [bndr], AnnExpr bndr annot)
 
 -- | A clone of the 'Bind' type but allowing annotation at every tree node
 data AnnBind bndr annot
@@ -2250,7 +2196,7 @@ deAnnotate' (AnnCase scrut v t alts)
   = Case (deAnnotate scrut) v t (map deAnnAlt alts)
 
 deAnnAlt :: AnnAlt bndr annot -> Alt bndr
-deAnnAlt (con,args,rhs,f) = (con,args,deAnnotate rhs,f)
+deAnnAlt (con,args,rhs) = (con,args,deAnnotate rhs)
 
 deAnnBind  :: AnnBind b annot -> Bind b
 deAnnBind (AnnNonRec var rhs) = NonRec var (deAnnotate rhs)

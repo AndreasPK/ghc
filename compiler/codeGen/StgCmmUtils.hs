@@ -55,6 +55,7 @@ import CLabel
 import CmmUtils
 import CmmSwitch
 
+import BasicTypes (Freq)
 import ForeignCall
 import IdInfo
 import Type
@@ -508,7 +509,7 @@ emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
                -> [(Literal, CmmAGraphScoped, Freq)] -- Tagged branches
                -> (CmmAGraphScoped, Freq)              -- Default branch (always)
                -> FCode ()                     -- Emit the code
-emitCmmLitSwitch _scrut []       (deflt,dfreq) = emit $ fst deflt
+emitCmmLitSwitch _scrut []       (deflt,_dfreq) = emit $ fst deflt
 emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
     scrut' <- assignTemp' scrut
     join_lbl <- newBlockId
@@ -567,7 +568,7 @@ mk_float_switch :: Width -> CmmExpr -> (BlockId, Freq)
               -> LitBound
               -> [(Literal,BlockId,Freq)]
               -> FCode CmmAGraph
-mk_float_switch rep scrut (deflt, dfrq) _bounds [(lit,blk,frq)]
+mk_float_switch rep scrut (deflt, _dfrq) _bounds [(lit,blk,_frq)]
   = do dflags <- getDynFlags
        return $ mkCbranch (cond dflags) deflt blk Nothing
   where

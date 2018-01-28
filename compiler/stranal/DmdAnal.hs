@@ -233,7 +233,7 @@ dmdAnal' env dmd (Lam var body)
     in
     (postProcessUnsat defer_and_use lam_ty, Lam var' body')
 
-dmdAnal' env dmd (Case scrut case_bndr ty [(DataAlt dc, bndrs, rhs, freq)])
+dmdAnal' env dmd (Case scrut case_bndr ty [(DataAlt dc, bndrs, rhs)])
   -- Only one alternative with a product constructor
   | let tycon = dataConTyCon dc
   , isJust (isDataProductTyCon_maybe tycon)
@@ -263,7 +263,7 @@ dmdAnal' env dmd (Case scrut case_bndr ty [(DataAlt dc, bndrs, rhs, freq)])
 --                                   , text "scrut_ty" <+> ppr scrut_ty
 --                                   , text "alt_ty" <+> ppr alt_ty2
 --                                   , text "res_ty" <+> ppr res_ty ]) $
-    (res_ty, Case scrut' case_bndr' ty [(DataAlt dc, bndrs', rhs', freq)])
+    (res_ty, Case scrut' case_bndr' ty [(DataAlt dc, bndrs', rhs')])
 
 dmdAnal' env dmd (Case scrut case_bndr ty alts)
   = let      -- Case expression with multiple alternatives
@@ -353,17 +353,17 @@ io_hack_reqd scrut con bndrs
   = False
 
 dmdAnalAlt :: AnalEnv -> CleanDemand -> Id -> Alt Var -> (DmdType, Alt Var)
-dmdAnalAlt env dmd case_bndr (con,bndrs,rhs,freq)
+dmdAnalAlt env dmd case_bndr (con,bndrs,rhs)
   | null bndrs    -- Literals, DEFAULT, and nullary constructors
   , (rhs_ty, rhs') <- dmdAnal env dmd rhs
-  = (rhs_ty, (con, [], rhs',freq))
+  = (rhs_ty, (con, [], rhs'))
 
   | otherwise     -- Non-nullary data constructors
   , (rhs_ty, rhs') <- dmdAnal env dmd rhs
   , (alt_ty, dmds) <- findBndrsDmds env rhs_ty bndrs
   , let case_bndr_dmd = findIdDemand alt_ty case_bndr
         id_dmds       = addCaseBndrDmd case_bndr_dmd dmds
-  = (alt_ty, (con, setBndrsDemandInfo bndrs id_dmds, rhs', freq))
+  = (alt_ty, (con, setBndrsDemandInfo bndrs id_dmds, rhs'))
 
 
 {- Note [IO hack in the demand analyser]

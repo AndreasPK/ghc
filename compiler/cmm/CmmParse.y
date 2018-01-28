@@ -223,7 +223,7 @@ import CmmOpt
 import MkGraph
 import Cmm
 import CmmUtils
-import CmmSwitch        ( mkSwitchTargets, defFreq )
+import CmmSwitch        ( mkSwitchTargets )
 import CmmInfo
 import BlockId
 import CmmLex

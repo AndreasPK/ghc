@@ -86,7 +86,7 @@ import DynFlags
 import FastString
 import Maybes
 import ListSetOps       ( minusList )
-import BasicTypes       ( Arity, isConLike, combineFreqs, Freq )
+import BasicTypes       ( Arity, isConLike )
 import Platform
 import Util
 import Pair
@@ -128,7 +128,7 @@ exprType other = pprTrace "exprType" (pprCoreExpr other) alphaTy
 
 coreAltType :: CoreAlt -> Type
 -- ^ Returns the type of the alternatives right hand side
-coreAltType (_,bs,rhs, _f)
+coreAltType (_,bs,rhs)
   | any bad_binder bs = expandTypeSynonyms ty
   | otherwise         = ty    -- Note [Existential variables and silly type synonyms]
   where
@@ -437,7 +437,7 @@ stripTicksE p expr = go expr
         go_bs (NonRec b e)  = NonRec b (go e)
         go_bs (Rec bs)      = Rec (map go_b bs)
         go_b (b, e)         = (b, go e)
-        go_a (c,bs,e,f)       = (c,bs, go e,f)
+        go_a (c,bs,e)       = (c,bs, go e)
 
 stripTicksT :: (Tickish Id -> Bool) -> Expr b -> [Tickish Id]
 stripTicksT p expr = fromOL $ go expr
@@ -453,7 +453,7 @@ stripTicksT p expr = fromOL $ go expr
         go_bs (NonRec _ e)  = go e
         go_bs (Rec bs)      = concatOL (map go_b bs)
         go_b (_, e)         = go e
-        go_a (_, _, e, _)      = go e
+        go_a (_, _, e)      = go e
 
 {-
 ************************************************************************
@@ -479,7 +479,7 @@ bindNonRec :: Id -> CoreExpr -> CoreExpr -> CoreExpr
 -- the simplifier deals with them perfectly well. See
 -- also 'MkCore.mkCoreLet'
 bindNonRec bndr rhs body
-  | needsCaseBinding (idType bndr) rhs = Case rhs bndr (exprType body) [(DEFAULT, [], body,0)]
+  | needsCaseBinding (idType bndr) rhs = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
   | otherwise                          = Let (NonRec bndr rhs) body
 
 -- | Tests whether we have to use a @case@ rather than @let@ binding for this expression
@@ -496,7 +496,7 @@ mkAltExpr :: AltCon     -- ^ Case alternative constructor
           -> CoreExpr
 -- ^ This guy constructs the value that the scrutinee must have
 -- given that you are in one particular branch of a case
-mkAltExpr (DataAlt con) args inst_tys 
+mkAltExpr (DataAlt con) args inst_tys
   = mkConApp con (map Type inst_tys ++ varsToCoreExprs args)
 mkAltExpr (LitAlt lit) [] []
   = Lit lit
@@ -515,30 +515,30 @@ This makes it easy to find, though it makes matching marginally harder.
 -}
 
 -- | Extract the default case alternative
-findDefault :: [(AltCon, [a], b, Freq)] -> ([(AltCon, [a], b,Freq)], Maybe (b,Freq))
-findDefault ((DEFAULT,args,rhs,freq) : alts) = ASSERT( null args ) (alts, Just (rhs,freq))
+findDefault :: [(AltCon, [a], b)] -> ([(AltCon, [a], b)], Maybe b)
+findDefault ((DEFAULT,args,rhs) : alts) = ASSERT( null args ) (alts, Just rhs)
 findDefault alts                        =                     (alts, Nothing)
 
-addDefault :: [(AltCon, [a], b, Freq)] -> Maybe (b, Freq) -> [(AltCon, [a], b, Freq)]
+addDefault :: [(AltCon, [a], b)] -> Maybe b -> [(AltCon, [a], b)]
 addDefault alts Nothing    = alts
-addDefault alts (Just (rhs,freq)) = (DEFAULT, [], rhs, freq) : alts
+addDefault alts (Just rhs) = (DEFAULT, [], rhs) : alts
 
-isDefaultAlt :: (AltCon, a, b, Freq) -> Bool
-isDefaultAlt (DEFAULT, _, _, _) = True
+isDefaultAlt :: (AltCon, a, b) -> Bool
+isDefaultAlt (DEFAULT, _, _) = True
 isDefaultAlt _               = False
 
 -- | Find the case alternative corresponding to a particular
 -- constructor: panics if no such constructor exists
-findAlt :: AltCon -> [(AltCon, a, b,Freq)] -> Maybe (AltCon, a, b, Freq)
+findAlt :: AltCon -> [(AltCon, a, b)] -> Maybe (AltCon, a, b)
     -- A "Nothing" result *is* legitmiate
     -- See Note [Unreachable code]
 findAlt con alts
   = case alts of
-        (deflt@(DEFAULT,_,_,_):alts) -> go alts (Just deflt)
+        (deflt@(DEFAULT,_,_):alts) -> go alts (Just deflt)
         _                          -> go alts Nothing
   where
     go []                     deflt = deflt
-    go (alt@(con1,_,_,_) : alts) deflt
+    go (alt@(con1,_,_) : alts) deflt
       = case con `cmpAltCon` con1 of
           LT -> deflt   -- Missed it already; the alts are in increasing order
           EQ -> Just alt
@@ -575,7 +575,7 @@ filters down the matching alternatives in Simplify.rebuildCase.
 -}
 
 ---------------------------------
-mergeAlts :: [(AltCon, a, b, Freq)] -> [(AltCon, a, b, Freq)] -> [(AltCon, a, b, Freq)]
+mergeAlts :: [(AltCon, a, b)] -> [(AltCon, a, b)] -> [(AltCon, a, b)]
 -- ^ Merge alternatives preserving order; alternatives in
 -- the first argument shadow ones in the second
 mergeAlts [] as2 = as2
@@ -604,8 +604,8 @@ trimConArgs (DataAlt dc) args = dropList (dataConUnivTyVars dc) args
 filterAlts :: TyCon                -- ^ Type constructor of scrutinee's type (used to prune possibilities)
            -> [Type]               -- ^ And its type arguments
            -> [AltCon]             -- ^ 'imposs_cons': constructors known to be impossible due to the form of the scrutinee
-           -> [(AltCon, [Var], a, Freq)] -- ^ Alternatives
-           -> ([AltCon], [(AltCon, [Var], a, Freq)])
+           -> [(AltCon, [Var], a)] -- ^ Alternatives
+           -> ([AltCon], [(AltCon, [Var], a)])
              -- Returns:
              --  1. Constructors that will never be encountered by the
              --     *default* case (if any).  A superset of imposs_cons
@@ -627,7 +627,7 @@ filterAlts _tycon inst_tys imposs_cons alts
   = (imposs_deflt_cons, addDefault trimmed_alts maybe_deflt)
   where
     (alts_wo_default, maybe_deflt) = findDefault alts
-    alt_cons = [con | (con,_,_,_) <- alts_wo_default]
+    alt_cons = [con | (con,_,_) <- alts_wo_default]
 
     trimmed_alts = filterOut (impossible_alt inst_tys) alts_wo_default
 
@@ -638,9 +638,9 @@ filterAlts _tycon inst_tys imposs_cons alts
          --   EITHER by the context,
          --   OR by a non-DEFAULT branch in this case expression.
 
-    impossible_alt :: [Type] -> (AltCon, a, b, Freq) -> Bool
-    impossible_alt _ (con, _, _, _) | con `Set.member` imposs_cons_set = True
-    impossible_alt inst_tys (DataAlt con, _, _, _) = dataConCannotMatch inst_tys con
+    impossible_alt :: [Type] -> (AltCon, a, b) -> Bool
+    impossible_alt _ (con, _, _) | con `Set.member` imposs_cons_set = True
+    impossible_alt inst_tys (DataAlt con, _, _) = dataConCannotMatch inst_tys con
     impossible_alt _  _                         = False
 
 refineDefaultAlt :: [Unique] -> TyCon -> [Type]
@@ -650,7 +650,7 @@ refineDefaultAlt :: [Unique] -> TyCon -> [Type]
 -- Refine the default alternative to a DataAlt,
 -- if there is a unique way to do so
 refineDefaultAlt us tycon tys imposs_deflt_cons all_alts
-  | (DEFAULT,_,rhs,f) : rest_alts <- all_alts
+  | (DEFAULT,_,rhs) : rest_alts <- all_alts
   , isAlgTyCon tycon            -- It's a data type, tuple, or unboxed tuples.
   , not (isNewTyCon tycon)      -- We can have a newtype, if we are just doing an eval:
                                 --      case x of { DEFAULT -> e }
@@ -667,7 +667,7 @@ refineDefaultAlt us tycon tys imposs_deflt_cons all_alts
        []    -> (False, rest_alts)
 
        -- It matches exactly one constructor, so fill it in:
-       [con] -> (True, mergeAlts rest_alts [(DataAlt con, ex_tvs ++ arg_ids, rhs, f)])
+       [con] -> (True, mergeAlts rest_alts [(DataAlt con, ex_tvs ++ arg_ids, rhs)])
                        -- We need the mergeAlts to keep the alternatives in the right order
              where
                 (ex_tvs, arg_ids) = dataConRepInstPat us con tys
@@ -778,33 +778,25 @@ combineIdenticalAlts :: [AltCon]    -- Constructors that cannot match DEFAULT
                          [CoreAlt]) -- New alternatives
 -- See Note [Combine identical alternatives]
 -- True <=> we did some combining, result is a single DEFAULT alternative
-combineIdenticalAlts imposs_deflt_cons ((con1,bndrs1,rhs1,freq1) : rest_alts)
+combineIdenticalAlts imposs_deflt_cons ((con1,bndrs1,rhs1) : rest_alts)
   | all isDeadBinder bndrs1    -- Remember the default
   , not (null elim_rest) -- alternative comes first
   = (True, imposs_deflt_cons', deflt_alt : filtered_rest)
   where
     (elim_rest, filtered_rest) = partition identical_to_alt1 rest_alts
-    --TODOF: Sum up chance of eliminated alternatives
-    {- * Care is required when one of the alternatives is < zero,
-         in this case we want to just use the higher of the two values.
-         If both are pos/neg simply adding them up is fine.
-    -}
-    deflt_alt = (DEFAULT, [], mkTicks (concat tickss) rhs1, combinedFreq) :: CoreAlt
-
-    combinedFreq :: Int
-    combinedFreq = foldl' combineFreqs freq1 (map (\(_,_,_,f) -> f) elim_rest)
+    deflt_alt = (DEFAULT, [], mkTicks (concat tickss) rhs1)
 
      -- See Note [Care with impossible-constructors when combining alternatives]
     imposs_deflt_cons' = imposs_deflt_cons `minusList` elim_cons
-    elim_cons = elim_con1 ++ map (\(c,_,_,_) -> c) elim_rest
+    elim_cons = elim_con1 ++ map fstOf3 elim_rest
     elim_con1 = case con1 of     -- Don't forget con1!
                   DEFAULT -> []  -- See Note [
                   _       -> [con1]
 
     cheapEqTicked e1 e2 = cheapEqExpr' tickishFloatable e1 e2
-    identical_to_alt1 (_con,bndrs,rhs,_f)
+    identical_to_alt1 (_con,bndrs,rhs)
       = all isDeadBinder bndrs && rhs `cheapEqTicked` rhs1
-    tickss = map (stripTicksT tickishFloatable . (\(_,_,e,_) -> e)) elim_rest
+    tickss = map (stripTicksT tickishFloatable . thdOf3) elim_rest
 
 combineIdenticalAlts imposs_cons alts
   = (False, imposs_cons, alts)
@@ -1135,7 +1127,7 @@ exprIsCheapX ok_app e
     go _ (Coercion {})                = True
     go n (Cast e _)                   = go n e
     go n (Case scrut _ _ alts)        = ok scrut &&
-                                        and [ go n rhs | (_,_,rhs,_) <- alts ]
+                                        and [ go n rhs | (_,_,rhs) <- alts ]
     go n (Tick t e) | tickishCounts t = False
                     | otherwise       = go n e
     go n (Lam x e)  | isRuntimeVar x  = n==0 || go (n-1) e
@@ -1422,7 +1414,7 @@ expr_ok primop_ok (Case scrut bndr _ alts)
   =  -- See Note [exprOkForSpeculation: case expressions]
      expr_ok primop_ok scrut
   && isUnliftedType (idType bndr)
-  && all (\(_,_,rhs,_) -> expr_ok primop_ok rhs) alts
+  && all (\(_,_,rhs) -> expr_ok primop_ok rhs) alts
   && altsAreExhaustive alts
 
 expr_ok primop_ok other_expr
@@ -1480,7 +1472,7 @@ altsAreExhaustive :: [Alt b] -> Bool
 -- False <=> they may or may not be
 altsAreExhaustive []
   = False    -- Should not happen
-altsAreExhaustive ((con1,_,_,_) : alts)
+altsAreExhaustive ((con1,_,_) : alts)
   = case con1 of
       DEFAULT   -> True
       LitAlt {} -> False
@@ -1929,7 +1921,7 @@ eqExpr in_scope e1 e2
     go _ _ _ = False
 
     -----------
-    go_alt env (c1, bs1, e1, _) (c2, bs2, e2, _)
+    go_alt env (c1, bs1, e1) (c2, bs2, e2)
       = c1 == c2 && go (rnBndrs2 env bs1 bs2) e1 e2
 
 eqTickish :: RnEnv2 -> Tickish Id -> Tickish Id -> Bool
@@ -1972,7 +1964,7 @@ diffExpr top env (Case e1 b1 t1 a1) (Case e2 b2 t2 a2)
     -- See Note [Empty case alternatives] in TrieMap
   = diffExpr top env e1 e2 ++ concat (zipWith diffAlt a1 a2)
   where env' = rnBndr2 env b1 b2
-        diffAlt (c1, bs1, e1, _) (c2, bs2, e2, _)
+        diffAlt (c1, bs1, e1) (c2, bs2, e2)
           | c1 /= c2  = [text "alt-cons " <> ppr c1 <> text " /= " <> ppr c2]
           | otherwise = diffExpr top (rnBndrs2 env' bs1 bs2) e1 e2
 diffExpr _  _ e1 e2

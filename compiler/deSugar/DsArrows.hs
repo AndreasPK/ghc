@@ -202,7 +202,7 @@ coreCaseTuple uniqs scrut_var vars body
 coreCasePair :: Id -> Id -> Id -> CoreExpr -> CoreExpr
 coreCasePair scrut_var var1 var2 body
   = Case (Var scrut_var) scrut_var (exprType body)
-         [(DataAlt (tupleDataCon Boxed 2), [var1, var2], body, defFreq)]
+         [(DataAlt (tupleDataCon Boxed 2), [var1, var2], body)]
 
 mkCorePairTy :: Type -> Type -> Type
 mkCorePairTy t1 t2 = mkBoxedTupleTy [t1, t2]
@@ -518,7 +518,7 @@ dsCmd ids local_vars stack_ty res_ty (HsCmdIf mb_fun cond then_cmd else_cmd)
        Just fun -> do { fun_apps <- dsSyntaxExpr fun [core_cond, core_left, core_right]
                       ; matchEnvStack env_ids stack_id fun_apps }
        Nothing  -> matchEnvStack env_ids stack_id $
-                   mkIfThenElse core_cond core_left core_right Nothing
+                   mkIfThenElse core_cond core_left core_right
 
     return (do_premap ids in_ty sum_ty res_ty
                 core_if

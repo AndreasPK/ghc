@@ -31,6 +31,7 @@ import StgCmmClosure
 
 import StgSyn
 
+import BasicTypes (Freq)
 import MkGraph
 import BlockId
 import Cmm

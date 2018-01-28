@@ -51,9 +51,6 @@ import Control.Monad
 import Data.Maybe
 import Data.List
 
---TODOF: We just do whatever here with frequencies for now.
---As this code is not in use that is fine for now.
-
 
 -- Main entry point to vectorise expressions -----------------------------------
 
@@ -239,11 +236,7 @@ encapsulateScalars ce@((fvs, vi), AnnCase scrut bndr ty alts)
                             }
     }
   where
-    encAlt  ::    (a, b, CoreExprWithVectInfo, d)
-            -> VM (a, b, CoreExprWithVectInfo, d)
-    encAlt (con, bndrs, expr, freq) = do
-      e <- encapsulateScalars expr
-      return (con, bndrs, e, freq) 
+    encAlt (con, bndrs, expr) = (con, bndrs,) <$> encapsulateScalars expr
 encapsulateScalars ce@((fvs, vi), AnnLet (AnnNonRec bndr expr1) expr2)
   = do
     { vectAvoid <- isVectAvoidanceAggressive
@@ -291,7 +284,7 @@ liftSimpleAndCase aexpr@((fvs, _vi), AnnCase expr bndr t alts)
       then
         liftSimple aexpr  -- if the scrutinee is scalar, we need no special treatment
       else do
-      { alts' <- mapM (\(ac, bndrs, aexpr, f) -> liftSimpleAndCase aexpr >>= \e' -> return (ac, bndrs,e',f)) alts
+      { alts' <- mapM (\(ac, bndrs, aexpr) -> (ac, bndrs,) <$> liftSimpleAndCase aexpr) alts
       ; return ((fvs, vi), AnnCase expr bndr t alts')
       }
     }
@@ -598,7 +591,7 @@ vectDictExpr (App fn arg)
 vectDictExpr (Case e bndr ty alts)
   = Case <$> vectDictExpr e <*> pure bndr <*> vectType ty <*> mapM vectDictAlt alts
   where
-    vectDictAlt (con, bs, e, f) = (,,,) <$> vectDictAltCon con <*> pure bs <*> vectDictExpr e <*> pure f
+    vectDictAlt (con, bs, e) = (,,) <$> vectDictAltCon con <*> pure bs <*> vectDictExpr e
     --
     vectDictAltCon (DataAlt datacon) = DataAlt <$> maybeV dataConErr (lookupDataCon datacon)
       where
@@ -813,8 +806,8 @@ vectLam inline loop_breaker expr@((fvs, _vi), AnnLam _ _)
            ; empty <- emptyPD ty
            ; lty   <- mkPDataType ty
            ; return (ve, mkWildCase (Var lc) intPrimTy lty
-                           [(DEFAULT, [], le, defFreq),
-                            (LitAlt (mkMachInt dflags 0), [], empty, defFreq)])
+                           [(DEFAULT, [], le),
+                            (LitAlt (mkMachInt dflags 0), [], empty)])
            }
       | otherwise = return (ve, le)
 vectLam _ _ _ = panic "Vectorise.Exp.vectLam: not a lambda"
@@ -837,9 +830,9 @@ vectLam _ _ _ = panic "Vectorise.Exp.vectLam: not a lambda"
 
 -- FIXME: this is too lazy...is it?
 vectAlgCase :: TyCon -> [Type] -> CoreExprWithVectInfo -> Var -> Type
-            -> [(AltCon, [Var], CoreExprWithVectInfo, Freq)]
+            -> [(AltCon, [Var], CoreExprWithVectInfo)]
             -> VM VExpr
-vectAlgCase _tycon _ty_args scrut bndr ty [(DEFAULT, [], body, _)]
+vectAlgCase _tycon _ty_args scrut bndr ty [(DEFAULT, [], body)]
   = do
     { traceVt "scrutinee (DEFAULT only)" Outputable.empty
     ; vscrut         <- vectExpr scrut
@@ -848,7 +841,7 @@ vectAlgCase _tycon _ty_args scrut bndr ty [(DEFAULT, [], body, _)]
     ; (vbndr, vbody) <- vectBndrIn bndr (vectExpr body)
     ; return $ vCaseDEFAULT vscrut vbndr vty lty vbody
     }
-vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt _, [], body, _)]
+vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt _, [], body)]
   = do
     { traceVt "scrutinee (one shot w/o binders)" Outputable.empty
     ; vscrut         <- vectExpr scrut
@@ -857,7 +850,7 @@ vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt _, [], body, _)]
     ; (vbndr, vbody) <- vectBndrIn bndr (vectExpr body)
     ; return $ vCaseDEFAULT vscrut vbndr vty lty vbody
     }
-vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt dc, bndrs, body, _)]
+vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt dc, bndrs, body)]
   = do
     { traceVt "scrutinee (one shot w/ binders)" Outputable.empty
     ; vexpr      <- vectExpr scrut
@@ -881,7 +874,7 @@ vectAlgCase _tycon _ty_args scrut bndr ty [(DataAlt dc, bndrs, body, _)]
                     | otherwise         = vectBndrIn bndr
 
     mk_wild_case expr ty dc bndrs body
-      = mkWildCase expr (exprType expr) ty [(DataAlt dc, bndrs, body, defFreq)]
+      = mkWildCase expr (exprType expr) ty [(DataAlt dc, bndrs, body)]
 
     dataConErr = (text "vectAlgCase: data constructor not vectorised" <+> ppr dc)
 
@@ -910,13 +903,13 @@ vectAlgCase tycon _ty_args scrut bndr ty alts
     ; vdummy <- newDummyVar (exprType vect_scrut)
     ; ldummy <- newDummyVar (exprType lift_scrut)
     ; let vect_case = Case vect_scrut vdummy vty
-                           (zipWith4 mk_vect_alt vect_dcs vect_bndrss vect_bodies (repeat defFreq))
+                           (zipWith3 mk_vect_alt vect_dcs vect_bndrss vect_bodies)
 
     ; lc <- builtin liftingContext
     ; lbody <- combinePD vty (Var lc) sel lift_bodies
     ; let lift_case = Case lift_scrut ldummy lty
                            [(DataAlt pdata_dc, sel_bndr : concat lift_bndrss,
-                             lbody, defFreq)] --TODOF: Check
+                             lbody)]
 
     ; return . vLet (vNonRec vbndr vexpr)
              $ (vect_case, lift_case)
@@ -925,7 +918,7 @@ vectAlgCase tycon _ty_args scrut bndr ty alts
     vect_scrut_bndr | isDeadBinder bndr = vectBndrNewIn bndr (fsLit "scrut")
                     | otherwise         = vectBndrIn bndr
 
-    alts' = sortBy (\(alt1, _, _, _) (alt2, _, _, _) -> cmp alt1 alt2) alts
+    alts' = sortBy (\(alt1, _, _) (alt2, _, _) -> cmp alt1 alt2) alts
 
     cmp (DataAlt dc1) (DataAlt dc2) = dataConTag dc1 `compare` dataConTag dc2
     cmp DEFAULT       DEFAULT       = EQ
@@ -933,7 +926,7 @@ vectAlgCase tycon _ty_args scrut bndr ty alts
     cmp _             DEFAULT       = GT
     cmp _             _             = panic "vectAlgCase/cmp"
 
-    proc_alt arity sel _ lty (DataAlt dc, bndrs, body@((fvs_body, _), _), freq)
+    proc_alt arity sel _ lty (DataAlt dc, bndrs, body@((fvs_body, _), _))
       = do
           dflags <- getDynFlags
           vect_dc <- maybeV dataConErr (lookupDataCon dc)
@@ -955,7 +948,7 @@ vectAlgCase tycon _ty_args scrut bndr ty alts
                ; traceVt "case alternative:" (ppr . deAnnotate $ body)
                ; (ve, le) <- vectExpr body
                ; return (ve, Case (elems `App` sel) lc lty
-                             [(DEFAULT, [], (mkLets (concat binds) le), freq)]) --TODOF: Check
+                             [(DEFAULT, [], (mkLets (concat binds) le))])
                }
                  -- empty    <- emptyPD vty
                  -- return (ve, Case (elems `App` sel) lc lty
@@ -969,7 +962,7 @@ vectAlgCase tycon _ty_args scrut bndr ty alts
 
     proc_alt _ _ _ _ _ = panic "vectAlgCase/proc_alt"
 
-    mk_vect_alt vect_dc bndrs body freq = (DataAlt vect_dc, bndrs, body, freq)
+    mk_vect_alt vect_dc bndrs body = (DataAlt vect_dc, bndrs, body)
 
       -- Pack a variable for a case alternative context *if* the variable is vectorised. If it
       -- isn't, ignore it as scalar variables don't need to be packed.
@@ -1151,20 +1144,19 @@ vectAvoidInfo pvs ce@(_, AnnCase e var ty alts)
     { ceVI           <- vectAvoidInfoTypeOf ce
     ; eVI            <- vectAvoidInfo pvs e
     ; altsVI         <- mapM (vectAvoidInfoAlt (isVIParr eVI)) alts
-    ; let alteVIs = [eVI | (_, _, eVI, _) <- altsVI]
+    ; let alteVIs = [eVI | (_, _, eVI) <- altsVI]
           vi      =  foldl unlessVIParrExpr ceVI (eVI:alteVIs)  -- NB: same effect as in the paper
     -- ; viTrace ce vi (eVI : alteVIs)
     ; return ((fvs, vi), AnnCase eVI var ty altsVI)
     }
   where
     fvs = freeVarsOf ce
-    vectAvoidInfoAlt scrutIsPar (con, bndrs, e, f)
+    vectAvoidInfoAlt scrutIsPar (con, bndrs, e)
       = do
         { allScalar <- allScalarVarType bndrs
         ; let altPvs | scrutIsPar && not allScalar = pvs `extendVarSetList` bndrs
                      | otherwise                   = pvs
-        ; e' <- vectAvoidInfo altPvs e
-        ; return (con, bndrs, e', f)
+        ; (con, bndrs,) <$> vectAvoidInfo altPvs e
         }
 
 vectAvoidInfo pvs ce@(_, AnnCast e (fvs_ann, ann))

@@ -8,8 +8,7 @@ module CmmSwitch (
 
      SwitchPlan(..),
      targetSupportsSwitch,
-     createSwitchPlan,
-     module CoreSyn
+     createSwitchPlan
   ) where
 
 import GhcPrelude
@@ -23,7 +22,7 @@ import Data.Bifunctor
 import Data.List (groupBy)
 import Data.Function (on)
 import qualified Data.Map as M
-import CoreSyn (Freq, defFreq)
+import BasicTypes (Freq, defFreq)
 
 -- Note [Cmm Switches, the general plan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

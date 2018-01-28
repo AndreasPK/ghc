@@ -779,7 +779,7 @@ arityType env (Case scrut _ _ alts)
              | exprOkForSpeculation scrut    -> ATop as
              | otherwise                     -> ATop (takeWhile isOneShotInfo as)
   where
-    alts_type = foldr1 andArityType [arityType env rhs | (_,_,rhs,_) <- alts]
+    alts_type = foldr1 andArityType [arityType env rhs | (_,_,rhs) <- alts]
 
 arityType env (Let b e)
   = floatIn (cheap_bind b) (arityType env e)
@@ -984,7 +984,7 @@ etaInfoApp subst (Case e b ty alts) eis
     (subst1, b1) = substBndr subst b
     alts' = map subst_alt alts
     ty'   = etaInfoAppTy (CoreSubst.substTy subst ty) eis
-    subst_alt (con, bs, rhs, freq) = (con, bs', etaInfoApp subst2 rhs eis, freq)
+    subst_alt (con, bs, rhs) = (con, bs', etaInfoApp subst2 rhs eis)
               where
                  (subst2,bs') = substBndrs subst1 bs
 

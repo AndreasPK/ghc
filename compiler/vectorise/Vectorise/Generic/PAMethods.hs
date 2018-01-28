@@ -34,8 +34,6 @@ import MonadUtils
 import Control.Monad
 import Outputable
 
---TODOF: Not properly done
-
 
 buildPReprTyCon :: TyCon -> TyCon -> SumRepr -> VM FamInst
 buildPReprTyCon orig_tc vect_tc repr
@@ -114,23 +112,23 @@ buildToPRepr vect_tc repr_ax _ _ repr
           return $ wrap_repr_inst $ Var void
 
     to_sum arg arg_ty res_ty (UnarySum r)
-     = do (pat, vars, body, freq) <- con_alt r
+     = do (pat, vars, body) <- con_alt r
           return $ mkWildCase arg arg_ty res_ty
-                   [(pat, vars, wrap_repr_inst body, freq)]
+                   [(pat, vars, wrap_repr_inst body)]
 
     to_sum arg arg_ty res_ty (Sum { repr_sum_tc  = sum_tc
                                   , repr_con_tys = tys
                                   , repr_cons    =  cons })
      = do alts <- mapM con_alt cons
           let alts' = [(pat, vars, wrap_repr_inst
-                                   (mkConApp sum_con (map Type tys ++ [body])), f)
-                        | ((pat, vars, body, f), sum_con)
+                                   $ mkConApp sum_con (map Type tys ++ [body]))
+                        | ((pat, vars, body), sum_con)
                             <- zip alts (tyConDataCons sum_tc)]
           return $ mkWildCase arg arg_ty res_ty alts'
 
     con_alt (ConRepr con r)
      = do (vars, body) <- to_prod r
-          return (DataAlt con, vars, body, defFreq)
+          return (DataAlt con, vars, body)
 
     -- CoreExp to convert data constructor fields to the generic representation.
     to_prod :: ProdRepr -> VM ([Var], CoreExpr)
@@ -185,7 +183,7 @@ buildFromPRepr vect_tc repr_ax _ _ repr
      = do vars  <- newLocalVars (fsLit "x") tys
           es    <- zipWithM from_con (map Var vars) cons
           return $ mkWildCase expr (exprType expr) res_ty
-                   [(DataAlt con, [var], e, defFreq)
+                   [(DataAlt con, [var], e)
                       | (con, var, e) <- zip3 (tyConDataCons sum_tc) vars es]
 
     from_con expr (ConRepr con r)
@@ -204,7 +202,7 @@ buildFromPRepr vect_tc repr_ax _ _ repr
           es   <- zipWithM from_comp (map Var vars) comps
           let [tup_con] = tyConDataCons tup_tc
           return $ mkWildCase expr (exprType expr) res_ty
-                   [(DataAlt tup_con, vars, con `mkApps` es, defFreq)]
+                   [(DataAlt tup_con, vars, con `mkApps` es)]
 
     from_comp expr (Keep _ _) = return expr
     from_comp expr (Wrap ty)  = unwrapNewTypeBodyOfWrap expr ty
@@ -231,7 +229,7 @@ buildToArrPRepr vect_tc repr_co pdata_tc _ r
 
       return . Lam arg
              $ mkWildCase scrut (mkTyConApp pdata_tc ty_args) res_ty
-               [(DataAlt pdata_dc, vars, mkCast result co, defFreq)]
+               [(DataAlt pdata_dc, vars, mkCast result co)]
   where
     ty_args    = mkTyVarTys $ tyConTyVars vect_tc
     el_ty      = mkTyConApp vect_tc ty_args
@@ -318,7 +316,7 @@ buildFromArrPRepr vect_tc repr_co pdata_tc _ r
                 (res', args)   <- fold from_con res_ty res (map Var vars) (repr_cons ss)
                 let scrut      =  unwrapFamInstScrut psum_tc (repr_con_tys ss) expr
                 let body       =  mkWildCase scrut (exprType scrut) res_ty
-                                    [(DataAlt psum_con, sel : vars, res', defFreq)]
+                                    [(DataAlt psum_con, sel : vars, res')]
                 return (body, Var sel : args)
 
     from_prod res_ty res expr ss
@@ -333,7 +331,7 @@ buildFromArrPRepr vect_tc repr_co pdata_tc _ r
                 (res', args)   <- fold from_comp res_ty res (map Var vars) (repr_comps ss)
                 let scrut      =  unwrapFamInstScrut ptup_tc (repr_comp_tys ss) expr
                 let body       =  mkWildCase scrut (exprType scrut) res_ty
-                                    [(DataAlt ptup_con, vars, res', defFreq)]
+                                    [(DataAlt ptup_con, vars, res')]
                 return (body, args)
 
     from_con res_ty res expr (ConRepr _ r) = from_prod res_ty res expr r
@@ -380,7 +378,7 @@ buildToArrPReprs vect_tc repr_co _ pdatas_tc r
 
     return  $ Lam varg
             $ mkWildCase scrut (mkTyConApp pdatas_tc ty_args) res_ty
-                    [(DataAlt pdatas_dc, vars, mkCast result co, defFreq)]
+                    [(DataAlt pdatas_dc, vars, mkCast result co)]
 
  where
     -- The element type of the argument.
@@ -506,7 +504,7 @@ buildFromArrPReprs vect_tc repr_co _ pdatas_tc r
                 (res', args)    <- fold from_con res_ty res (map Var vars) (repr_cons ss)
                 let scrut       =  unwrapFamInstScrut psums_tc (repr_con_tys ss) expr
                 let body        =  mkWildCase scrut (exprType scrut) res_ty
-                                    [(DataAlt psums_con, sel : vars, res', defFreq)]
+                                    [(DataAlt psums_con, sel : vars, res')]
                 return (body, Var sel : args)
 
     from_prod res_ty res expr ss
@@ -521,7 +519,7 @@ buildFromArrPReprs vect_tc repr_co _ pdatas_tc r
                 (res', args)    <- fold from_comp res_ty res (map Var vars) (repr_comps ss)
                 let scrut       =  unwrapFamInstScrut ptups_tc (repr_comp_tys ss) expr
                 let body        =  mkWildCase scrut (exprType scrut) res_ty
-                                    [(DataAlt ptups_con, vars, res', defFreq)]
+                                    [(DataAlt ptups_con, vars, res')]
                 return (body, args)
 
     from_con res_ty res expr (ConRepr _ r)

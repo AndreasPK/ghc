@@ -227,7 +227,7 @@ simple_opt_expr env expr
        -- See Note [Getting the map/coerce RULE to work]
       | isDeadBinder b
       , Just (con, _tys, es) <- exprIsConApp_maybe in_scope_env e'
-      , Just (altcon, bs, rhs, _) <- findAlt (DataAlt con) as
+      , Just (altcon, bs, rhs) <- findAlt (DataAlt con) as
       = case altcon of
           DEFAULT -> go rhs
           _       -> foldr wrapLet (simple_opt_expr env' rhs) mb_prs
@@ -237,7 +237,7 @@ simple_opt_expr env expr
 
          -- Note [Getting the map/coerce RULE to work]
       | isDeadBinder b
-      , [(DEFAULT, _, rhs, _freq)] <- as
+      , [(DEFAULT, _, rhs)] <- as
       , isCoercionType (varType b)
       , (Var fun, _args) <- collectArgs e
       , fun `hasKey` coercibleSCSelIdKey
@@ -252,8 +252,8 @@ simple_opt_expr env expr
         (env', b') = subst_opt_bndr env b
 
     ----------------------
-    go_alt env (con, bndrs, rhs, freq) --TODOF: Can we make a simple check for a error branch here?
-      = (con, bndrs', simple_opt_expr env' rhs, freq)
+    go_alt env (con, bndrs, rhs)
+      = (con, bndrs', simple_opt_expr env' rhs)
       where
         (env', bndrs') = subst_opt_bndrs env bndrs
 

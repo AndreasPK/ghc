@@ -97,7 +97,7 @@ seqPairs ((b,e):prs) = seqBndr b `seq` seqExpr e `seq` seqPairs prs
 
 seqAlts :: [CoreAlt] -> ()
 seqAlts [] = ()
-seqAlts ((c,bs,e,f):alts) = c `seq` seqBndrs bs `seq` seqExpr e `seq` f `seq` seqAlts alts
+seqAlts ((c,bs,e):alts) = c `seq` seqBndrs bs `seq` seqExpr e `seq` seqAlts alts
 
 seqUnfolding :: Unfolding -> ()
 seqUnfolding (CoreUnfolding { uf_tmpl = e, uf_is_top = top,

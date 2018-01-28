@@ -18,7 +18,7 @@ module CoreToStg ( coreToStg, coreExprToStg ) where
 import GhcPrelude
 
 import CoreSyn
-import CoreUtils        ( exprType, findDefault, isJoinBind )
+import CoreUtils        ( exprType, findDefault, isJoinBind, exprIsBottom )
 import CoreArity        ( manifestArity )
 import StgSyn
 
@@ -34,7 +34,7 @@ import VarEnv
 import Module
 import Name             ( isExternalName, nameOccName )
 import OccName          ( occNameFS )
-import BasicTypes       ( Arity )
+import BasicTypes       ( Arity, neverFreq, defFreq )
 import TysWiredIn       ( unboxedUnitDataCon )
 import Literal
 import Outputable
@@ -435,21 +435,24 @@ coreToStgExpr (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
-    vars_alt (con, binders, rhs, freq)
+    alt_freq rhs 
+      | exprIsBottom rhs = neverFreq
+      | otherwise = defFreq
+    vars_alt (con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon
       = -- This case is a bit smelly.
         -- See Note [Nullary unboxed tuple] in Type.hs
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
         do { (rhs2, rhs_fvs) <- coreToStgExpr rhs
-           ; return ((DEFAULT, [], rhs2, freq), rhs_fvs) }
+           ; return ((DEFAULT, [], rhs2, alt_freq rhs), rhs_fvs) }
       | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
         extendVarEnvCts [(b, LambdaBound) | b <- binders'] $ do
         (rhs2, rhs_fvs) <- coreToStgExpr rhs
-        return ( (con, binders', rhs2, freq),
+        return ( (con, binders', rhs2, alt_freq rhs),
                  binders' `minusFVBinders` rhs_fvs )
 
 coreToStgExpr (Let bind body) = do
@@ -489,7 +492,7 @@ mkStgAltType bndr alts
    -- grabbing the one from a constructor alternative
    -- if one exists.
    look_for_better_tycon
-        | ((DataAlt con, _, _, _) : _) <- data_alts =
+        | ((DataAlt con, _, _) : _) <- data_alts =
                 AlgAlt (dataConTyCon con)
         | otherwise =
                 ASSERT(null data_alts)

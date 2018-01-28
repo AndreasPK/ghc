@@ -905,7 +905,7 @@ decomposeRuleLhs orig_bndrs orig_lhs
      where (bs, body') = split_lets body
 
     -- handle "unlifted lets" too, needed for "map/coerce"
-   split_lets (Case r d _ [(DEFAULT, _, body,_)])
+   split_lets (Case r d _ [(DEFAULT, _, body)])
      | isCoVar d
      = ((d,r):bs, body')
      where (bs, body') = split_lets body

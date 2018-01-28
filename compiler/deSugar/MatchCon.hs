@@ -164,8 +164,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
         ; return $ MkCaseAlt{ alt_pat = con1,
                               alt_bndrs = tvs1 ++ dicts1 ++ arg_vars,
                               alt_wrapper = wrapper1,
-                              alt_result = foldr1 combineMatchResults match_results,
-                              alt_freq = Nothing } } --TODOF: Revisit!
+                              alt_result = foldr1 combineMatchResults match_results } }
   where
     ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 }

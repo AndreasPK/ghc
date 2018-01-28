@@ -427,8 +427,7 @@ ds_expr _ (HsIf mb_fun guard_expr then_expr else_expr)
        ; b2 <- dsLExpr else_expr
        ; case mb_fun of
            Just fun -> dsSyntaxExpr fun [pred, b1, b2]
-           Nothing  -> return $ mkIfThenElse pred b1 b2 Nothing} 
-           --TODOF: Consider for annotations
+           Nothing  -> return $ mkIfThenElse pred b1 b2 }
 
 ds_expr _ (HsMultiIf res_ty alts)
   | null alts

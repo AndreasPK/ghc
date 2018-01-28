@@ -223,9 +223,9 @@ satExpr (Case expr bndr ty alts) interesting_ids = do
     let (alts', sat_infos_alts) = unzip zipped_alts'
     return (Case expr' bndr ty alts', mergeIdSATInfo sat_info_expr' (mergeIdSATInfos sat_infos_alts), Nothing)
   where
-    satAlt (con, bndrs, expr, freq) = do
+    satAlt (con, bndrs, expr) = do
         (expr', sat_info_expr) <- satTopLevelExpr expr interesting_ids
-        return ((con, bndrs, expr', freq), sat_info_expr)
+        return ((con, bndrs, expr'), sat_info_expr)
 
 satExpr (Let bind body) interesting_ids = do
     (body', sat_info_body, body_app) <- satExpr body interesting_ids

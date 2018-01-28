@@ -17,8 +17,6 @@ module StgSyn (
         GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
         GenStgAlt, AltType(..),
 
-        module CoreSyn, --TODOF: Seperate stg type? Move to basic types?
-
         UpdateFlag(..), isUpdatable,
 
         StgBinderInfo,
@@ -49,7 +47,8 @@ module StgSyn (
 
 import GhcPrelude
 
-import CoreSyn     ( AltCon, Tickish, Freq )
+import BasicTypes  (Freq, defFreq, neverFreq)
+import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
 import Data.List   ( intersperse )
