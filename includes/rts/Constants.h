@@ -116,8 +116,8 @@
    -------------------------------------------------------------------------- */
 #if defined(x86_64_HOST_ARCH)
 #  if defined(mingw32_HOST_OS)
-/* 8 larger than necessary to make the alignment right*/
-#    define STG_RUN_STACK_FRAME_SIZE 80
+/* Must be a multiple of 16 to make the alignment right*/
+#    define STG_RUN_STACK_FRAME_SIZE 144
 #  else
 #    define STG_RUN_STACK_FRAME_SIZE 48
 #  endif
