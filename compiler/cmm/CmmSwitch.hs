@@ -22,7 +22,7 @@ import Data.Bifunctor
 import Data.List (groupBy)
 import Data.Function (on)
 import qualified Data.Map as M
-import BasicTypes (Freq, defFreq)
+import BasicTypes (Freq, defFreq, combineFreqs)
 
 -- Note [Cmm Switches, the general plan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -229,7 +229,7 @@ eqSwitchTargetWith eq (SwitchTargets signed1 range1 mbdef1 ids1) (SwitchTargets 
     goMB _ _ = False
     goList [] [] = True
     goList ((i1,l1):ls1) ((i2,l2):ls2) =
-      i1 == i2 && 
+      i1 == i2 &&
       liLbl l1 `eq` liLbl l2 &&
       goList ls1 ls2
     goList _ _ = False
@@ -334,23 +334,25 @@ targetSupportsSwitch HscC = True
 targetSupportsSwitch HscLlvm = True
 targetSupportsSwitch _ = False
 
+--TODOF: Add chance to switchplan  (see basic types)
+
 -- | This function creates a SwitchPlan from a SwitchTargets value, breaking it
 -- down into smaller pieces suitable for code generation.
 createSwitchPlan :: SwitchTargets -> SwitchPlan
 -- Lets do the common case of a singleton map quicky and efficiently (#10677)
 createSwitchPlan (SwitchTargets _signed _range (Just defInfo) m)
     | [(x, (l,f))] <- M.toList m
-    = IfEqual x l (Unconditionally (liLbl defInfo)) (liFreq defInfo - f) --TODOF: Add chance to switchplan
+    = IfEqual x l (Unconditionally (liLbl defInfo)) (liFreq defInfo - f)
 -- And another common case, matching "booleans"
 createSwitchPlan (SwitchTargets _signed (lo,hi) Nothing m)
     | [(x1, (l1,f1)), (_x2,(l2,f2))] <- M.toAscList m
     --Checking If |range| = 2 is enough if we have two unique literals
     , hi - lo == 1
-    = IfEqual x1 l1 (Unconditionally l2) (f2 - f1) --TODOF: Check
+    = IfEqual x1 l1 (Unconditionally l2) (f1 - f2)
 -- See Note [Two alts + default]
 createSwitchPlan (SwitchTargets _signed _range (Just (defLabel, fdef)) m)
     | [(x1, (l1,f1)), (x2,(l2,f2))] <- M.toAscList m
-    = IfEqual x1 l1 (IfEqual x2 l2 (Unconditionally defLabel) (f2 - fdef)) (f1 - (f2 + fdef)) --TODOF: Check
+    = IfEqual x1 l1 (IfEqual x2 l2 (Unconditionally defLabel) (f2 - fdef)) (f1 - (f2 + fdef))
 createSwitchPlan (SwitchTargets signed range mbdef m) =
     -- pprTrace "createSwitchPlan" (text (show ids) $$ text (show (range,m)) $$ text (show pieces) $$ text (show flatPlan) $$ text (show plan)) $
     plan
@@ -394,8 +396,9 @@ breakTooSmall m
 
 type FlatSwitchPlan = SeparatedList Integer SwitchPlan
 
---TODOF: This isn't trivial so just defer for now
-
+{-TODOF: Given the frequency information in LabelInfo we could do better than binary search
+  Look at buildTree, findSingleValues, mkFlatSwitchPlan if you implement this.
+-}
 mkFlatSwitchPlan :: Bool -> Maybe LabelInfo -> (Integer, Integer) -> [M.Map Integer LabelInfo] -> FlatSwitchPlan
 
 -- If we have no default (i.e. undefined where there is no entry), we can
@@ -442,7 +445,7 @@ mkLeafPlan signed mbdef m
 findSingleValues :: FlatSwitchPlan -> FlatSwitchPlan
 findSingleValues (Unconditionally l, (i, Unconditionally l2) : (i', Unconditionally l3) : xs)
   | l == l3 && i + 1 == i'
-  = findSingleValues (IfEqual i l2 (Unconditionally l) defFreq, xs) --TODOF: Figure it out 
+  = findSingleValues (IfEqual i l2 (Unconditionally l) defFreq, xs)
 findSingleValues (p, (i,p'):xs)
   = (p,i) `consSL` findSingleValues (p', xs)
 findSingleValues (p, [])
@@ -455,8 +458,8 @@ findSingleValues (p, [])
 -- Build a balanced tree from a separated list
 buildTree :: Bool -> FlatSwitchPlan -> SwitchPlan
 buildTree _ (p,[]) = p
-buildTree signed sl 
-  = IfLT signed m (buildTree signed sl1) (buildTree signed sl2) defFreq --TODOF: Figure it out
+buildTree signed sl
+  = IfLT signed m (buildTree signed sl1) (buildTree signed sl2) defFreq
   where
     (sl1, m, sl2) = divideSL sl
 

@@ -500,8 +500,8 @@ mk_discrete_switch _ _tag_expr [(_tag,lbl,_)] Nothing _
 -- SOMETHING MORE COMPLICATED: defer to CmmImplementSwitchPlans
 -- See Note [Cmm Switches, the general plan] in CmmSwitch
 mk_discrete_switch signed tag_expr branches mb_deflt range
-  = mkSwitch tag_expr $ 
-      mkSwitchTargets signed range mb_deflt 
+  = mkSwitch tag_expr $
+      mkSwitchTargets signed range mb_deflt
         (M.fromList $ map (\(i,e,f)-> (i,(e,f))) branches)
 
 --------------
@@ -562,7 +562,7 @@ noBound = (Nothing, Nothing)
     * How should entries with no information be treated?
       -> Probably good enough to use the default value.
     * Doing this exact could be expensive, especially for large lists when
-      done wrong. Enable this only at -O2?  
+      done wrong. Enable this only at -O2?
 -}
 mk_float_switch :: Width -> CmmExpr -> (BlockId, Freq)
               -> LitBound
@@ -583,7 +583,7 @@ mk_float_switch rep scrut (deflt_blk_id,dfreq) (lo_bound, hi_bound) branches
        hi_blk <- mk_float_switch rep scrut (deflt_blk_id,dfreq) bounds_hi hi_branches
        mkCmmIfThenElse (cond dflags) lo_blk hi_blk Nothing
   where
-    
+
     (lo_branches, mid_lit, hi_branches) = divideBranches branches
 
     bounds_lo = (lo_bound, Just mid_lit)

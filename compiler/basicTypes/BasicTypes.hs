@@ -109,7 +109,7 @@ module BasicTypes(
         SpliceExplicitFlag(..),
 
         Freq, neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq,
-        alwaysFreq, combineFreqs
+        alwaysFreq, combineFreqs, moreLikely
    ) where
 
 import GhcPrelude
@@ -1629,14 +1629,25 @@ Freq - Relative frequency with which a alternative is taken
 We use a Int for performance reasons, however only the named
 predefined values should be used.
 
+Treating it as an Integer WILL break eventually.
+
 Meaning of values:
 * f < 0: Optimize for the assumption the alternative is never taken.
 * f >= 0: Values are relative to each other, for two alternatives:
-          (a1, f1) (a2,f1*10)
-          We assume a1 is taken once for every 10 times a2 is taken.
+          (a1, f1) (a2,f2)
+          We assume a1 is taken more often if f1 > f2.
+
+Ideally we want a way to track this more precise so that we can optimize
+sparse switch tables for the common path(s) and so on.
+
+But as long as we only have info about exceptional states from isBottomExpr
+at the Core->Stg translation and stack/heap checks at the stg->cmm stage
+this doesn't buy us anything. So the above semantic works for now.
+
 -}
 
--- | Frequency with which a alternative is taken, values are relative to each other. 
+-- | Frequency with which a alternative is taken,
+--   values are relative to each other.
 type Freq = Int
 
 neverFreq, rareFreq, someFreq, defFreq,
@@ -1651,13 +1662,18 @@ usuallyFreq = defFreq * 10
 --integer overflow issues on 32bit platforms.
 alwaysFreq = defFreq * 50
 
+-- | Is f1 more likely then f2?
+--   Returns nothing if they are the same
+moreLikely :: Freq -> Freq -> Maybe Bool
+moreLikely f1 f2
+  | f1 > f2   = Just True
+  | f1 < f2   = Just False
+  | otherwise = Nothing
+
 -- | Add up frequencies respecting never.
 -- Combining two frequencies where one is never results on the other one.
 combineFreqs :: Freq -> Freq -> Freq
-combineFreqs f1 f2 
+combineFreqs f1 f2
   | f1 < 0 && f2 >= 0 = f2
   | f2 < 0 && f1 >= 0 = f1
   | otherwise = f1 + f2
-
-
-  

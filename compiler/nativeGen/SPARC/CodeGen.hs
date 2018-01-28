@@ -341,7 +341,8 @@ genSwitch dflags expr targets
                         , NOP ]
         where
                 (offset, lblInfos) = switchTargetsToTable targets :: (Int, [Maybe LabelInfo])
-                ids = map (fmap liLbl) lblInfos --TODOF: Documents why we have that info
+                --lblInfos contains branch weights, we only use the labels for now.
+                ids = map (fmap liLbl) lblInfos
 
 generateJumpTableForInstr :: DynFlags -> Instr
                           -> Maybe (NatCmmDecl CmmStatics Instr)

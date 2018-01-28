@@ -1079,7 +1079,7 @@ genSwitch cond ids = do
     (vc, stmts, top) <- exprToVar cond
     let ty = getVarType vc
 
-    --TODOF: Maybe llvm can use this info as well
+    --TODO: Propagate branch weights to LLVM
     let labels = [ (mkIntLit ty ix, blockIdToLlvm b)
                  | (ix, (b,_f)) <- switchTargetsCases ids ]
     -- out of range is undefined, so let's just branch to first label

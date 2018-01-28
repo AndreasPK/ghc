@@ -1361,8 +1361,7 @@ withSourceNote a b parse = do
 -- -----------------------------------------------------------------------------
 -- Table jumps
 
--- We use a simplified form of C-- switch statements for now.  A
--- switch statement always compiles to a table jump.  Each arm can
+-- We use a simplified form of C-- switch statements for now. Each arm can
 -- specify a list of values (not ranges), and there can be a single
 -- default branch.  The range of the table is given either by the
 -- optional range on the switch (eg. switch [0..7] {...}), or by

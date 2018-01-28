@@ -381,7 +381,7 @@ elimCase :: UnariseEnv
          -> [OutStgArg] -- non-void args
          -> InId -> AltType -> [InStgAlt] -> UniqSM OutStgExpr
 
-elimCase rho args bndr (MultiValAlt _) [(_, bndrs, rhs, _freq)] --TODOF: Check!
+elimCase rho args bndr (MultiValAlt _) [(_, bndrs, rhs, _freq)]
   = do let rho1 = extendRho rho bndr (MultiVal args)
            rho2
              | isUnboxedTupleBndr bndr
@@ -412,7 +412,6 @@ elimCase _ args bndr alt_ty alts
 
 --------------------------------------------------------------------------------
 
---TODOF: Check
 unariseAlts :: UnariseEnv -> AltType -> InId -> [StgAlt] -> UniqSM [StgAlt]
 unariseAlts rho (MultiValAlt n) bndr [(DEFAULT, [], e, f)]
   | isUnboxedTupleBndr bndr
@@ -440,7 +439,7 @@ unariseAlts rho (MultiValAlt _) bndr [(DEFAULT, _, rhs, f)]
        return [(DataAlt (tupleDataCon Unboxed (length sum_bndrs)), sum_bndrs, rhs', f)]
 
 unariseAlts rho (MultiValAlt _) bndr alts
-  | isUnboxedSumBndr bndr --TODOF: Check
+  | isUnboxedSumBndr bndr
   = do (rho_sum_bndrs, scrt_bndrs@(tag_bndr : real_bndrs)) <- unariseConArgBinder rho bndr
        alts' <- unariseSumAlts rho_sum_bndrs (map StgVarArg real_bndrs) alts
        let inner_case = StgCase (StgApp tag_bndr []) tag_bndr tagAltTy alts'
@@ -454,7 +453,7 @@ unariseAlts rho _ _ alts
 unariseAlt :: UnariseEnv -> StgAlt -> UniqSM StgAlt
 unariseAlt rho (con, xs, e, f)
   = do (rho', xs') <- unariseConArgBinders rho xs
-       e'          <- unariseExpr rho' e 
+       e'          <- unariseExpr rho' e
        return (con, xs', e', f)
 
 --------------------------------------------------------------------------------
@@ -474,7 +473,7 @@ unariseSumAlt :: UnariseEnv
               -> StgAlt   -- original alternative with sum LHS
               -> UniqSM StgAlt
 unariseSumAlt rho _ (DEFAULT, _, e, f)
-  = unariseExpr rho e >>= \e -> return ( DEFAULT, [], e, f) 
+  = unariseExpr rho e >>= \e -> return ( DEFAULT, [], e, f)
 
 unariseSumAlt rho args (DataAlt sumCon, bs, e, f)
   = do let rho' = mapSumIdBinders bs args rho

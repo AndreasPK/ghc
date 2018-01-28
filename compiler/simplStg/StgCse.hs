@@ -329,7 +329,6 @@ stgCseExpr env (StgLetNoEscape binds body)
 
 -- Case alternatives
 -- Extend the CSE environment
---TODOF: Check (sum up?)
 stgCseAlt :: CseEnv -> OutId -> InStgAlt -> OutStgAlt
 stgCseAlt env case_bndr (DataAlt dataCon, args, rhs, freq)
     = let (env1, args') = substBndrs env args

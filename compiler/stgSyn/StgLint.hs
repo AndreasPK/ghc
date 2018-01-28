@@ -224,7 +224,6 @@ lintStgExpr (StgCase scrut bndr alts_type alts) = runMaybeT $ do
 lintStgAlts :: [StgAlt]
             -> Type               -- Type of scrutinee
             -> LintM (Maybe Type) -- Just ty => type is accurage
---TODOF: Check sum of frequencies maybe?
 lintStgAlts alts scrut_ty = do
     maybe_result_tys <- mapM (lintAlt scrut_ty) alts
 

@@ -355,7 +355,7 @@ pprSwitch dflags e ids
 
     caseify (_     , _    ) = panic "pprSwitch: switch with no cases!"
 
-    def | Just li <- mbdef 
+    def | Just li <- mbdef
         = text "default: goto" <+> pprBlockId (liLbl li) <> semi <+>
           parens (text "likely:" <> ppr (liFreq li))
         | otherwise       = empty

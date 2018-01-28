@@ -435,7 +435,7 @@ coreToStgExpr (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
-    alt_freq rhs 
+    alt_freq rhs
       | exprIsBottom rhs = neverFreq
       | otherwise = defFreq
     vars_alt (con, binders, rhs)

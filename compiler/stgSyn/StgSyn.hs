@@ -786,8 +786,7 @@ pprStgExpr (StgCase expr bndr alt_type alts)
 pprStgAlt :: (OutputableBndr bndr, Outputable occ, Ord occ)
           => GenStgAlt bndr occ -> SDoc
 pprStgAlt (con, params, expr, f)
---TODOF: Tidy
-  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), (text "likely:" <> ppr f) , text "->"])
+  = hang (hsep [ppr con, sep (map (pprBndr CasePatBind) params), parens (text "likely:" <> ppr f) , text "->"])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc
