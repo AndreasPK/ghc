@@ -279,6 +279,11 @@ StgRunIsImplementedInAssembler(void)
         "movq %%r14,32(%%rax)\n\t"
         "movq %%r15,40(%%rax)\n\t"
 #if defined(mingw32_HOST_OS)
+        /*
+         * Additional callee saved registers on Win64. This must match
+         * callClobberedRegisters in compiler/nativeGen/X86/Regs.hs as
+         * both represent the Win64 calling convention.
+         */
         "movq %%rdi,48(%%rax)\n\t"
         "movq %%rsi,56(%%rax)\n\t"
         "movq %%xmm6,  64(%%rax)\n\t"
