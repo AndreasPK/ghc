@@ -123,7 +123,8 @@ liFreq = snd
 --  * No entries outside the range
 --  * No entries equal to the default
 --  * No default if all elements have explicit values
-mkSwitchTargets :: Bool -> (Integer, Integer) -> Maybe LabelInfo -> M.Map Integer LabelInfo -> SwitchTargets
+mkSwitchTargets :: Bool -> (Integer, Integer) -> Maybe LabelInfo
+                -> M.Map Integer LabelInfo -> SwitchTargets
 mkSwitchTargets signed range@(lo,hi) mbdef ids
     = SwitchTargets signed range mbdef' ids'
   where
@@ -145,7 +146,9 @@ mkSwitchTargets signed range@(lo,hi) mbdef ids
 -- | Changes all labels mentioned in the SwitchTargets value
 mapSwitchTargets :: (Label -> Label) -> SwitchTargets -> SwitchTargets
 mapSwitchTargets f (SwitchTargets signed range mbdef branches)
-    = SwitchTargets signed range (fmap (first f) mbdef) (fmap (first f) branches)
+    = SwitchTargets signed range
+                    (fmap (first f) mbdef)
+                    (fmap (first f) branches)
 
 -- | Returns the list of non-default branches of the SwitchTargets value
 switchTargetsCases :: SwitchTargets -> [(Integer, LabelInfo)]
@@ -212,7 +215,8 @@ switchTargetsToList (SwitchTargets _ _ mbdef branches)
 
 -- | Groups cases with equal targets, suitable for pretty-printing to a
 -- c-like switch statement with fall-through semantics.
-switchTargetsFallThrough :: SwitchTargets -> ([([Integer], LabelInfo)], Maybe LabelInfo)
+switchTargetsFallThrough :: SwitchTargets
+                         -> ([([Integer], LabelInfo)], Maybe LabelInfo)
 switchTargetsFallThrough (SwitchTargets _ _ mbdef branches) = (groups, mbdef)
   where
     groups = map (\xs -> (map fst xs, snd (head xs))) $
@@ -220,9 +224,15 @@ switchTargetsFallThrough (SwitchTargets _ _ mbdef branches) = (groups, mbdef)
              M.toList branches
 
 -- | Custom equality helper, needed for "CmmCommonBlockElim"
-eqSwitchTargetWith :: (Label -> Label -> Bool) -> SwitchTargets -> SwitchTargets -> Bool
-eqSwitchTargetWith eq (SwitchTargets signed1 range1 mbdef1 ids1) (SwitchTargets signed2 range2 mbdef2 ids2) =
-    signed1 == signed2 && range1 == range2 && goMB mbdef1 mbdef2 && goList (M.toList ids1) (M.toList ids2)
+eqSwitchTargetWith :: (Label -> Label -> Bool)
+                   -> SwitchTargets -> SwitchTargets
+                   -> Bool
+eqSwitchTargetWith eq
+  (SwitchTargets signed1 range1 mbdef1 ids1)
+  (SwitchTargets signed2 range2 mbdef2 ids2) =
+    signed1 == signed2 && range1 == range2 &&
+    goMB mbdef1 mbdef2 &&
+    goList (M.toList ids1) (M.toList ids2)
   where
     goMB Nothing Nothing = True
     goMB (Just l1) (Just l2) = liLbl l1 `eq` liLbl l2
@@ -352,9 +362,13 @@ createSwitchPlan (SwitchTargets _signed (lo,hi) Nothing m)
 -- See Note [Two alts + default]
 createSwitchPlan (SwitchTargets _signed _range (Just (defLabel, fdef)) m)
     | [(x1, (l1,f1)), (x2,(l2,f2))] <- M.toAscList m
-    = IfEqual x1 l1 (IfEqual x2 l2 (Unconditionally defLabel) (f2 - fdef)) (f1 - (f2 + fdef))
+    = IfEqual x1 l1
+        (IfEqual x2 l2 (Unconditionally defLabel) (f2 - fdef))
+        (f1 - (f2 + fdef))
 createSwitchPlan (SwitchTargets signed range mbdef m) =
-    -- pprTrace "createSwitchPlan" (text (show ids) $$ text (show (range,m)) $$ text (show pieces) $$ text (show flatPlan) $$ text (show plan)) $
+    -- pprTrace "createSwitchPlan" (text (show ids) $$
+    -- text (show (range,m)) $$ text (show pieces) $$
+    -- text (show flatPlan) $$ text (show plan)) $
     plan
   where
     pieces = concatMap breakTooSmall $ splitAtHoles maxJumpTableHole m
@@ -396,20 +410,27 @@ breakTooSmall m
 
 type FlatSwitchPlan = SeparatedList Integer SwitchPlan
 
-{-TODOF: Given the frequency information in LabelInfo we could do better than binary search
-  Look at buildTree, findSingleValues, mkFlatSwitchPlan if you implement this.
+{-TODOF:
+  Given the frequency information in LabelInfo we could do better
+  than binary search. Look at buildTree, findSingleValues, mkFlatSwitchPlan
+  if you implement this.
 -}
-mkFlatSwitchPlan :: Bool -> Maybe LabelInfo -> (Integer, Integer) -> [M.Map Integer LabelInfo] -> FlatSwitchPlan
+mkFlatSwitchPlan :: Bool -> Maybe LabelInfo
+                 -> (Integer, Integer) -> [M.Map Integer LabelInfo]
+                 -> FlatSwitchPlan
 
 -- If we have no default (i.e. undefined where there is no entry), we can
 -- branch at the minimum of each map
-mkFlatSwitchPlan _ Nothing _ [] = pprPanic "mkFlatSwitchPlan with nothing left to do" empty
+mkFlatSwitchPlan _ Nothing _ []
+  = pprPanic "mkFlatSwitchPlan with nothing left to do" empty
 mkFlatSwitchPlan signed  Nothing _ (m:ms)
-  = (mkLeafPlan signed Nothing m , [ (fst (M.findMin m'), mkLeafPlan signed Nothing m') | m' <- ms ])
+  = (mkLeafPlan signed Nothing m ,
+     [ (fst (M.findMin m'), mkLeafPlan signed Nothing m') | m' <- ms ])
 
 -- If we have a default, we have to interleave segments that jump
 -- to the default between the maps
-mkFlatSwitchPlan signed (Just (l,f)) r ms = let ((_,p1):ps) = go r ms in (p1, ps)
+mkFlatSwitchPlan signed (Just (l,f)) r ms
+  = let ((_,p1):ps) = go r ms in (p1, ps)
   where
     go (lo,hi) []
         | lo > hi = []

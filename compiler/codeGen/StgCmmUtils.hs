@@ -463,12 +463,13 @@ emitSwitch _ [(_,code,_)] Nothing     _ _ = emit (fst code)
 -- Right, off we go
 emitSwitch tag_expr branches mb_deflt lo_tag hi_tag = do
     join_lbl      <- newBlockId
-    mb_deflt_lbl  <- label_default join_lbl mb_deflt :: FCode (Maybe (BlockId,Freq))
-    branches_lbls <- label_branches join_lbl branches :: FCode [(ConTagZ, BlockId,Freq)]
+    mb_deflt_lbl  <- label_default join_lbl mb_deflt
+    branches_lbls <- label_branches join_lbl branches
     tag_expr'     <- assignTemp' tag_expr
 
     -- Sort the branches before calling mk_discrete_switch
-    let branches_lbls' = [ (fromIntegral i, l, f) | (i,l,f) <- sortWith fstOf3 branches_lbls ]
+    let branches_lbls' = [ (fromIntegral i, l, f)
+                         | (i,l,f) <- sortWith fstOf3 branches_lbls ]
     let range = (fromIntegral lo_tag, fromIntegral hi_tag)
 
     emit $ mk_discrete_switch False tag_expr' branches_lbls' mb_deflt_lbl range
@@ -507,7 +508,7 @@ mk_discrete_switch signed tag_expr branches mb_deflt range
 --------------
 emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
                -> [(Literal, CmmAGraphScoped, Freq)] -- Tagged branches
-               -> (CmmAGraphScoped, Freq)              -- Default branch (always)
+               -> (CmmAGraphScoped, Freq)            -- Default branch (always)
                -> FCode ()                     -- Emit the code
 emitCmmLitSwitch _scrut []       (deflt,_dfreq) = emit $ fst deflt
 emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
@@ -530,7 +531,9 @@ emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
               | otherwise = (0, tARGET_MAX_WORD dflags)
 
     if isFloatType cmm_ty
-    then emit =<< mk_float_switch rep scrut' (deflt_lbl, dfreq) noBound branches_lbls
+    then emit =<< mk_float_switch rep scrut'
+                    (deflt_lbl, dfreq) noBound
+                    branches_lbls
     else emit $ mk_discrete_switch
         signed
         scrut'
@@ -579,8 +582,12 @@ mk_float_switch rep scrut (deflt, _dfrq) _bounds [(lit,blk,_frq)]
 
 mk_float_switch rep scrut (deflt_blk_id,dfreq) (lo_bound, hi_bound) branches
   = do dflags <- getDynFlags
-       lo_blk <- mk_float_switch rep scrut (deflt_blk_id,dfreq) bounds_lo lo_branches
-       hi_blk <- mk_float_switch rep scrut (deflt_blk_id,dfreq) bounds_hi hi_branches
+       lo_blk <- mk_float_switch
+                    rep scrut (deflt_blk_id,dfreq)
+                    bounds_lo lo_branches
+       hi_blk <- mk_float_switch
+                    rep scrut
+                    (deflt_blk_id,dfreq) bounds_hi hi_branches
        mkCmmIfThenElse (cond dflags) lo_blk hi_blk Nothing
   where
 
@@ -606,7 +613,8 @@ mk_float_switch rep scrut (deflt_blk_id,dfreq) (lo_bound, hi_bound) branches
 
 
 --------------
-label_default :: BlockId -> Maybe (CmmAGraphScoped, Freq) -> FCode (Maybe (BlockId, Freq))
+label_default :: BlockId -> Maybe (CmmAGraphScoped, Freq)
+              -> FCode (Maybe (BlockId, Freq))
 label_default _ Nothing
   = return Nothing
 label_default join_lbl (Just (code,f))
@@ -614,7 +622,8 @@ label_default join_lbl (Just (code,f))
        return (Just (lbl,f))
 
 --------------
-label_branches :: BlockId -> [(a,CmmAGraphScoped, Freq)] -> FCode [(a,BlockId,Freq)]
+label_branches :: BlockId -> [(a,CmmAGraphScoped, Freq)]
+               -> FCode [(a,BlockId,Freq)]
 label_branches _join_lbl []
   = return []
 label_branches join_lbl ((tag,code,freq):branches)

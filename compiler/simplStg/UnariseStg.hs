@@ -436,11 +436,14 @@ unariseAlts rho (MultiValAlt _) bndr [(DEFAULT, _, rhs, f)]
   | isUnboxedSumBndr bndr
   = do (rho_sum_bndrs, sum_bndrs) <- unariseConArgBinder rho bndr
        rhs' <- unariseExpr rho_sum_bndrs rhs
-       return [(DataAlt (tupleDataCon Unboxed (length sum_bndrs)), sum_bndrs, rhs', f)]
+       return
+         [(DataAlt (tupleDataCon Unboxed (length sum_bndrs)),
+          sum_bndrs, rhs', f)]
 
 unariseAlts rho (MultiValAlt _) bndr alts
   | isUnboxedSumBndr bndr
-  = do (rho_sum_bndrs, scrt_bndrs@(tag_bndr : real_bndrs)) <- unariseConArgBinder rho bndr
+  = do (rho_sum_bndrs,
+        scrt_bndrs@(tag_bndr : real_bndrs)) <- unariseConArgBinder rho bndr
        alts' <- unariseSumAlts rho_sum_bndrs (map StgVarArg real_bndrs) alts
        let inner_case = StgCase (StgApp tag_bndr []) tag_bndr tagAltTy alts'
        return [ (DataAlt (tupleDataCon Unboxed (length scrt_bndrs)),

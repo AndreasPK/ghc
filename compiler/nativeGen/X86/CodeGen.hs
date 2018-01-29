@@ -2841,8 +2841,9 @@ genSwitch dflags expr targets
                  ]
         return code
   where
-    (offset, lblInfos) = switchTargetsToTable targets :: (Int, [Maybe LabelInfo])
-    --lblInfos contains branch weights, but for the jump table we use only the labels.
+    (offset, lblInfos) = switchTargetsToTable targets
+    -- lblInfos contains branch weights too,
+    -- but for the jump table we use only the labels.
     ids = map (fmap liLbl) lblInfos
 
 generateJumpTableForInstr :: DynFlags -> Instr -> Maybe (NatCmmDecl (Alignment, CmmStatics) Instr)
