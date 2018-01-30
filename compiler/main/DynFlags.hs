@@ -491,6 +491,7 @@ data GeneralFlag
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
    | Opt_NumConstantFolding
+   | Opt_UnlikelyBottoms          -- ^ Assume bottoming case alternatives are not taken.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
@@ -4003,7 +4004,8 @@ fFlagsDeps = [
   flagSpec "show-warning-groups"              Opt_ShowWarnGroups,
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
-  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs
+  flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
+  flagSpec "unlikely-bottoms"                 Opt_UnlikelyBottoms
   ]
   ++ fHoleFlags
 
@@ -4457,6 +4459,7 @@ optLevelFlags -- see Note [Documenting optimisation flags]
 
     , ([2],     Opt_LiberateCase)
     , ([2],     Opt_SpecConstr)
+    , ([1,2],   Opt_UnlikelyBottoms)
 --  , ([2],     Opt_RegsGraph)
 --   RegsGraph suffers performance regression. See #7679
 --  , ([2],     Opt_StaticArgumentTransformation)
