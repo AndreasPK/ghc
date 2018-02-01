@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 module CmmSwitch (
      SwitchTargets, LabelInfo,
-     liLbl, liFreq, mkSwitchTargets,
+     liLbl, liWeight, mkSwitchTargets,
      switchTargetsCases, switchTargetsDefault, switchTargetsRange, switchTargetsSigned,
      mapSwitchTargets, switchTargetsToTable, switchTargetsFallThrough,
      switchTargetsToList, eqSwitchTargetWith,
@@ -22,7 +22,7 @@ import Data.Bifunctor
 import Data.List (groupBy)
 import Data.Function (on)
 import qualified Data.Map as M
-import BasicTypes (Freq, defFreq, combineFreqs)
+import BasicTypes (BranchWeight, combinedFreqs, moreLikely)
 
 -- Note [Cmm Switches, the general plan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -105,19 +105,19 @@ minJumpTableOffset = 2
 -- optional default value and a map from values to jump labels.
 data SwitchTargets =
     SwitchTargets
-        Bool                       -- Signed values
-        (Integer, Integer)         -- Range
-        (Maybe LabelInfo)          -- Default value
-        (M.Map Integer LabelInfo)  -- The branches
-    deriving (Show, Eq)
+    { st_signed :: Bool                       -- Signed values
+    , st_range :: (Integer, Integer)          -- Range
+    , st_defLabel :: (Maybe LabelInfo)        -- Default value
+    , st_valMap :: (M.Map Integer LabelInfo)  -- The branches
+    } deriving (Show, Eq)
 
-type LabelInfo = (Label, Freq)
+type LabelInfo = (Label, BranchWeight)
 
 liLbl :: LabelInfo -> Label
 liLbl = fst
 
-liFreq :: LabelInfo -> Freq
-liFreq = snd
+liWeight :: LabelInfo -> BranchWeight
+liWeight = snd
 
 -- | The smart constructor mkSwitchTargets normalises the map a bit:
 --  * No entries outside the range
@@ -252,8 +252,8 @@ eqSwitchTargetWith eq
 -- implemented. See Note [createSwitchPlan]
 data SwitchPlan
     = Unconditionally Label
-    | IfEqual Integer Label SwitchPlan Freq --Chance that condition holds
-    | IfLT Bool Integer SwitchPlan SwitchPlan Freq
+    | IfEqual Integer Label SwitchPlan (Maybe Bool) --Chance that condition holds
+    | IfLT Bool Integer SwitchPlan SwitchPlan (Maybe Bool)
     | JumpTable SwitchTargets
   deriving Show
 --
@@ -352,19 +352,21 @@ createSwitchPlan :: SwitchTargets -> SwitchPlan
 -- Lets do the common case of a singleton map quicky and efficiently (#10677)
 createSwitchPlan (SwitchTargets _signed _range (Just defInfo) m)
     | [(x, (l,f))] <- M.toList m
-    = IfEqual x l (Unconditionally (liLbl defInfo)) (liFreq defInfo - f)
+    = IfEqual x l
+        (Unconditionally (liLbl defInfo))
+        (moreLikely f (liWeight defInfo))
 -- And another common case, matching "booleans"
 createSwitchPlan (SwitchTargets _signed (lo,hi) Nothing m)
     | [(x1, (l1,f1)), (_x2,(l2,f2))] <- M.toAscList m
     --Checking If |range| = 2 is enough if we have two unique literals
     , hi - lo == 1
-    = IfEqual x1 l1 (Unconditionally l2) (f1 - f2)
+    = IfEqual x1 l1 (Unconditionally l2) (moreLikely f1 f2)
 -- See Note [Two alts + default]
 createSwitchPlan (SwitchTargets _signed _range (Just (defLabel, fdef)) m)
     | [(x1, (l1,f1)), (x2,(l2,f2))] <- M.toAscList m
     = IfEqual x1 l1
-        (IfEqual x2 l2 (Unconditionally defLabel) (f2 - fdef))
-        (f1 - (f2 + fdef))
+        (IfEqual x2 l2 (Unconditionally defLabel) (moreLikely f2 fdef))
+        (moreLikely f1 (combinedFreqs f2 fdef))
 createSwitchPlan (SwitchTargets signed range mbdef m) =
     -- pprTrace "createSwitchPlan" (text (show ids) $$
     -- text (show (range,m)) $$ text (show pieces) $$
@@ -466,7 +468,7 @@ mkLeafPlan signed mbdef m
 findSingleValues :: FlatSwitchPlan -> FlatSwitchPlan
 findSingleValues (Unconditionally l, (i, Unconditionally l2) : (i', Unconditionally l3) : xs)
   | l == l3 && i + 1 == i'
-  = findSingleValues (IfEqual i l2 (Unconditionally l) defFreq, xs)
+  = findSingleValues (IfEqual i l2 (Unconditionally l) Nothing, xs)
 findSingleValues (p, (i,p'):xs)
   = (p,i) `consSL` findSingleValues (p', xs)
 findSingleValues (p, [])
@@ -480,7 +482,7 @@ findSingleValues (p, [])
 buildTree :: Bool -> FlatSwitchPlan -> SwitchPlan
 buildTree _ (p,[]) = p
 buildTree signed sl
-  = IfLT signed m (buildTree signed sl1) (buildTree signed sl2) defFreq
+  = IfLT signed m (buildTree signed sl1) (buildTree signed sl2) Nothing
   where
     (sl1, m, sl2) = divideSL sl
 

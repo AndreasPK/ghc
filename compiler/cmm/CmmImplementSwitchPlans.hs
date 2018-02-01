@@ -6,7 +6,7 @@ where
 
 import GhcPrelude
 
-import BasicTypes (Freq, defFreq)
+import BasicTypes (BranchWeight)
 import Hoopl.Block
 import BlockId
 import Cmm
@@ -58,10 +58,6 @@ visitSwitches dflags block
 implementSwitchPlan :: DynFlags -> CmmTickScope -> CmmExpr -> SwitchPlan -> UniqSM (Block CmmNode O C, [CmmBlock])
 implementSwitchPlan dflags scope expr = go
   where
-    freqLikely freq
-      | freq > 0  = Just True
-      | freq < 0  = Just False
-      | otherwise = Nothing
     go (Unconditionally l)
       = return (emptyBlock `blockJoinTail` CmmBranch l, [])
     go (JumpTable ids)
@@ -74,7 +70,7 @@ implementSwitchPlan dflags scope expr = go
         let lt | signed    = cmmSLtWord
                | otherwise = cmmULtWord
             scrut = lt dflags expr $ CmmLit $ mkWordCLit dflags i
-            lastNode = CmmCondBranch scrut bid1 bid2 (freqLikely freq)
+            lastNode = CmmCondBranch scrut bid1 bid2 freq
             lastBlock = emptyBlock `blockJoinTail` lastNode
         return (lastBlock, newBlocks1++newBlocks2)
     go (IfEqual i l ids2 freq)
@@ -82,7 +78,7 @@ implementSwitchPlan dflags scope expr = go
         (bid2, newBlocks2) <- go' ids2
 
         let scrut = cmmNeWord dflags expr $ CmmLit $ mkWordCLit dflags i
-            lastNode = CmmCondBranch scrut bid2 l (freqLikely freq)
+            lastNode = CmmCondBranch scrut bid2 l freq
             lastBlock = emptyBlock `blockJoinTail` lastNode
         return (lastBlock, newBlocks2)
 

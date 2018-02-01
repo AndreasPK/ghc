@@ -106,8 +106,8 @@ module BasicTypes(
 
         SpliceExplicitFlag(..),
 
-        Freq, neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq,
-        alwaysFreq, combineFreqs, moreLikely
+        BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq,
+        alwaysFreq, combinedFreqs, moreLikely, getWeight
    ) where
 
 import GhcPrelude
@@ -1577,63 +1577,105 @@ data SpliceExplicitFlag
             ImplicitSplice   -- ^ <=> f x y,  i.e. a naked top level expression
     deriving Data
 
+
 {-
-************************************************************************
-*                                                                      *
-    Freq - Relative frequency with which a alternative is taken
-*                                                                      *
-************************************************************************
+  Note [Branch weights]
+ ~~~~~~~~~~~~~~~~~~~~~~~
 
-Freq - Relative frequency with which a alternative is taken
+  The basic rundown:
+  * From STG onward we track which brances are most likely taken.
+  * We generate this info by
+    + Checking for bottom during the core-to-stg translation.
+      Expressions which we can detect as being bottom during compile time can
+      safely be assumed to be rarely taken.
+    + Heap/Stack checks when generating Cmm code:
+      Running out of heap/stack space is comperativly rare so we assume these
+      are not taken.
+    + User annotations when compiling hand written Cmm code.
+      This makes it possible to have the compiler optimize for the common case
+      without relying on internal details of the cmm to assembly translation.
+  * When generating code we use this information to generate better assembly:
+    + At the moment this only influences code layout (CmmContFlowOpt)
+      where we try to make the common case a fallthrough since thats generally
+      faster.
+    + TODO: Balance if/else trees for cases by weight instead of node count.
 
-We use a Int for performance reasons, however only the named
-predefined values should be used.
+  This is part of #14672.
+  [Make likelyhood of branches/conditions available throughout the compiler.]
 
-Treating it as an Integer WILL break eventually.
+  At the Stg level we record in case alternatives a branch weight.
+  Weights are relative to each other with higher numbers being more
+  likely to be taken.
 
-Meaning of values:
-* f < 0: Optimize for the assumption the alternative is never taken.
-* f >= 0: Values are relative to each other, for two alternatives:
-          (a1, f1) (a2,f2)
-          We assume a1 is taken more often if f1 > f2.
+  We currently generate this information in CoreToStg by checking
+  alternatives for bottom expressions and marking them as never
+  called.
 
-Ideally we want a way to track this more precise so that we can optimize
-sparse switch tables for the common path(s) and so on.
+  When generating Cmm this is included in switchtargets as is or translated
+  to likely/not likely for conditional statements.
 
-But as long as we only have info about exceptional states from isBottomExpr
-at the Core->Stg translation and stack/heap checks at the stg->cmm stage
-this doesn't buy us anything. So the above semantic works for now.
+  This information is then used in the backend for optimizing control
+  flow.
+
+  As long as we only perform simple optimizations that just check
+  which of two branches is more likely to be taken using a Int based
+  representation is fine.
+
+  TODO: For more involved optimizations like calculating hot paths
+  stricter semantics might be needed. As currently a branch with weight
+  2 and weight 4 only are meaniful compareable if they branch off at the
+  same point. (Eg a single case statement)
+  Conditionals would also require more information than just
+  likely/unlikely/unknown for this to work.
 
 -}
 
 -- | Frequency with which a alternative is taken,
---   values are relative to each other.
-type Freq = Int
+--   values are relative to each other. Higher means
+--   a branch is taken more often.
+--   See alsoe Note [Branch weights]
+newtype BranchWeight = Weight Int deriving (Eq, Ord, Show)
+
+instance Outputable BranchWeight where
+  ppr (Weight i) = ppr i
 
 neverFreq, rareFreq, someFreq, defFreq,
-  oftenFreq, usuallyFreq, alwaysFreq :: Freq
-neverFreq = -1000
-rareFreq = div defFreq 5
-someFreq = div defFreq 2
-defFreq = 1000
-oftenFreq = defFreq * 2
-usuallyFreq = defFreq * 10
+  oftenFreq, usuallyFreq, alwaysFreq :: BranchWeight
+
+defFreqVal :: Int
+defFreqVal = 1000
+
+neverFreq = Weight $ 0
+rareFreq = Weight $ div defFreqVal 5
+someFreq = Weight $ div defFreqVal 2
+defFreq = Weight $ 1000
+oftenFreq = Weight $ defFreqVal * 2
+usuallyFreq = Weight $ defFreqVal * 10
 --Don't go crazy here, for large switches we otherwise we might run into
---integer overflow issues on 32bit platforms.
-alwaysFreq = defFreq * 50
+--integer overflow issues on 32bit platforms if we add them up.
+--which can happen if most of them result in the same expression.
+alwaysFreq = Weight $ defFreqVal * 50
 
 -- | Is f1 more likely then f2?
 --   Returns nothing if they are the same
-moreLikely :: Freq -> Freq -> Maybe Bool
+moreLikely :: BranchWeight -> BranchWeight -> Maybe Bool
 moreLikely f1 f2
   | f1 > f2   = Just True
   | f1 < f2   = Just False
   | otherwise = Nothing
 
--- | Add up frequencies respecting never.
--- Combining two frequencies where one is never results on the other one.
-combineFreqs :: Freq -> Freq -> Freq
-combineFreqs f1 f2
-  | f1 < 0 && f2 >= 0 = f2
-  | f2 < 0 && f1 >= 0 = f1
-  | otherwise = f1 + f2
+{- | Add up weights respecting never.
+  Combining two weights where one is never or negative results in the other one.
+  This is neccesary because we never want a likely branch and a unlikely one
+  to add up to less than the likely branch was originally.
+
+  This can happen if we end up with negative weights somehow.
+-}
+combinedFreqs :: BranchWeight -> BranchWeight -> BranchWeight
+combinedFreqs (Weight f1) (Weight f2)
+  | f1 < 0 && f2 >= 0 = Weight f2
+  | f2 < 0 && f1 >= 0 = Weight f1
+  | otherwise = Weight (f1 + f2)
+
+getWeight :: BranchWeight -> Int
+getWeight (Weight f) = f

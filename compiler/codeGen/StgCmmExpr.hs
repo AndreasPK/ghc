@@ -30,7 +30,7 @@ import StgCmmClosure
 
 import StgSyn
 
-import BasicTypes (Freq)
+import BasicTypes (BranchWeight)
 import MkGraph
 import BlockId
 import Cmm
@@ -656,8 +656,8 @@ cgAlts _ _ _ _ = panic "cgAlts"
 
 -------------------
 cgAlgAltRhss :: (GcPlan,ReturnKind) -> NonVoid Id -> [StgAlt]
-             -> FCode ( Maybe (CmmAGraphScoped, Freq)
-                      , [(ConTagZ, CmmAGraphScoped, Freq)] )
+             -> FCode ( Maybe (CmmAGraphScoped, BranchWeight)
+                      , [(ConTagZ, CmmAGraphScoped, BranchWeight)] )
 cgAlgAltRhss gc_plan bndr alts
   = do { tagged_cmms <- cgAltRhss gc_plan bndr alts
 
@@ -676,12 +676,12 @@ cgAlgAltRhss gc_plan bndr alts
 
 -------------------
 cgAltRhss :: (GcPlan,ReturnKind) -> NonVoid Id -> [StgAlt]
-          -> FCode [(AltCon, CmmAGraphScoped,Freq)]
+          -> FCode [(AltCon, CmmAGraphScoped,BranchWeight)]
 cgAltRhss gc_plan bndr alts = do
   dflags <- getDynFlags
   let
     base_reg = idToReg dflags bndr
-    cg_alt :: StgAlt -> FCode (AltCon, CmmAGraphScoped, Freq)
+    cg_alt :: StgAlt -> FCode (AltCon, CmmAGraphScoped, BranchWeight)
     cg_alt (con, bndrs, rhs, freq) = do
       (i,c) <- getCodeScoped $ maybeAltHeapCheck gc_plan $
           do { _ <- bindConArgs con base_reg (assertNonVoidIds bndrs)

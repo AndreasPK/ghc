@@ -473,7 +473,12 @@ coreToStgExpr df (Case scrut bndr _ alts) = do
   where
     alt_freq rhs
       | gopt Opt_UnlikelyBottoms df
-      , exprIsBottom rhs = neverFreq
+      , exprIsBottom rhs
+      = -- If a expression is bottom we can safely assume it's
+        -- alternative is rarely taken. Hence we set the
+        -- branch weight to zero/never.
+        -- For details see Note [Branch weights] in BasicTypes
+        neverFreq
       | otherwise = defFreq
     vars_alt (con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon

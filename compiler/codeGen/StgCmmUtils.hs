@@ -55,7 +55,7 @@ import CLabel
 import CmmUtils
 import CmmSwitch
 
-import BasicTypes (Freq)
+import BasicTypes (BranchWeight)
 import ForeignCall
 import IdInfo
 import Type
@@ -449,8 +449,8 @@ unscramble dflags vertices = mapM_ do_component components
 
 
 emitSwitch :: CmmExpr                      -- Tag to switch on
-           -> [(ConTagZ, CmmAGraphScoped, Freq)] -- Tagged branches
-           -> Maybe (CmmAGraphScoped, Freq)        -- Default branch (if any)
+           -> [(ConTagZ, CmmAGraphScoped, BranchWeight)] -- Tagged branches
+           -> Maybe (CmmAGraphScoped, BranchWeight)        -- Default branch (if any)
            -> ConTagZ -> ConTagZ           -- Min and Max possible values;
                                            -- behaviour outside this range is
                                            -- undefined
@@ -478,8 +478,8 @@ emitSwitch tag_expr branches mb_deflt lo_tag hi_tag = do
 
 mk_discrete_switch :: Bool -- ^ Use signed comparisons
           -> CmmExpr
-          -> [(Integer, BlockId, Freq)]
-          -> Maybe (BlockId, Freq)
+          -> [(Integer, BlockId, BranchWeight)]
+          -> Maybe (BlockId, BranchWeight)
           -> (Integer, Integer)
           -> CmmAGraph
 
@@ -507,8 +507,8 @@ mk_discrete_switch signed tag_expr branches mb_deflt range
 
 --------------
 emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
-               -> [(Literal, CmmAGraphScoped, Freq)] -- Tagged branches
-               -> (CmmAGraphScoped, Freq)            -- Default branch (always)
+               -> [(Literal, CmmAGraphScoped, BranchWeight)] -- Tagged branches
+               -> (CmmAGraphScoped, BranchWeight)            -- Default branch (always)
                -> FCode ()                     -- Emit the code
 emitCmmLitSwitch _scrut []       (deflt,_dfreq) = emit $ fst deflt
 emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
@@ -566,9 +566,9 @@ noBound = (Nothing, Nothing)
     * Doing this exact could be expensive, especially for large lists when
       done wrong. Enable this only at -O2?
 -}
-mk_float_switch :: Width -> CmmExpr -> (BlockId, Freq)
+mk_float_switch :: Width -> CmmExpr -> (BlockId, BranchWeight)
               -> LitBound
-              -> [(Literal,BlockId,Freq)]
+              -> [(Literal,BlockId,BranchWeight)]
               -> FCode CmmAGraph
 mk_float_switch rep scrut (deflt, _dfrq) _bounds [(lit,blk,_frq)]
   = do dflags <- getDynFlags
@@ -612,8 +612,8 @@ mk_float_switch rep scrut (deflt_blk_id,dfreq) (lo_bound, hi_bound) branches
 
 
 --------------
-label_default :: BlockId -> Maybe (CmmAGraphScoped, Freq)
-              -> FCode (Maybe (BlockId, Freq))
+label_default :: BlockId -> Maybe (CmmAGraphScoped, BranchWeight)
+              -> FCode (Maybe (BlockId, BranchWeight))
 label_default _ Nothing
   = return Nothing
 label_default join_lbl (Just (code,f))
@@ -621,8 +621,8 @@ label_default join_lbl (Just (code,f))
        return (Just (lbl,f))
 
 --------------
-label_branches :: BlockId -> [(a,CmmAGraphScoped, Freq)]
-               -> FCode [(a,BlockId,Freq)]
+label_branches :: BlockId -> [(a,CmmAGraphScoped, BranchWeight)]
+               -> FCode [(a,BlockId,BranchWeight)]
 label_branches _join_lbl []
   = return []
 label_branches join_lbl ((tag,code,freq):branches)

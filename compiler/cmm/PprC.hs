@@ -351,13 +351,13 @@ pprSwitch dflags e ids
         final_branch ix =
                 hsep [ text "case" , pprHexVal ix (wordWidth dflags) <> colon ,
                        text "goto" , (pprBlockId ( liLbl lblInfo)) <> semi <+>
-                       parens (text "likely:" <> ppr (liFreq lblInfo))]
+                       parens (text "likely:" <> ppr (liWeight lblInfo))]
 
     caseify (_     , _    ) = panic "pprSwitch: switch with no cases!"
 
     def | Just li <- mbdef
         = text "default: goto" <+> pprBlockId (liLbl li) <> semi <+>
-          parens (text "likely:" <> ppr (liFreq li))
+          parens (text "likely:" <> ppr (liWeight li))
         | otherwise       = empty
 
 -- ---------------------------------------------------------------------

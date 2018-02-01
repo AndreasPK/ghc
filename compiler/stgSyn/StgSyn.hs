@@ -47,7 +47,7 @@ module StgSyn (
 
 import GhcPrelude
 
-import BasicTypes  (Freq, defFreq, neverFreq)
+import BasicTypes  (BranchWeight)
 import CoreSyn     ( AltCon, Tickish )
 import CostCentre  ( CostCentreStack )
 import Data.ByteString ( ByteString )
@@ -547,7 +547,8 @@ type GenStgAlt bndr occ
   = (AltCon,            -- alts: data constructor,
      [bndr],            -- constructor's parameters,
      GenStgExpr bndr occ, -- ..right-hand side,
-     Freq)              -- relative chance to take this alt.
+     BranchWeight)      -- relative chance to take this alt, see
+                        -- Note [Branch weights] in BasicTypes
 
 data AltType
   = PolyAlt             -- Polymorphic (a lifted type variable)
