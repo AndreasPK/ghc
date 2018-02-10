@@ -6,7 +6,6 @@ where
 
 import GhcPrelude
 
-import BasicTypes (BranchWeight)
 import Hoopl.Block
 import BlockId
 import Cmm

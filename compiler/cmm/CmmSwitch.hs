@@ -344,8 +344,6 @@ targetSupportsSwitch HscC = True
 targetSupportsSwitch HscLlvm = True
 targetSupportsSwitch _ = False
 
---TODOF: Add chance to switchplan  (see basic types)
-
 -- | This function creates a SwitchPlan from a SwitchTargets value, breaking it
 -- down into smaller pieces suitable for code generation.
 createSwitchPlan :: SwitchTargets -> SwitchPlan
@@ -412,8 +410,8 @@ breakTooSmall m
 
 type FlatSwitchPlan = SeparatedList Integer SwitchPlan
 
-{-TODOF:
-  Given the frequency information in LabelInfo we could do better
+{-TODO:
+  Given the branch weights in LabelInfo we could do better
   than binary search. Look at buildTree, findSingleValues, mkFlatSwitchPlan
   if you implement this.
 -}

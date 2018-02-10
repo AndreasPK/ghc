@@ -547,24 +547,24 @@ type LitBound = (Maybe Literal, Maybe Literal)
 noBound :: LitBound
 noBound = (Nothing, Nothing)
 
---TODOF: Do: float_switch
-{-
-  * Compute chance for the leaves
+{- TODO:
+  Currently this generates a binary search tree for the given value.
 
-  * Given a list of literals we currently just split the list in the middle.
-    When given weights we want to instead split to list such that each half
-    has the same weight.
+  Given we have branch weights we would ideally balance the tree
+  by weight instead.
 
   Eg. given (lit,weight) of [(0,1),(1,1),(2,1),(3,99)] we want to split the
   list into [(0,1),(1,1),(2,1)] and [(3,99)].
 
   Things to consider:
-    * Weights indicating errors have to be rounded up to zero,
+    * Does it make a difference often enough to be worth the complexity
+      and increase in compile time.
+    * Negative weights have to be rounded up to zero,
       otherwise they would distort the results.
     * How should entries with no information be treated?
       -> Probably good enough to use the default value.
-    * Doing this exact could be expensive, especially for large lists when
-      done wrong. Enable this only at -O2?
+    * If implemented should this only apply when optimizations are
+      active?
 -}
 mk_float_switch :: Width -> CmmExpr -> (BlockId, BranchWeight)
               -> LitBound

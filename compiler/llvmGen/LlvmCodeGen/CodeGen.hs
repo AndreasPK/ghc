@@ -1085,7 +1085,9 @@ switchMetaData :: BranchWeight -> [BranchWeight] -> MetaAnnot
 switchMetaData defFreq altFreqs =
     let values = map
             -- LLVM branch weights are i32 typed so we cap it there.
-            (\w -> min (fromIntegral (maxBound :: Int32)) (fromIntegral . getWeight $ w))
+            (\w ->
+                min (fromIntegral (maxBound :: Int32))
+                (fromIntegral . getWeight $ w))
             (defFreq:altFreqs)
         types  = repeat (LMInt $ fromIntegral 32)
         lits = zipWith LMIntLit values types
