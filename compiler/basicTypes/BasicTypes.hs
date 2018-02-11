@@ -1673,8 +1673,7 @@ moreLikely f1 f2
 -}
 combinedFreqs :: BranchWeight -> BranchWeight -> BranchWeight
 combinedFreqs (Weight f1) (Weight f2)
-  | f1 < 0 && f2 >= 0 = Weight f2
-  | f2 < 0 && f1 >= 0 = Weight f1
+  | f1 < 0 || f2 < 0 = Weight (max f2 f1)
   | otherwise = Weight (f1 + f2)
 
 getWeight :: BranchWeight -> Int

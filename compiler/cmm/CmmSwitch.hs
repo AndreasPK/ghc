@@ -1,5 +1,5 @@
 {-# LANGUAGE GADTs #-}
-module CmmSwitch (
+module CmmSwitch {- (
      SwitchTargets, LabelInfo,
      liLbl, liWeight, mkSwitchTargets,
      switchTargetsCases, switchTargetsDefault, switchTargetsRange, switchTargetsSigned,
@@ -8,8 +8,11 @@ module CmmSwitch (
 
      SwitchPlan(..),
      targetSupportsSwitch,
-     createSwitchPlan
-  ) where
+     createSwitchPlan,
+
+     SeparatedList,
+     ...
+  ) -} where
 
 import GhcPrelude
 
@@ -359,33 +362,36 @@ targetSupportsSwitch _ = False
 
 -- | This function creates a SwitchPlan from a SwitchTargets value, breaking it
 -- down into smaller pieces suitable for code generation.
-createSwitchPlan :: SwitchTargets -> SwitchPlan
+createSwitchPlan :: DynFlags -> SwitchTargets -> SwitchPlan
 -- Lets do the common case of a singleton map quicky and efficiently (#10677)
-createSwitchPlan (SwitchTargets _signed _range (Just defInfo) m)
+createSwitchPlan _dflags (SwitchTargets _signed _range (Just defInfo) m)
     | [(x, (l,f))] <- M.toList m
     = IfEqual x l
         (Unconditionally (liLbl defInfo))
         (moreLikely f (liWeight defInfo))
 -- And another common case, matching "booleans"
-createSwitchPlan (SwitchTargets _signed (lo,hi) Nothing m)
+createSwitchPlan _dflags (SwitchTargets _signed (lo,hi) Nothing m)
     | [(x1, (l1,f1)), (_x2,(l2,f2))] <- M.toAscList m
     --Checking If |range| = 2 is enough if we have two unique literals
     , hi - lo == 1
     = IfEqual x1 l1 (Unconditionally l2) (moreLikely f1 f2)
 -- See Note [Two alts + default]
-createSwitchPlan (SwitchTargets _signed _range (Just (defLabel, fdef)) m)
+createSwitchPlan _dflags (SwitchTargets _signed _range (Just (defLabel, fdef)) m)
     | [(x1, (l1,f1)), (x2,(l2,f2))] <- M.toAscList m
     = IfEqual x1 l1
         (IfEqual x2 l2 (Unconditionally defLabel) (moreLikely f2 fdef))
         (moreLikely f1 (combinedFreqs f2 fdef))
-createSwitchPlan (SwitchTargets signed range mbdef m) =
+createSwitchPlan dflags (SwitchTargets signed range mbdef m) =
     -- pprTrace "createSwitchPlan" (text (show ids) $$
     -- text (show (range,m)) $$ text (show pieces) $$
     -- text (show flatPlan) $$ text (show plan)) $
     plan
   where
+    pieces :: [M.Map Integer LabelInfo]
     pieces = concatMap breakTooSmall $ splitAtHoles maxJumpTableHole m
-    flatPlan = findSingleValues $ mkFlatSwitchPlan signed mbdef range pieces
+    flatPlan = findSingleValues $
+               mkFlatSwitchPlan
+                (gopt Opt_UnlikelyBottoms dflags) signed mbdef range pieces
     plan = buildTree signed $ flatPlan
 
 
@@ -428,21 +434,25 @@ type FlatSwitchPlan = SeparatedList Integer SwitchPlan
   than binary search. Look at buildTree, findSingleValues, mkFlatSwitchPlan
   if you implement this.
 -}
-mkFlatSwitchPlan :: Bool -> Maybe LabelInfo
-                 -> (Integer, Integer) -> [M.Map Integer LabelInfo]
-                 -> FlatSwitchPlan
+-- | mkFlatSwitchPlan byWeight signed defLabel range maps
+mkFlatSwitchPlan  :: Bool -- ^ Respect branche weight when balancing the tree.
+                  -> Bool -- ^ Values are signed
+                  -> Maybe LabelInfo -- ^ Default alternative
+                  -> (Integer, Integer) -- ^ Range of possible values
+                  -> [M.Map Integer LabelInfo] -- ^ Value to branch mapping.
+                  -> FlatSwitchPlan
 
 -- If we have no default (i.e. undefined where there is no entry), we can
 -- branch at the minimum of each map
-mkFlatSwitchPlan _ Nothing _ []
+mkFlatSwitchPlan byWeight  _ Nothing _ []
   = pprPanic "mkFlatSwitchPlan with nothing left to do" empty
-mkFlatSwitchPlan signed  Nothing _ (m:ms)
+mkFlatSwitchPlan byWeight signed  Nothing _ (m:ms)
   = (mkLeafPlan signed Nothing m ,
      [ (fst (M.findMin m'), mkLeafPlan signed Nothing m') | m' <- ms ])
 
 -- If we have a default, we have to interleave segments that jump
 -- to the default between the maps
-mkFlatSwitchPlan signed (Just (l,f)) r ms
+mkFlatSwitchPlan byWeight signed (Just (l,f)) r ms
   = let ((_,p1):ps) = go r ms in (p1, ps)
   where
     go (lo,hi) []
@@ -490,12 +500,16 @@ findSingleValues (p, [])
 ---
 
 -- Build a balanced tree from a separated list
-buildTree :: Bool -> FlatSwitchPlan -> SwitchPlan
+buildTree :: Bool -> FlatSwitchPlan -> (SwitchPlan, Weight)
 buildTree _ (p,[]) = p
 buildTree signed sl
-  = IfLT signed m (buildTree signed sl1) (buildTree signed sl2) Nothing
+  = (IfLT signed m (buildTree signed sl1) (buildTree signed sl2) Nothing
+    , combinedFreqs weightLeft weightRight)
   where
+    (treeLeft, weightLeft)   = (buildTree signed sl1)
+    (treeRight, weightRight) = (buildTree signed sl2)
     (sl1, m, sl2) = divideSL sl
+
 
 
 

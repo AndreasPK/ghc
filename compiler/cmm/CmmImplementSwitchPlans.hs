@@ -41,7 +41,7 @@ visitSwitches :: DynFlags -> CmmBlock -> UniqSM [CmmBlock]
 visitSwitches dflags block
   | (entry@(CmmEntry _ scope), middle, CmmSwitch expr ids) <- blockSplit block
   = do
-    let plan = createSwitchPlan ids
+    let plan = createSwitchPlan dflags ids
 
     (newTail, newBlocks) <- implementSwitchPlan dflags scope expr plan
 
@@ -76,8 +76,8 @@ implementSwitchPlan dflags scope expr = go
       = do
         (bid2, newBlocks2) <- go' ids2
 
-        let scrut = cmmNeWord dflags expr $ CmmLit $ mkWordCLit dflags i
-            lastNode = CmmCondBranch scrut bid2 l freq
+        let scrut = cmmEqWord dflags expr $ CmmLit $ mkWordCLit dflags i
+            lastNode = CmmCondBranch scrut l bid2 freq
             lastBlock = emptyBlock `blockJoinTail` lastNode
         return (lastBlock, newBlocks2)
 
