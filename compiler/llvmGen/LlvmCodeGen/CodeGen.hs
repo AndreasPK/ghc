@@ -10,8 +10,6 @@ module LlvmCodeGen.CodeGen ( genLlvmProc ) where
 import GhcPrelude
 
 import Llvm
-import Llvm.Types
-import Llvm.MetaData
 import LlvmCodeGen.Base
 import LlvmCodeGen.Regs
 
@@ -1087,7 +1085,7 @@ switchMetaData defFreq altFreqs =
             -- LLVM branch weights are i32 typed so we cap it there.
             (\w ->
                 min (fromIntegral (maxBound :: Int32))
-                (fromIntegral . getWeight $ w))
+                    (fromIntegral . getWeight $ w))
             (defFreq:altFreqs)
         types  = repeat (LMInt $ fromIntegral 32)
         lits = zipWith LMIntLit values types
