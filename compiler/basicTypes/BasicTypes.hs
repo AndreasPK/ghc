@@ -106,8 +106,8 @@ module BasicTypes(
 
         SpliceExplicitFlag(..),
 
-        BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, oftenFreq, usuallyFreq,
-        alwaysFreq, combinedFreqs, moreLikely, getWeight
+        BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, oftenFreq,
+        usuallyFreq, alwaysFreq, combinedFreqs, moreLikely, getWeight
    ) where
 
 import GhcPrelude

@@ -251,10 +251,23 @@ eqSwitchTargetWith eq
 -- | A SwitchPlan abstractly describes how a Switch statement ought to be
 -- implemented. See Note [createSwitchPlan]
 data SwitchPlan
-    = Unconditionally Label
-    | IfEqual Integer Label SwitchPlan (Maybe Bool) --Chance that condition holds
-    | IfLT Bool Integer SwitchPlan SwitchPlan (Maybe Bool)
-    | JumpTable SwitchTargets
+    = Unconditionally
+      { sp_ucTarget :: Label }
+      | IfEqual
+      { sp_val    :: Integer
+      , sp_eqTarget :: Label
+      , sp_else   :: SwitchPlan
+      , sp_likely ::(Maybe Bool)
+      }
+    | IfLT
+      { sp_signed :: Bool
+      , sp_val    :: Integer
+      , sp_ltTarget :: SwitchPlan
+      , sp_else   :: SwitchPlan
+      , sp_likely :: (Maybe Bool)
+      }
+    | JumpTable
+      { sp_jmpTable :: SwitchTargets }
   deriving Show
 --
 -- Note [createSwitchPlan]

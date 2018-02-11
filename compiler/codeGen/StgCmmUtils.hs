@@ -450,7 +450,7 @@ unscramble dflags vertices = mapM_ do_component components
 
 emitSwitch :: CmmExpr                      -- Tag to switch on
            -> [(ConTagZ, CmmAGraphScoped, BranchWeight)] -- Tagged branches
-           -> Maybe (CmmAGraphScoped, BranchWeight)        -- Default branch (if any)
+           -> Maybe (CmmAGraphScoped, BranchWeight)  -- Default branch (if any)
            -> ConTagZ -> ConTagZ           -- Min and Max possible values;
                                            -- behaviour outside this range is
                                            -- undefined
@@ -508,7 +508,7 @@ mk_discrete_switch signed tag_expr branches mb_deflt range
 --------------
 emitCmmLitSwitch :: CmmExpr                    -- Tag to switch on
                -> [(Literal, CmmAGraphScoped, BranchWeight)] -- Tagged branches
-               -> (CmmAGraphScoped, BranchWeight)            -- Default branch (always)
+               -> (CmmAGraphScoped, BranchWeight)    -- Default branch (always)
                -> FCode ()                     -- Emit the code
 emitCmmLitSwitch _scrut []       (deflt,_dfreq) = emit $ fst deflt
 emitCmmLitSwitch scrut  branches (deflt,dfreq) = do

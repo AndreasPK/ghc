@@ -491,7 +491,7 @@ data GeneralFlag
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
    | Opt_NumConstantFolding
-   | Opt_UnlikelyBottoms          -- ^ Assume bottoming case alternatives are not taken.
+   | Opt_UnlikelyBottoms     -- ^ Assume bottoming alternatives are not taken.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
