@@ -342,7 +342,7 @@ coreToTopStgRhs
         -> (Id,CoreExpr)
         -> CtsM (StgRhs, FreeVarsInfo, CollectedCCs)
 
-coreToTopStgRhs dflags this_mod scope_fv_info (bndr, rhs)
+coreToTopStgRhs dflags ccs this_mod scope_fv_info (bndr, rhs)
   = do { (new_rhs, rhs_fvs) <- coreToStgExpr dflags rhs
 
        ; let (stg_rhs, ccs') =

@@ -396,9 +396,9 @@ createSwitchPlan _ (SwitchTargets _signed _range (Just def@(defLabel, fdef)) m)
         (IfEqual x2 li2 (Unconditionally def) (moreLikely f2 fdef))
         (moreLikely f1 (combinedFreqs f2 fdef))
 createSwitchPlan balance (SwitchTargets signed range mbdef m) =
-    -- pprTrace "createSwitchPlan" (text (show ids) $$
-    -- text (show (range,m)) $$ text (show pieces) $$
-    -- text (show flatPlan) $$ text (show plan)) $
+    --pprTrace "createSwitchPlan"
+    --(text (show (range,m)) $$ text (show pieces) $$
+    --text (show flatPlan) $$ text (show plan)) $
     plan
   where
     pieces :: [M.Map Integer LabelInfo]
@@ -501,7 +501,10 @@ mkLeafPlan signed mbdef m
 findSingleValues :: FlatSwitchPlan -> FlatSwitchPlan
 findSingleValues (Unconditionally l, (i, Unconditionally l2) : (i', Unconditionally l3) : xs)
   | l == l3 && i + 1 == i'
-  = findSingleValues (IfEqual i l2 (Unconditionally l) Nothing, xs)
+  = findSingleValues
+      (IfEqual i l2
+        (Unconditionally l) (moreLikely (liWeight l2) (liWeight l))
+      , xs)
 findSingleValues (p, (i,p'):xs)
   = (p,i) `consSL` findSingleValues (p', xs)
 findSingleValues (p, [])
@@ -516,7 +519,8 @@ findSingleValues (p, [])
 buildTree :: Bool -> Bool -> FlatSwitchPlan -> SwitchPlan
 buildTree _ _ (p,[]) = p
 buildTree byWeight signed sl
-  = IfLT
+  = --traceShow (m,likely,(planWeight left),(planWeight right), byWeight ) $
+  IfLT
   { sp_signed = signed
   , sp_val = m
   , sp_ltTarget = left
