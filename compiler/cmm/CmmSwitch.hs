@@ -24,7 +24,7 @@ import Data.Bifunctor
 import Data.List (groupBy)
 import Data.Function (on)
 import qualified Data.Map as M
-import BasicTypes (BranchWeight, combinedFreqs, moreLikely, neverFreq)
+import BasicTypes (BranchWeight, combinedFreqs, moreLikely, neverFreq, getWeight)
 
 -- Note [Cmm Switches, the general plan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -272,6 +272,10 @@ data SwitchPlan
     | JumpTable
       { sp_jmpTable :: SwitchTargets }
   deriving Show
+
+--instance Outputable SwitchPlan where
+--  ppr = text . show
+
 --
 -- Note [createSwitchPlan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~
@@ -528,15 +532,12 @@ buildTree byWeight signed sl
   , sp_likely = likely
   }
    where
-    (sl1, m, sl2) = divideSL sl
+    (sl1, m, sl2) = if byWeight then divideBalanced sl else divideSL sl
     left = (buildTree byWeight signed sl1) :: SwitchPlan
     right = (buildTree byWeight signed sl2)
     likely = if byWeight
       then moreLikely (planWeight left) (planWeight right)
       else Nothing
-
-
-
 
 
 --
@@ -554,6 +555,31 @@ divideSL (_,[]) = error "divideSL: Singleton SeparatedList"
 divideSL (p,xs) = ((p, xs1), m, (p', xs2))
   where
     (xs1, (m,p'):xs2) = splitAt (length xs `div` 2) xs
+
+divideBalanced :: SeparatedList Integer SwitchPlan -> (SeparatedList Integer SwitchPlan, Integer, SeparatedList Integer SwitchPlan)
+divideBalanced (_,[]) = error "divideSL: Singleton SeparatedList"
+divideBalanced (p,xs) = --pprTrace "divideTree" (
+    --text "arg" <+> ppr (p,xs) $$
+    --text "res" <+> ppr (buildFork leftSplit rightSplit)
+    --)
+    buildFork leftSplit rightSplit
+  where
+    rweight = sum . map (getWeight . planWeight . snd) $ xs
+    lweight = getWeight $ planWeight p
+
+    --((p,leftSplit),m,(pr,rightSplit))
+
+    weightSpan :: Int -> Int -> [(Integer,SwitchPlan)] -> [(Integer,SwitchPlan)] -> ([(Integer,SwitchPlan)], [(Integer,SwitchPlan)])
+    weightSpan _ _ lxs [] = (lxs,[])
+    weightSpan lw rw lxs ((i,sp):rxs)
+      | lw >= rw = (lxs,((i,sp):rxs))
+      | lw < rw = weightSpan (lw + getWeight (planWeight sp)) (rw - getWeight (planWeight sp)) ((i,sp):lxs) rxs
+      | otherwise = panic "Impossible"
+
+    (leftSplit,rightSplit) = weightSpan lweight rweight [] xs
+
+    buildFork ((i,p'):lxs) [] = ((p,reverse lxs),i,(p',[]))
+    buildFork (lxs) ((ri,rp):rxs) = ((p,reverse lxs),ri,(rp,rxs))
 
 --
 -- Other Utilities
