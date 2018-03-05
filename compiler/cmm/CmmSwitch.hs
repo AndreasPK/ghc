@@ -18,7 +18,8 @@ import DynFlags
 import Hoopl.Label (Label)
 
 import Data.Maybe
-import Data.List (groupBy)
+import Data.Bifunctor
+import Data.List (groupBy, mapAccumL)
 import Data.Function (on)
 import qualified Data.Map as M
 

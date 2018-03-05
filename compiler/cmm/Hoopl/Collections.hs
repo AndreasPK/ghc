@@ -35,6 +35,7 @@ class IsSet set where
   setDifference :: set -> set -> set
   setIntersection :: set -> set -> set
   setIsSubsetOf :: set -> set -> Bool
+  setFilter :: (ElemOf set -> Bool) -> set -> set
 
   setFoldl :: (b -> ElemOf set -> b) -> b -> set -> b
   setFoldr :: (ElemOf set -> b -> b) -> b -> set -> b
@@ -69,6 +70,7 @@ class IsMap map where
   mapInsertWith :: (a -> a -> a) -> KeyOf map -> a -> map a -> map a
   mapDelete :: KeyOf map -> map a -> map a
   mapAlter :: (Maybe a -> Maybe a) -> KeyOf map -> map a -> map a
+  mapAdjust :: (a -> a) -> KeyOf map -> map a -> map a
 
   mapUnion :: map a -> map a -> map a
   mapUnionWithKey :: (KeyOf map -> a -> a -> a) -> map a -> map a -> map a
@@ -122,6 +124,7 @@ instance IsSet UniqueSet where
   setDifference (US x) (US y) = US (S.difference x y)
   setIntersection (US x) (US y) = US (S.intersection x y)
   setIsSubsetOf (US x) (US y) = S.isSubsetOf x y
+  setFilter f (US s) = US (S.filter f s)
 
   setFoldl k z (US s) = S.foldl' k z s
   setFoldr k z (US s) = S.foldr k z s
@@ -147,6 +150,7 @@ instance IsMap UniqueMap where
   mapInsertWith f k v (UM m) = UM (M.insertWith f k v m)
   mapDelete k (UM m) = UM (M.delete k m)
   mapAlter f k (UM m) = UM (M.alter f k m)
+  mapAdjust f k (UM m) = UM (M.adjust f k m)
 
   mapUnion (UM x) (UM y) = UM (M.union x y)
   mapUnionWithKey f (UM x) (UM y) = UM (M.unionWithKey f x y)
