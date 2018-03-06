@@ -4009,7 +4009,8 @@ defaultFlags settings
       Opt_RPath,
       Opt_SharedImplib,
       Opt_SimplPreInlining,
-      Opt_VersionMacros
+      Opt_VersionMacros,
+      Opt_TreeMatching
     ]
 
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]
