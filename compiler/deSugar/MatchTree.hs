@@ -32,7 +32,7 @@ where
 
 #ifndef HACKY
 import {-#SOURCE#-} DsExpr (dsLExpr, dsSyntaxExpr)
-import GhcPrelude
+-- import GhcPrelude
 #endif
 
 import PrelNames
@@ -952,7 +952,7 @@ altToConAlt alt
     = pprPanic "Alt not of constructor type" $ ppr $ showAstData NoBlankSrcSpan $ alt_pat alt
 
 fallBack :: String -> DsM a
-fallBack m = --traceM m >> 
+fallBack m = traceM m >> 
     failDs
 
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult

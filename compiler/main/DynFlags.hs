@@ -4255,7 +4255,8 @@ defaultFlags settings
       Opt_SharedImplib,
       Opt_SimplPreInlining,
       Opt_VersionMacros,
-      Opt_LlvmPassVectorsInRegisters
+      Opt_LlvmPassVectorsInRegisters,
+      Opt_TreeMatching
     ]
 
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]
