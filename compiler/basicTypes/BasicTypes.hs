@@ -107,7 +107,8 @@ module BasicTypes(
         SpliceExplicitFlag(..),
 
         BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, oftenFreq,
-        usuallyFreq, alwaysFreq, combinedFreqs, moreLikely, getWeight
+        usuallyFreq, alwaysFreq, combinedFreqs, moreLikely, getWeight,
+        multiplyWeight
    ) where
 
 import GhcPrelude
@@ -1634,7 +1635,7 @@ data SpliceExplicitFlag
 --   values are relative to each other. Higher means
 --   a branch is taken more often.
 --   See alsoe Note [Branch weights]
-newtype BranchWeight = Weight Int deriving (Eq, Ord, Show)
+newtype BranchWeight = Weight Int deriving (Eq, Ord, Show, Data)
 
 instance Outputable BranchWeight where
   ppr (Weight i) = ppr i
@@ -1675,6 +1676,9 @@ combinedFreqs :: BranchWeight -> BranchWeight -> BranchWeight
 combinedFreqs (Weight f1) (Weight f2)
   | f1 < 0 || f2 < 0 = Weight (max f2 f1)
   | otherwise = Weight (f1 + f2)
+
+multiplyWeight :: BranchWeight -> Int -> BranchWeight
+multiplyWeight (Weight w) f = Weight (w * f)
 
 getWeight :: BranchWeight -> Int
 getWeight (Weight f) = f

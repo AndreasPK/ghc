@@ -54,7 +54,10 @@ module CoreUtils (
         collectMakeStaticArgs,
 
         -- * Join points
-        isJoinBind
+        isJoinBind,
+
+        -- * Branch Weight related
+        hasWeight
     ) where
 
 #include "HsVersions.h"
@@ -87,7 +90,7 @@ import DynFlags
 import FastString
 import Maybes
 import ListSetOps       ( minusList )
-import BasicTypes       ( Arity, isConLike )
+import BasicTypes       ( Arity, isConLike, BranchWeight(..), combinedFreqs )
 import Platform
 import Util
 import Pair
@@ -2585,3 +2588,32 @@ isJoinBind :: CoreBind -> Bool
 isJoinBind (NonRec b _)       = isJoinId b
 isJoinBind (Rec ((b, _) : _)) = isJoinId b
 isJoinBind _                  = False
+
+{-
+************************************************************************
+*                                                                      *
+* Branch weight related
+*                                                                      *
+************************************************************************
+-}
+
+hasWeight :: CoreExpr -> Maybe (BranchWeight, CoreExpr)
+hasWeight expr
+  | ([],_) <- stripTicksTop weightTick expr
+  = Nothing
+  | (ts,e) <- stripTicksTop weightTick expr
+  = Just (foldr1 combinedFreqs (map weightHint ts), e)
+  where
+    weightTick WeightHint{} = True
+    weightTick _ = False
+
+
+
+
+
+
+
+
+
+
+

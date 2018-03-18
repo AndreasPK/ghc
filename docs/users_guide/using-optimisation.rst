@@ -685,6 +685,21 @@ by saying ``-fno-wombat``.
     which are guaranteed to raise an exception. This includes the generated
     failure branch on incomplete pattern matches.
 
+.. ghc-flag:: -flikely-recursion
+    :shortdesc: Tries to mark recursive case alternatives as more likely
+    to be taken which can result in better code.
+        Implied by :ghc-flag:`-O2`.
+    :type: dynamic
+    :reverse: -fno-likely-recursion
+    :category:
+
+    :default: off
+
+    For code like `f x = if .. then x else f (... x ... )` we try to detect
+    that we will more often then not end up going into the else branch.
+
+    This leads to better code layout in some cases.
+
 .. ghc-flag:: -fregs-graph
     :shortdesc: Use the graph colouring register allocator for register
         allocation in the native code generator. Implied by :ghc-flag:`-O2`.

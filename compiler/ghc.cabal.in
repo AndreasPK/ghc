@@ -411,6 +411,7 @@ Library
         CSE
         FloatIn
         FloatOut
+        HotCode
         LiberateCase
         OccurAnal
         SAT

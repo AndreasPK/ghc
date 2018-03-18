@@ -1,6 +1,6 @@
 {-# LANGUAGE GADTs #-}
 module CmmSwitch (
-     SwitchTargets, LabelInfo,
+     SwitchTargets(..), LabelInfo,
      liLbl, liWeight, mkSwitchTargets,
      switchTargetsCases, switchTargetsDefault, switchTargetsRange, switchTargetsSigned,
      mapSwitchTargets, switchTargetsToTable, switchTargetsFallThrough,

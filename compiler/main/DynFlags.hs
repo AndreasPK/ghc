@@ -491,8 +491,10 @@ data GeneralFlag
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
    | Opt_NumConstantFolding
-   | Opt_UnlikelyBottoms     -- ^ Assume bottoming alternatives are not taken.
-   | Opt_WeightBalanceAlts   -- ^ Split trees by branch weight where applicable.
+   | Opt_UnlikelyBottoms    -- ^ Assume bottoming alternatives are not taken.
+   | Opt_LikelyRecursion    -- ^ Assume branches which represent an recursive
+                            --   case are likely to be taken.
+   | Opt_WeightBalanceAlts  -- ^ Split trees by branch weight where applicable.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
@@ -3954,6 +3956,7 @@ fFlagsDeps = [
   flagSpec "late-dmd-anal"                    Opt_LateDmdAnal,
   flagSpec "late-specialise"                  Opt_LateSpecialise,
   flagSpec "liberate-case"                    Opt_LiberateCase,
+  flagSpec "likely-recursion"                 Opt_LikelyRecursion,
   flagSpec "llvm-pass-vectors-in-regs"        Opt_LlvmPassVectorsInRegisters,
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
@@ -4462,7 +4465,9 @@ optLevelFlags -- see Note [Documenting optimisation flags]
     , ([2],     Opt_LiberateCase)
     , ([2],     Opt_SpecConstr)
     , ([1,2],   Opt_UnlikelyBottoms)
+    , ([2],     Opt_LikelyRecursion)
     , ([1,2],   Opt_WeightBalanceAlts)
+
 --  , ([2],     Opt_RegsGraph)
 --   RegsGraph suffers performance regression. See #7679
 --  , ([2],     Opt_StaticArgumentTransformation)

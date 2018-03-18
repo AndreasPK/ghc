@@ -838,6 +838,14 @@ data Tickish id =
                                 -- Note [substTickish] in CoreSubst.
     }
 
+  -- | Branchweight hints.
+  --
+  -- These inform GHC that we have knowledge about how likely a covered branch
+  -- alternative is likely to be selected by the surrounding case.
+  | WeightHint
+    { weightHint :: BranchWeight -- ^ Weight given to the alternative.
+    }
+
   -- | A source note.
   --
   -- Source notes are pure annotations: Their presence should neither
@@ -949,6 +957,7 @@ tickishScoped Breakpoint{} = CostCentreScope
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
 tickishScoped SourceNote{} = SoftScope
+tickishScoped WeightHint{} = CostCentreScope
 
 -- | Returns whether the tick scoping rule is at least as permissive
 -- as the given scoping rule.
@@ -1011,6 +1020,7 @@ mkNoScope _                               = panic "mkNoScope: Undefined split!"
 -- translate the code as if it found the latter.
 tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
+tickishIsCode WeightHint{} = False --TODOF: Check
 tickishIsCode _tickish     = True  -- all the rest for now
 
 
@@ -1056,6 +1066,9 @@ tickishPlace n@ProfNote{}
 tickishPlace HpcTick{}     = PlaceRuntime
 tickishPlace Breakpoint{}  = PlaceRuntime
 tickishPlace SourceNote{}  = PlaceNonLam
+-- | Weight hints can be floated through everything but cases
+tickishPlace WeightHint{}  = PlaceCostCentre
+
 
 -- | Returns whether one tick "contains" the other one, therefore
 -- making the second tick redundant.
@@ -1063,6 +1076,8 @@ tickishContains :: Eq b => Tickish b -> Tickish b -> Bool
 tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
   = containsSpan sp1 sp2 && n1 == n2
     -- compare the String last
+-- Multiple weight hints have to be added up
+tickishContains (WeightHint {}) _ = False
 tickishContains t1 t2
   = t1 == t2
 

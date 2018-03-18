@@ -496,6 +496,7 @@ data IfaceTickish
   | IfaceSCC     CostCentre Bool Bool      -- from ProfNote
   | IfaceSource  RealSrcSpan String        -- from SourceNote
   -- no breakpoints: we never export these into interface files
+  | IfaceBranchWeight BranchWeight
 
 type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr)
         -- Note: IfLclName, not IfaceBndr (and same with the case binder)
@@ -1211,6 +1212,8 @@ pprIfaceTickish (IfaceSCC cc tick scope)
   = braces (pprCostCentreCore cc <+> ppr tick <+> ppr scope)
 pprIfaceTickish (IfaceSource src _names)
   = braces (pprUserRealSpan True src)
+pprIfaceTickish (IfaceBranchWeight w)
+  = braces (ppr w)
 
 ------------------
 pprIfaceApp :: IfaceExpr -> [SDoc] -> SDoc
@@ -2178,6 +2181,9 @@ instance Binary IfaceTickish where
         put_ bh (srcSpanEndLine src)
         put_ bh (srcSpanEndCol src)
         put_ bh name
+    put_ bh (IfaceBranchWeight (Weight w)) = do
+        putByte bh 3
+        put_ bh w
 
     get bh = do
         h <- getByte bh
@@ -2198,6 +2204,8 @@ instance Binary IfaceTickish where
                         end = mkRealSrcLoc file el ec
                     name <- get bh
                     return (IfaceSource (mkRealSrcSpan start end) name)
+            3 -> do w <- get bh
+                    return (IfaceBranchWeight (Weight w))
             _ -> panic ("get IfaceTickish " ++ show h)
 
 instance Binary IfaceConAlt where

@@ -19,7 +19,7 @@ import GhcPrelude
 
 import CoreSyn
 import CoreUtils        ( exprType, findDefault, isJoinBind, exprIsBottom
-                        , exprIsTickedString_maybe )
+                        , exprIsTickedString_maybe, hasWeight )
 import CoreArity        ( manifestArity )
 import StgSyn
 
@@ -35,7 +35,7 @@ import VarEnv
 import Module
 import Name             ( isExternalName, nameOccName, nameModule_maybe )
 import OccName          ( occNameFS )
-import BasicTypes       ( Arity, neverFreq, defFreq )
+import BasicTypes       ( Arity, neverFreq, defFreq, BranchWeight(..) )
 import TysWiredIn       ( unboxedUnitDataCon )
 import Literal
 import Outputable
@@ -418,12 +418,14 @@ coreToStgExpr df expr@(Lam _ _)
 
     return (result_expr, fvs)
 
+--We check for branch weights when transforming the case itself.
 coreToStgExpr df (Tick tick expr)
   = do case tick of
-         HpcTick{}    -> return ()
-         ProfNote{}   -> return ()
-         SourceNote{} -> return ()
-         Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
+         HpcTick{}      -> return ()
+         ProfNote{}     -> return ()
+         SourceNote{}   -> return ()
+         WeightHint{} -> return ()
+         Breakpoint{}   -> panic "coreToStgExpr: breakpoint should not happen"
        (expr2, fvs) <- coreToStgExpr df expr
        return (StgTick tick expr2, fvs)
 
@@ -471,30 +473,40 @@ coreToStgExpr df (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
-    alt_freq rhs
+    -- TODO: Cleanup comments
+    get_freq :: CoreExpr -> (BasicTypes.BranchWeight, CoreExpr)
+    get_freq rhs
       | gopt Opt_UnlikelyBottoms df
       , exprIsBottom rhs
       = -- If a expression is bottom we can safely assume it's
         -- alternative is rarely taken. Hence we set the
         -- branch weight to zero/never.
         -- For details see Note [Branch weights] in BasicTypes
-        neverFreq
-      | otherwise = defFreq
+        (neverFreq, rhs)
+      | gopt Opt_LikelyRecursion df
+      , Just (weight,rhs') <- hasWeight rhs
+      = -- If there are weight hints on the alternative use them.
+        (weight,rhs')
+      | otherwise = (defFreq,rhs)
+
+    --vars_alt :: CoreAlt -> CtsM (StgAlt, FreeVarsInfo)
     vars_alt (con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon
       = -- This case is a bit smelly.
         -- See Note [Nullary unboxed tuple] in Type.hs
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
-        do { (rhs2, rhs_fvs) <- coreToStgExpr df rhs
-           ; return ((DEFAULT, [], rhs2, alt_freq rhs), rhs_fvs) }
+        do { let (freq,rhs2) = get_freq rhs
+           ; (rhs3, rhs_fvs) <- coreToStgExpr df rhs2
+           ; return ((DEFAULT, [], rhs3, freq), rhs_fvs) }
       | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
         extendVarEnvCts [(b, LambdaBound) | b <- binders'] $ do
-        (rhs2, rhs_fvs) <- coreToStgExpr df rhs
-        return ( (con, binders', rhs2, alt_freq rhs),
+        let (freq,rhs2) = get_freq rhs
+        (rhs3, rhs_fvs) <- coreToStgExpr df rhs2
+        return ( (con, binders', rhs3, freq),
                  binders' `minusFVBinders` rhs_fvs )
 
 coreToStgExpr df (Let bind body) = do
