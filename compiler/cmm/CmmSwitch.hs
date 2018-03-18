@@ -389,13 +389,13 @@ createSwitchPlan _ (SwitchTargets _signed _range (Just defInfo) m)
         (moreLikely (liWeight li) (liWeight defInfo))
 -- And another common case, matching "booleans"
 createSwitchPlan _ (SwitchTargets _signed (lo,hi) Nothing m)
-    | [(x1, li1@(l1,f1)), (_x2,li2@(l2,f2))] <- M.toAscList m
+    | [(x1, li1@(_l1,f1)), (_x2,li2@(_l2,f2))] <- M.toAscList m
     --Checking If |range| = 2 is enough if we have two unique literals
     , hi - lo == 1
     = IfEqual x1 li1 (Unconditionally li2) (moreLikely f1 f2)
 -- See Note [Two alts + default]
-createSwitchPlan _ (SwitchTargets _signed _range (Just def@(defLabel, fdef)) m)
-    | [(x1, li1@(l1,f1)), (x2,li2@(l2,f2))] <- M.toAscList m
+createSwitchPlan _ (SwitchTargets _signed _range (Just def@(_, fdef)) m)
+    | [(x1, li1@(_l1,f1)), (x2,li2@(_l2,f2))] <- M.toAscList m
     = IfEqual x1 li1
         (IfEqual x2 li2 (Unconditionally def) (moreLikely f2 fdef))
         (moreLikely f1 (combinedFreqs f2 fdef))
@@ -468,7 +468,7 @@ mkFlatSwitchPlan signed  Nothing _ (m:ms)
 
 -- If we have a default, we have to interleave segments that jump
 -- to the default between the maps
-mkFlatSwitchPlan signed (Just li@(l,f)) r ms
+mkFlatSwitchPlan signed (Just li) r ms
   = let ((_,p1):ps) = go r ms in (p1, ps)
   where
     go (lo,hi) []
@@ -488,7 +488,7 @@ mkFlatSwitchPlan signed (Just li@(l,f)) r ms
 
 mkLeafPlan :: Bool -> Maybe LabelInfo -> M.Map Integer LabelInfo -> SwitchPlan
 mkLeafPlan signed mbdef m
-    | [(_,li@(l,_f))] <- M.toList m -- singleton map
+    | [(_,li)] <- M.toList m -- singleton map
     = Unconditionally li
     | otherwise
     = JumpTable $ mkSwitchTargets signed (min,max) mbdef m
@@ -580,6 +580,7 @@ divideBalanced (p,xs) = --pprTrace "divideTree" (
 
     buildFork ((i,p'):lxs) [] = ((p,reverse lxs),i,(p',[]))
     buildFork (lxs) ((ri,rp):rxs) = ((p,reverse lxs),ri,(rp,rxs))
+    buildFork [] [] = panic "Impossible - empty tree"
 
 --
 -- Other Utilities
