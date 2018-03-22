@@ -841,7 +841,7 @@ data Tickish id =
   -- | Branchweight hints.
   --
   -- These inform GHC that we have knowledge about how likely a covered branch
-  -- alternative is likely to be selected by the surrounding case.
+  -- alternative is to be selected by the surrounding case.
   | WeightHint
     { weightHint :: BranchWeight -- ^ Weight given to the alternative.
     }

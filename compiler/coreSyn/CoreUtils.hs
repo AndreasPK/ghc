@@ -2606,14 +2606,3 @@ hasWeight expr
   where
     weightTick WeightHint{} = True
     weightTick _ = False
-
-
-
-
-
-
-
-
-
-
-

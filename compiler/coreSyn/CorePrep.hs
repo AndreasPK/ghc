@@ -208,8 +208,9 @@ corePrepPgm hsc_env this_mod mod_loc binds data_tycons = do
       --TODO: This does not belong here!
     withTiming (pure dflags) (text "LikelyRecursion [Pgm]") (const ()) $ do
       let x = map likelyRecursionBndr binds_out :: [CoreBind]
-      --expr <- return $ likelyRecursion expr
-      return (x, cost_centres)
+      if gopt Opt_LikelyRecursion dflags
+        then return (x, cost_centres)
+        else return (binds_out, cost_centres)
 
 
 
@@ -219,8 +220,10 @@ corePrepPgm hsc_env this_mod mod_loc binds data_tycons = do
 corePrepExpr :: DynFlags -> HscEnv -> CoreExpr -> IO CoreExpr
 corePrepExpr dflags hsc_env expr = do
     --TODO: This does not belong here!
-    expr <- withTiming (pure dflags) (text "LikelyRecursion [expr]") (const ())
-      (return $ likelyRecursion expr)
+    expr <- withTiming (pure dflags) (text "LikelyRecursion [expr]") (const ()) (
+      if gopt Opt_LikelyRecursion dflags
+        then (return $ likelyRecursion expr)
+        else return expr)
 
 
     withTiming (pure dflags) (text "CorePrep [expr]") (const ()) $ do

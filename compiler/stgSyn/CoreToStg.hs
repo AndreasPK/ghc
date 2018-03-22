@@ -473,7 +473,12 @@ coreToStgExpr df (Case scrut bndr _ alts) = do
       scrut_fvs `unionFVInfo` alts_fvs_wo_bndr
       )
   where
-    -- TODO: Cleanup comments
+    {- Stg Alternatives also carry branch weight information.
+      This information currently comes from two sources:
+      * Checking if a expression is bottom (see Note [Branch weights])
+      * Weight hints from Tickish
+      We calculate both here.
+    -}
     get_freq :: CoreExpr -> (BasicTypes.BranchWeight, CoreExpr)
     get_freq rhs
       | gopt Opt_UnlikelyBottoms df
@@ -483,8 +488,7 @@ coreToStgExpr df (Case scrut bndr _ alts) = do
         -- branch weight to zero/never.
         -- For details see Note [Branch weights] in BasicTypes
         (neverFreq, rhs)
-      | gopt Opt_LikelyRecursion df
-      , Just (weight,rhs') <- hasWeight rhs
+      | Just (weight,rhs') <- hasWeight rhs
       = -- If there are weight hints on the alternative use them.
         (weight,rhs')
       | otherwise = (defFreq,rhs)
