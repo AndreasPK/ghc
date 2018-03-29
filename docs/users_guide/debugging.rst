@@ -470,7 +470,12 @@ These flags dump various phases of GHC's C-\\- pipeline.
 
     Dump the result of the C-\\- pipeline processing
 
+.. ghc-flag:: -ddump-cfg-weights
+    :shortdesc: Dump the assumed weights of the CFG.
+    :type: dynamic
 
+    Dumps the weights used by the new block layout code
+    to serializing the CFG.
 
 LLVM code generator
 ~~~~~~~~~~~~~~~~~~~~~~
