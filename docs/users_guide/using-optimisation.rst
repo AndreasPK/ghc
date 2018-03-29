@@ -45,7 +45,7 @@ optimisation to be performed, which can have an impact on how much of
 your program needs to be recompiled when you change something. This is
 one reason to stick to no-optimisation when developing code.
 
-**No ``-O*``-type option specified:** This is taken to mean “Please 
+**No ``-O*``-type option specified:** This is taken to mean “Please
 compile quickly; I'm not over-bothered about compiled-code quality.”
 So, for example, ``ghc -c Foo.hs``
 
@@ -219,6 +219,20 @@ by saying ``-fno-wombat``.
     This is mostly done during Cmm passes. However this can miss corner cases. So at -O2
     we run the pass again at the asm stage to catch these.
 
+.. ghc-flag:: -fnew-blocklayout
+    :shortdesc: Use the new experimental block layout algorithm.
+    :type: dynamic
+    :reverse: -fno-new-blocklayout
+    :category:
+
+    :default: off
+
+    The new algorithm considers all outgoing edges of a basic blocks for code layout instead
+    of only a single edge. It also applies simple heuristics to assign priorities if there
+    are multiple edges.
+
+    This is expected to improve performance on average. In case of performance regressions
+    please open a ticket.
 
 .. ghc-flag:: -fcpr-anal
     :shortdesc: Turn on CPR analysis in the demand analyser. Implied by :ghc-flag:`-O`.

@@ -60,7 +60,7 @@ module Util (
         nTimes,
 
         -- * Sorting
-        sortWith, minWith, nubSort,
+        sortWith, minWith, nubSort, ordNub,
 
         -- * Comparisons
         isEqual, eqListBy, eqMaybeBy,
@@ -623,6 +623,18 @@ minWith get_key xs = ASSERT( not (null xs) )
 
 nubSort :: Ord a => [a] -> [a]
 nubSort = Set.toAscList . Set.fromList
+
+-- | Remove duplicates but keep elements in order.
+--   O(n * log n)
+ordNub :: Ord a => [a] -> [a]
+ordNub xs
+  = go Set.empty xs
+  where
+    go _ [] = []
+    go s (x:xs)
+      | Set.member x s = go s xs
+      | otherwise = x : go (Set.insert x s) xs
+
 
 {-
 ************************************************************************
