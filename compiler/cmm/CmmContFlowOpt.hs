@@ -17,6 +17,7 @@ import Hoopl.Graph
 import Hoopl.Label
 import BlockId
 import Cmm
+import PprCmm
 import CmmUtils
 import CmmSwitch (mapSwitchTargets)
 import Maybes
@@ -25,6 +26,8 @@ import Util
 
 import Control.Monad
 import Data.List
+
+import Outputable
 
 
 -- Note [What is shortcutting]
@@ -177,7 +180,26 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
      -- blocks are sorted in reverse postorder, but we want to go from the exit
      -- towards beginning, so we use foldr below.
      blocks = revPostorder g
-     blockmap = foldl' (flip addBlock) emptyBody blocks
+     vanillaMap = foldl' (flip addBlock) emptyBody blocks
+     toBlock = toBlockMap g
+     blockmap =
+      let keysVanilla = mapKeys vanillaMap
+          keysToBlock   = mapKeys toBlock
+          equal = (all (`elem` keysToBlock) keysVanilla) &&
+                  (all (`elem` keysVanilla) keysToBlock)
+          missingFromToBlock = (filter (\x -> not (elem x keysToBlock)) keysVanilla)
+          missingFromVanilla = (filter (\x -> not (elem x keysVanilla)) keysToBlock)
+
+      in pprTrace "blockMaps" 
+                ( text "isEqual " <> ppr equal $$ (if equal then empty else vcat 
+                  [ text "missingFromToBlock" $$ ppr missingFromToBlock
+                  , text "missingFromVanilla" $$ ppr missingFromVanilla
+                  , text "vanilla" $$ ppr vanillaMap
+                  , text "toMap" $$ ppr (toBlockMap g)
+                  , text "graph" $$ ppr g
+                  ])
+                )
+                toBlock
 
      -- Accumulator contains three components:
      --  * map of blocks in a graph
