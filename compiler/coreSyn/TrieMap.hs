@@ -51,6 +51,7 @@ import VarEnv
 import NameEnv
 import Outputable
 import Control.Monad( (>=>) )
+import Data.Bifunctor
 
 {-
 This module implements TrieMaps, which are finite mappings
@@ -305,6 +306,48 @@ fdList k m = foldMaybe k          (lm_nil m)
 foldMaybe :: (a -> b -> b) -> Maybe a -> b -> b
 foldMaybe _ Nothing  b = b
 foldMaybe k (Just a) b = k a b
+
+-- A listmap with compression for leaves.
+data ListMapX m a
+  = LMXL { lx_leaf  :: Maybe ([Key m],a) }
+  | LMXC { lx_cons :: m (ListMapX m a) }
+
+instance (TrieMap m, Eq (Key m)) => TrieMap (ListMapX m) where
+   type Key (ListMapX m) = [Key m]
+   emptyTM  = LMXL { lx_leaf = Nothing }
+   lookupTM = lkListX lookupTM
+   alterTM  = xtList alterTM
+   foldTM   = fdListX
+   mapTM    = mapListX -- :: TrieMap m => (a->b) -> ListMapX m a -> ListMapX m b
+
+xtListX :: (TrieMap m, Eq (Key m)) => (forall b. k -> XT b -> m b -> m b)
+        -> [k] -> XT a -> ListMapX m a -> ListMapX m a
+xtList _  []     f m = m { lm_nil  = f (lm_nil m) }
+xtList tr (x:xs) f m = m { lm_cons = lm_cons m |> tr x |>> xtList tr xs f }
+
+lkListX :: forall m a. (TrieMap m, Eq (Key m)) => (forall b. (Key m) -> m b -> Maybe b)
+        -> [Key m] -> ListMapX m a -> Maybe a
+lkListX lkElem k (LMXL { lx_leaf = leaf })
+  = maybe Nothing (\(k',v) -> if k == k' then Just v else Nothing) leaf
+lkListX lkElem (k:ks) (LMXC { lx_cons = cons })
+  = do
+    lm <- lkElem k cons
+    lkListX lkElem ks lm
+lkListX _ [] (LMXC {}) = Nothing
+
+fdListX :: forall m a b. TrieMap m
+        => (a -> b -> b) -> ListMapX m a -> b -> b
+fdListX f (LMXL { lx_leaf = leaf }) = foldMaybe (f . snd) leaf
+fdListX f (LMXC { lx_cons = cons }) = foldTM (fdListX f) cons
+
+mapListX :: TrieMap m => (a->b) -> ListMapX m a -> ListMapX m b
+mapListX f (LMXL { lx_leaf = leaf })
+  = LMXL { lx_leaf = fmap (second f) leaf }
+mapListX f (LMXC { lx_cons = cons })
+  = LMXC { lx_cons = mapTM (mapListX f) cons }
+
+
+
 
 {-
 ************************************************************************
