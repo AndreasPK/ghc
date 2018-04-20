@@ -19,6 +19,7 @@ import Outputable
 
 -- TODO: This should really just use GHC's Unique and Uniq{Set,FM}
 import Hoopl.Collections
+import qualified TrieMap as TM
 
 import Unique (Uniquable(..))
 

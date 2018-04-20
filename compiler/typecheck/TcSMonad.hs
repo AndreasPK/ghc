@@ -162,7 +162,7 @@ import UniqFM
 import UniqDFM
 import Maybes
 
-import TrieMap
+import CoreTrieMap
 import Control.Monad
 import qualified Control.Monad.Fail as MonadFail
 import MonadUtils
