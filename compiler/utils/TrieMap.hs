@@ -32,11 +32,8 @@ module TrieMap(
 import GhcPrelude
 
 import Literal
-import Name
 import UniqDFM
 import Unique( Unique )
-import FastString(FastString)
-import Util
 
 import qualified Data.Map    as Map
 import qualified Data.IntMap as IntMap
@@ -47,9 +44,9 @@ import Control.Monad( (>=>) )
 This module implements TrieMaps, which are finite mappings
 whose key is a structured value like a CoreExpr or Type.
 
-The code is very regular and boilerplate-like, but there is
-some neat handling of *binders*.  In effect they are deBruijn
-numbered on the fly.
+This file implements tries over general data structures.
+Implementation for tries over Core Expressions/Types are
+available in coreSyn/TrieMap.
 
 The regular pattern for handling TrieMaps on data structures was first
 described (to my knowledge) in Connelly and Morris's 1995 paper "A
@@ -307,15 +304,6 @@ foldMaybe k (Just a) b = k a b
 
 type LiteralMap  a = Map.Map Literal a
 
-emptyLiteralMap :: LiteralMap a
-emptyLiteralMap = emptyTM
-
-lkLit :: Literal -> LiteralMap a -> Maybe a
-lkLit = lookupTM
-
-xtLit :: Literal -> XT a -> LiteralMap a -> LiteralMap a
-xtLit = alterTM
-
 {-
 ************************************************************************
 *                                                                      *
@@ -343,6 +331,9 @@ just use SingletonMap.
 'EmptyMap' provides an even more basic (but essential) optimization: if there is
 nothing in the map, don't bother building out the (possibly infinite) recursive
 TrieMap structure!
+
+Compressed triemaps are heavily used by CoreMap. So we have to mark some things
+as INLINEABLE to permit specialization.
 -}
 
 data GenMap m a
@@ -364,12 +355,9 @@ instance (Eq (Key m), TrieMap m) => TrieMap (GenMap m) where
    foldTM   = fdG
    mapTM    = mapG
 
--- NB: Be careful about RULES and type families (#5821).  So we should make sure
--- to specify @Key TypeMapX@ (and not @DeBruijn Type@, the reduced form)
+--We want to be able to specialize these functions when defining eg
+--tries over (GenMap CoreExpr) which requires INLINEABLE
 
---{-# SPECIALIZE lkG :: Key TypeMapX     -> TypeMapG a     -> Maybe a #-}
---{-# SPECIALIZE lkG :: Key CoercionMapX -> CoercionMapG a -> Maybe a #-}
---{-# SPECIALIZE lkG :: Key CoreMapX     -> CoreMapG a     -> Maybe a #-}
 {-# INLINEABLE lkG #-}
 lkG :: (Eq (Key m), TrieMap m) => Key m -> GenMap m a -> Maybe a
 lkG _ EmptyMap                         = Nothing
@@ -377,9 +365,6 @@ lkG k (SingletonMap k' v') | k == k'   = Just v'
                            | otherwise = Nothing
 lkG k (MultiMap m)                     = lookupTM k m
 
---{-# SPECIALIZE xtG :: Key TypeMapX     -> XT a -> TypeMapG a -> TypeMapG a #-}
---{-# SPECIALIZE xtG :: Key CoercionMapX -> XT a -> CoercionMapG a -> CoercionMapG a #-}
---{-# SPECIALIZE xtG :: Key CoreMapX     -> XT a -> CoreMapG a -> CoreMapG a #-}
 {-# INLINEABLE xtG #-}
 xtG :: (Eq (Key m), TrieMap m) => Key m -> XT a -> GenMap m a -> GenMap m a
 xtG k f EmptyMap
@@ -407,21 +392,14 @@ xtG k f m@(SingletonMap k' v')
                            >.> MultiMap
 xtG k f (MultiMap m) = MultiMap (alterTM k f m)
 
---{-# SPECIALIZE mapG :: (a -> b) -> TypeMapG a     -> TypeMapG b #-}
---{-# SPECIALIZE mapG :: (a -> b) -> CoercionMapG a -> CoercionMapG b #-}
---{-# SPECIALIZE mapG :: (a -> b) -> CoreMapG a     -> CoreMapG b #-}
 {-# INLINEABLE mapG #-}
 mapG :: TrieMap m => (a -> b) -> GenMap m a -> GenMap m b
 mapG _ EmptyMap = EmptyMap
 mapG f (SingletonMap k v) = SingletonMap k (f v)
 mapG f (MultiMap m) = MultiMap (mapTM f m)
 
---{-# SPECIALIZE fdG :: (a -> b -> b) -> TypeMapG a     -> b -> b #-}
---{-# SPECIALIZE fdG :: (a -> b -> b) -> CoercionMapG a -> b -> b #-}
---{-# SPECIALIZE fdG :: (a -> b -> b) -> CoreMapG a     -> b -> b #-}
 {-# INLINEABLE fdG #-}
 fdG :: TrieMap m => (a -> b -> b) -> GenMap m a -> b -> b
 fdG _ EmptyMap = \z -> z
 fdG k (SingletonMap _ v) = \z -> k v z
 fdG k (MultiMap m) = foldTM k m
-

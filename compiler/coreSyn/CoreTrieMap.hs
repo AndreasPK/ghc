@@ -36,13 +36,10 @@ import GhcPrelude
 import TrieMap
 import CoreSyn
 import Coercion
-import Literal
 import Name
 import Type
 import TyCoRep
 import Var
-import UniqDFM
-import Unique( Unique )
 import FastString(FastString)
 import Util
 
@@ -54,18 +51,15 @@ import Outputable
 import Control.Monad( (>=>) )
 
 {-
-This module implements TrieMaps, which are finite mappings
-whose key is a structured value like a CoreExpr or Type.
+This module implements TrieMaps over Core related data structures
+like CoreExpr or Type. It is built on the Tries from the TrieMap
+module.
 
 The code is very regular and boilerplate-like, but there is
 some neat handling of *binders*.  In effect they are deBruijn
 numbered on the fly.
 
-The regular pattern for handling TrieMaps on data structures was first
-described (to my knowledge) in Connelly and Morris's 1995 paper "A
-generalization of the Trie Data Structure"; there is also an accessible
-description of the idea in Okasaki's book "Purely Functional Data
-Structures", Section 10.3.2
+
 -}
 
 ----------------------
@@ -75,6 +69,8 @@ Structures", Section 10.3.2
 -- NB: Be careful about RULES and type families (#5821).  So we should make sure
 -- to specify @Key TypeMapX@ (and not @DeBruijn Type@, the reduced form)
 
+-- The CoreMap makes heavy use of GenMap. However the CoreMap Types are not
+-- known when defining GenMap so we can only specialize them here.
 
 {-# SPECIALIZE lkG :: Key TypeMapX     -> TypeMapG a     -> Maybe a #-}
 {-# SPECIALIZE lkG :: Key CoercionMapX -> CoercionMapG a -> Maybe a #-}
