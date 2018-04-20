@@ -27,7 +27,7 @@ matchSimply
         :: HasCallStack
         => CoreExpr
         -> HsMatchContext Name
-        -> LPat GhcTc
+        -> LPat Id
         -> CoreExpr
         -> CoreExpr
         -> DsM CoreExpr
@@ -36,7 +36,7 @@ matchSinglePat
         :: HasCallStack
         => CoreExpr
         -> HsMatchContext Name
-        -> LPat GhcTc
+        -> LPat Id
         -> Type
         -> MatchResult
         -> DsM MatchResult
