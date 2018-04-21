@@ -494,7 +494,7 @@ data GeneralFlag
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
    | Opt_SimplPreInlining
-   
+
    | Opt_TreeMatching
 
    -- Interface files
@@ -4214,7 +4214,6 @@ xFlagsDeps = [
   flagSpec "StaticPointers"                   LangExt.StaticPointers,
   flagSpec "Strict"                           LangExt.Strict,
   flagSpec "StrictData"                       LangExt.StrictData,
-  flagSpec "TreeMatching"                     LangExt.TreeMatching,
   flagSpec' "TemplateHaskell"                 LangExt.TemplateHaskell
                                               checkTemplateHaskellOk,
   flagSpec "TemplateHaskellQuotes"            LangExt.TemplateHaskellQuotes,

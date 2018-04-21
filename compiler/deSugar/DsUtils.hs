@@ -9,7 +9,9 @@ This module exports some utility functions of no great interest.
 
 -}
 
-{-# LANGUAGE CPP, DeriveDataTypeable #-}
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- | Utility functions for constructing Core syntax, principally for desugaring
 module DsUtils (
@@ -272,7 +274,7 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
 withDefault :: HasCallStack => MatchResult -> Maybe MatchResult -> MatchResult
 withDefault mr def_branch = combineMatchResults mr (fromMaybe alwaysFailMatchResult def_branch)
 
-mkCoPrimCaseMatchResult :: HasCallStack 
+mkCoPrimCaseMatchResult :: HasCallStack
                         => Id                        -- Scrutinee
                         -> Type                      -- Type of the case
                         -> [(Literal, MatchResult)]  -- Alternatives
@@ -789,7 +791,7 @@ mkSelectorBinds ticks pat val_expr
   | otherwise                          -- General case (C)
   = do { --traceM "mkSelector:C"
        ; tuple_var  <- newSysLocalDs tuple_ty
-       ; error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID tuple_ty (ppr pat')
+       ; error_expr <- mkErrorAppDs pAT_ERROR_ID tuple_ty (ppr pat')
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat
                                    local_tuple error_expr
        ; let mk_tup_bind tick binder

@@ -6,7 +6,7 @@
 Pattern-matching literal patterns
 -}
 
-{-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, ScopedTypeVariables, FlexibleContexts #-}
 
 module MatchLit ( dsLit, dsOverLit, dsOverLit', hsLitKey
                 , tidyLitPat, tidyNPat, wrap_str_guard
@@ -81,7 +81,7 @@ See also below where we look for @DictApps@ for \tr{plusInt}, etc.
 
 
 
---dsLit :: HsLit GhcRn -> DsM CoreExpr
+dsLit :: HsLit GhcRn -> DsM CoreExpr
 dsLit (HsStringPrim _ s) = return (Lit (MachStr s))
 dsLit (HsCharPrim   _ c) = return (Lit (mkMachChar c))
 dsLit (HsIntPrim    _ i) = do df <- getDynFlags
@@ -90,8 +90,8 @@ dsLit (HsWordPrim   _ w) = do df <- getDynFlags
                               return (Lit (mkMachWordWrap df w))
 dsLit (HsInt64Prim  _ i) = return (Lit (mkMachInt64Wrap i))
 dsLit (HsWord64Prim _ w) = return (Lit (mkMachWord64Wrap w))
-dsLit (HsFloatPrim  f)   = return (Lit (mkMachFloat (fl_value f)))
-dsLit (HsDoublePrim d)   = return (Lit (mkMachDouble (fl_value d)))
+dsLit (HsFloatPrim _ f)  = return (Lit (mkMachFloat (fl_value f)))
+dsLit (HsDoublePrim _ d) = return (Lit (mkMachDouble (fl_value d)))
 dsLit (HsChar _ c)       = return (mkCharExpr c)
 dsLit (HsString _ str)   = mkStringExprFS str
 dsLit (HsInteger _ i _)  = mkIntegerExpr i

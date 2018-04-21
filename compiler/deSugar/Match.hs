@@ -62,7 +62,7 @@ import Debug.Trace
 import HsDumpAst
 import GHC.Stack
 
-type GhcTc = Id
+--type GhcTc = Id
 
 {-
 ************************************************************************
@@ -403,7 +403,7 @@ tidyEqnInfo v eqn@(EqnInfo { eqn_pats = pat : pats })
   = do { (wrap, pat') <- tidy1 v pat
        ; return (wrap, eqn { eqn_pats = do pat' : pats }) }
 
-tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
+tidy1 :: Id                  -- The Id being scrutinised
       -> Pat GhcTc           -- The pattern against which it is to be matched
       -> DsM (DsWrapper,     -- Extra bindings to do before the match
               Pat GhcTc)     -- Equivalent pattern
@@ -414,10 +414,10 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 -- It eliminates many pattern forms (as-patterns, variable patterns,
 -- list patterns, etc) and returns any created bindings in the wrapper.
 
-tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
-tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
+tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPat _ pat)      = tidy1 v (unLoc pat)
+tidy1 _ (WildPat ty)        = return (idDsWrapper, WildPat ty)
+tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
@@ -433,8 +433,11 @@ tidy1 v (AsPat _ (L _ var) pat)
 {- now, here we handle lazy patterns:
     tidy1 v ~p bs = (v, v1 = case v of p -> v1 :
                         v2 = case v of p -> v2 : ... : bs )
+
     where the v_i's are the binders in the pattern.
+
     ToDo: in "v_i = ... -> v_i", are the v_i's really the same thing?
+
     The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
 -}
 
