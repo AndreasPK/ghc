@@ -697,7 +697,7 @@ getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
 * Constructor -> Evaluation + any following constraints
                  only have to be considered if the result matches the constructor.
 -}
-getPatternConstraint ((LitPat _ lit),info) = do
+getPatternConstraint ((LitPat lit),info) = do
     df <- getDynFlags :: DsM DynFlags
     return $ Just $ (info, Just (LitCond (hsLitKey df lit)) )
 getPatternConstraint (pat@(ConPatOut { pat_con = con}), info) = do
@@ -712,7 +712,7 @@ getPatternConstraint (WildPat {}, info) =
 getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >>
     return Nothing
-getPatternConstraint (BangPat _ (L _ p), info)
+getPatternConstraint (BangPat (L _ p), info)
     | WildPat {} <- p = return $ Just (info, Nothing)
     | VarPat {} <- p = return $ Just (info, Nothing)
 getPatternConstraint (p@BangPat {}, info) =
@@ -918,13 +918,13 @@ patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
 --patGroup _df (VarPat {}) = VarGrp
 -- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
-patGroup df  (BangPat _ (L _loc p)) = patGroup df p
+patGroup df  (BangPat (L _loc p)) = patGroup df p
 patGroup _df (ConPatOut { pat_con = L _ con})
     | PatSynCon psyn <- con                = error "Not implemented" -- gSyn psyn tys
     | RealDataCon dcon <- con              =
         ConGrp dcon
         --Literals
-patGroup df (LitPat _ lit) = LitGrp $ hsLitKey df lit
+patGroup df (LitPat lit) = LitGrp $ hsLitKey df lit
 patGroup _ _ = error "Not implemented"
 
 -- Assign the variables introduced by a binding to the appropriate values
@@ -1419,7 +1419,7 @@ unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) 
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 } = conPat
-unpackCon (BangPat _x (L _ p), info) (vars, bangs) =
+unpackCon (BangPat (L _ p), info) (vars, bangs) =
     unpackCon (p, info) (vars, bangs)
 unpackCon (pat, info) _ =
     error $ "unpackCon failed on:" ++ showSDocUnsafe (ppr pat)
@@ -1653,19 +1653,19 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 -- It eliminates many pattern forms (as-patterns, variable patterns,
 -- list patterns, etc) and returns any created bindings in the wrapper.
 
-tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPat _ pat) = tidy1 v (unLoc pat)
+tidy1 v (ParPat pat)      = tidy1 v (unLoc pat)
+tidy1 v (SigPatOut pat _) = tidy1 v (unLoc pat)
 tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
+tidy1 v (BangPat (L l p)) = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
-tidy1 v (VarPat _ (L _ var))
+tidy1 v (VarPat (L _ var))
   = return (wrapBind var v, WildPat (idType var))
 
         -- case v of { x@p -> mr[] }
         -- = case v of { p -> let x=v in mr[] }
-tidy1 v (AsPat _ (L _ var) pat)
+tidy1 v (AsPat (L _ var) pat)
   = do  { (wrap, pat') <- tidy1 v (unLoc pat)
         ; return (wrapBind var v . wrap, pat') }
 
@@ -1677,7 +1677,7 @@ tidy1 v (AsPat _ (L _ var) pat)
     The case expr for v_i is just: match [v] [(p, [], \ x -> Var v_i)] any_expr
 -}
 
-tidy1 v (LazyPat _ pat)
+tidy1 v (LazyPat pat)
     -- This is a convenient place to check for unlifted types under a lazy pattern.
     -- Doing this check during type-checking is unsatisfactory because we may
     -- not fully know the zonked types yet. We sure do here.
@@ -1693,7 +1693,7 @@ tidy1 v (LazyPat _ pat)
         ; let sel_binds =  [NonRec b rhs | (b,rhs) <- sel_prs]
         ; return (mkCoreLets sel_binds, WildPat (idType v)) }
 
-tidy1 _ (ListPat _ pats ty Nothing)
+tidy1 _ (ListPat pats ty Nothing)
   = return (idDsWrapper, unLoc list_ConPat)
   where
     list_ConPat = foldr (\ x y -> mkPrefixConPat consDataCon [x, y] [ty])
@@ -1702,29 +1702,29 @@ tidy1 _ (ListPat _ pats ty Nothing)
 
 -- Introduce fake parallel array constructors to be able to handle parallel
 -- arrays with the existing machinery for constructor pattern
-tidy1 _ (PArrPat ty pats)
+tidy1 _ (PArrPat pats ty)
   = return (idDsWrapper, unLoc parrConPat)
   where
     arity      = length pats
     parrConPat = mkPrefixConPat (parrFakeCon arity) pats [ty]
 
-tidy1 _ (TuplePat tys pats boxity)
+tidy1 _ (TuplePat pats boxity tys)
   = return (idDsWrapper, unLoc tuple_ConPat)
   where
     arity = length pats
     tuple_ConPat = mkPrefixConPat (tupleDataCon boxity arity) pats tys
 
-tidy1 _ (SumPat tys pat alt arity)
+tidy1 _ (SumPat pat alt arity tys)
   = return (idDsWrapper, unLoc sum_ConPat)
   where
     sum_ConPat = mkPrefixConPat (sumDataCon alt arity) [pat] tys
 
 -- LitPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (LitPat _ lit)
+tidy1 _ (LitPat lit)
   = return (idDsWrapper, tidyLitPat lit)
 
 -- NPats: we *might* be able to replace these w/ a simpler form
-tidy1 _ (NPat ty (L _ lit) mb_neg eq )
+tidy1 _ (NPat (L _ lit) mb_neg eq ty)
   = return (idDsWrapper, tidyNPat tidyLitPat lit mb_neg eq ty)
 
 -- Everything else goes through unchanged...
@@ -1736,13 +1736,13 @@ tidy1 _ non_interesting_pat
 tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
 
 -- Discard par/sig under a bang
-tidy_bang_pat v _ (ParPat _ (L l p))      = tidy_bang_pat v l p
-tidy_bang_pat v _ (SigPat _ (L l p)) = tidy_bang_pat v l p
+tidy_bang_pat v _ (ParPat (L l p))      = tidy_bang_pat v l p
+tidy_bang_pat v _ (SigPatOut (L l p) _) = tidy_bang_pat v l p
 
 -- Push the bang-pattern inwards, in the hope that
 -- it may disappear next time
-tidy_bang_pat v l (AsPat x v' p)  = tidy1 v (AsPat x v' (L l (BangPat noExt p)))
-tidy_bang_pat v l (CoPat x w p t) = tidy1 v (CoPat x w (BangPat noExt (L l p)) t)
+tidy_bang_pat v l (AsPat v' p)  = tidy1 v (AsPat v' (L l (BangPat p)))
+tidy_bang_pat v l (CoPat w p t) = tidy1 v (CoPat w (BangPat (L l p)) t)
 
 -- Discard bang around strict pattern
 tidy_bang_pat v _ p@(LitPat {})    = tidy1 v p
@@ -1750,15 +1750,6 @@ tidy_bang_pat v _ p@(ListPat {})   = tidy1 v p
 tidy_bang_pat v _ p@(TuplePat {})  = tidy1 v p
 tidy_bang_pat v _ p@(SumPat {})    = tidy1 v p
 tidy_bang_pat v _ p@(PArrPat {})   = tidy1 v p
-
---TODO: Check
---We keep bang patterns, however we desugar them to wildcards
---if they are variables. Also properly hande located
-tidy_bang_pat v _ _p@(VarPat _ (L _ var))   =
-    return (wrapBind var v,
-            BangPat noExt (mkGeneralLocated "somewhere3245"
-                (WildPat (idType var))))
-
 
 -- Data/newtype constructors
 tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
@@ -1787,8 +1778,7 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 --
 -- NB: SigPatIn, ConPatIn should not happen
 
-
-tidy_bang_pat _ l p = return (idDsWrapper, BangPat noExt (L l p))
+tidy_bang_pat _ l p = return (idDsWrapper, BangPat (L l p))
 
 -------------------
 push_bang_into_newtype_arg :: SrcSpan
@@ -1799,17 +1789,15 @@ push_bang_into_newtype_arg :: SrcSpan
 -- We are transforming   !(N p)   into   (N !p)
 push_bang_into_newtype_arg l _ty (PrefixCon (arg:args))
   = ASSERT( null args)
-    PrefixCon [L l (BangPat noExt arg)]
+    PrefixCon [L l (BangPat arg)]
 push_bang_into_newtype_arg l _ty (RecCon rf)
   | HsRecFields { rec_flds = L lf fld : flds } <- rf
   , HsRecField { hsRecFieldArg = arg } <- fld
   = ASSERT( null flds)
-    RecCon (rf { rec_flds =
-        [L lf (fld { hsRecFieldArg = L l (BangPat noExt arg) })]
-        })
+    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat arg) })] })
 push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
   | HsRecFields { rec_flds = [] } <- rf
-  = PrefixCon [L l (BangPat noExt (noLoc (WildPat ty)))]
+  = PrefixCon [L l (BangPat (noLoc (WildPat ty)))]
 push_bang_into_newtype_arg _ _ cd
   = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
 

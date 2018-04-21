@@ -163,6 +163,7 @@ should not have an External name; Lint rejects non-top-level binders
 with External names (Trac #13043).
 -}
 
+--type GhcTc = Id
 type MatchId = Id   -- See Note [Match Ids]
 
 match :: HasCallStack => [MatchId]        -- Variables rep\'ing the exprs we\'re matching with
