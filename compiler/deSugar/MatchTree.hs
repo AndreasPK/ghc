@@ -961,6 +961,13 @@ fallBack m = --traceM m >>
 info :: String -> DsM ()
 info = traceM
 
+{-
+This is at the hear of algorithms recursion. We
+    * Select a column
+    * Generate a case expression
+    * Fill the branches by recursive calls to this function,
+      passing along constraints/info resulting from the case expression
+-}
 mkCase :: HasCallStack => Heuristic -> DynFlags -> Type -> CPM -> DecompositionKnowledge -> Int -> DsM MatchResult
 {-
 The failure story:
@@ -975,7 +982,6 @@ The default expression is:
 * Otherwise we just use the given fail expression
 
 We then use this default expression to generate the other alternatives.
-
 
 -}
 -- TODO: Extend for patSyn and all constructors
