@@ -80,7 +80,7 @@ import VarEnv
 import CoreSyn (AltCon(..))
 import Data.List (mapAccumL)
 import Data.Maybe (fromMaybe)
-import CoreTrieMap
+import CoreMap
 import NameEnv
 import Control.Monad( (>=>) )
 

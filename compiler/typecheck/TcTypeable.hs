@@ -37,7 +37,7 @@ import HsSyn
 import DynFlags
 import Bag
 import Var ( TyVarBndr(..) )
-import CoreTrieMap
+import CoreMap
 import Constants
 import Fingerprint(Fingerprint(..), fingerprintString, fingerprintFingerprints)
 import Outputable
