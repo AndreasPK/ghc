@@ -25,7 +25,7 @@ C F = 3
 
 -}
 module MatchTree
-    (match, printmr, tidy1)
+    (match, printmr, tidy1, cacheExpr)
 where
 
 #include "HsVersions.h"
@@ -91,8 +91,8 @@ import Data.Ratio
 import NameEnv
 import MatchCon (selectConMatchVars)
 import Var (EvVar)
-import MkId (DataConBoxer(..))
-import UniqSupply (initUs_)
+import MkId (DataConBoxer(..), voidPrimId)
+import UniqSupply (initUs_, MonadUnique(..))
 import HsTypes --(selectorFieldOcc)
 
 
@@ -112,6 +112,7 @@ import GHC.Generics
 import System.IO.Unsafe
 import HsDumpAst
 import RdrName
+import qualified TrieMap as TM
 
 type MatchId = Id   -- See Note [Match Ids]
 
@@ -286,7 +287,17 @@ match vars ty eqns = do
     result <- matchWith complexHeuristic ty matrix (Map.empty)
     --result <- matchWith leftToRight ty matrix (Map.empty)
 
-    return result
+    case result of
+
+        MatchResult CantFail match_fn -> do
+            traceM "NonFailResult"
+            filler <- Var <$> mkSysLocalOrCoVarM (fsLit "ds_share_") ty
+            resExpr <- match_fn filler :: DsM CoreExpr
+            traceM $ showSDocUnsafe $ showAstData NoBlankSrcSpan resExpr
+            --let f = cacheExpr :: CoreExpr -> CoreExpr
+            --fmap cantFailMatchResult $ cacheExpr $ resExpr
+            return result
+        _ -> return result
 
 
 toPatternMatrix :: HasCallStack => [MatchId] -> [EquationInfo] -> DsM EqMatrix
@@ -914,18 +925,19 @@ instance Ord PGrp where
 getGrp :: HasCallStack => DynFlags -> Entry e -> PGrp
 getGrp df (p, _e ) = patGroup df p
 
+-- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
 patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
---patGroup _df (VarPat {}) = VarGrp
--- Since evaluation is taken care of in the constraint we can ignore them for grouping patterns.
+patGroup _df (VarPat {}) = VarGrp
 patGroup df  (BangPat (L _loc p)) = patGroup df p
 patGroup _df (ConPatOut { pat_con = L _ con})
-    | PatSynCon psyn <- con                = error "Not implemented" -- gSyn psyn tys
+    | PatSynCon psyn <- con
+    = pprPanic "Not implemented" (ppr con <+> showAstData NoBlankSrcSpan con)
     | RealDataCon dcon <- con              =
         ConGrp dcon
         --Literals
 patGroup df (LitPat lit) = LitGrp $ hsLitKey df lit
-patGroup _ _ = error "Not implemented"
+patGroup _ p = pprPanic "Not implemented" (ppr p <+> showAstData NoBlankSrcSpan p)
 
 -- Assign the variables introduced by a binding to the appropriate values
 -- producing a wrapper for the rhs
@@ -1620,19 +1632,6 @@ evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
     where
         cOcc = patOcc cInfo :: Occurrence
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
 tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
     --liftIO $ putStrLn "tidyEntry"
@@ -1801,3 +1800,75 @@ push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
 push_bang_into_newtype_arg _ _ cd
   = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
 
+
+
+--Commoning up subtrees
+type VarExpr = CoreExpr
+type AltCache = (TM.CoreMap VarExpr,CoreExpr -> CoreExpr)
+
+cacheExpr :: MonadUnique m => CoreExpr -> m CoreExpr
+cacheExpr expr = do
+    (e,c) <- cacheAlt expr (TM.emptyTM, id)
+    return (snd c $ e)
+
+cacheAlt :: forall m. MonadUnique m => CoreExpr -> AltCache -> m (CoreExpr, AltCache)
+cacheAlt e@(Case scrut b ty alts) cache@(idMap,binders)
+    | null alts = return (e,cache)
+    | otherwise = do
+    --Cache and update child alts
+    (alts,cache) <- first reverse <$> foldM goAlt ([],cache) alts
+
+
+    --replaceAlts = lookupTM
+
+    --let exprs = map goAlt alts' :: [CoreExpr]
+    --ids <- replicateM (length alts') (newSysLocalDs ty)
+    --let newBinders = zipWith (\id val -> bindNonRec id val) ids exprs
+    --let mapping = zip exprs ids
+    --let cache'' = (
+    --        foldl (\tm (e,id) -> TM.insertTM e id tm) idMap mapping,
+    --        foldr (.) binders newBinders)
+    return (e,cache)
+        where   altKey = (\a -> Case scrut b ty [a])
+                goAlt :: ( [CoreAlt], AltCache) -> CoreAlt -> m ( [CoreAlt], AltCache)
+                goAlt (xs,cache) (c,b,e) = do
+                    --update child branches
+                    (e', cache') <- cacheAlt e cache
+                    --check if there is already a equivalent alt, if so use that
+                    let key = (altKey (c,b,e'))
+                    case TM.lookupTM key (fst cache') of
+                        Nothing -> do
+                            v <- mkSysLocalOrCoVarM (fsLit "ds_share_") ty :: m Id
+                            let lfn = bindNonRec v e' :: CoreExpr -> CoreExpr
+                            let cache'' = bimap (TM.insertTM key (Var v)) ( . lfn) cache'
+                            return ((c,b,Var v):xs, cache'')
+                        Just v -> do
+                            return ( ((c,b,v):xs), cache')
+
+cacheAlt e@(Var {}) cache = return (e,cache)
+cacheAlt e@(Lit {}) cache = return (e,cache)
+cacheAlt e@(App f arg) cache = do
+    (f',cache') <- cacheAlt f cache
+    (arg',cache'') <- cacheAlt arg cache'
+    return (App f' arg', cache'')
+cacheAlt e@(Lam {}) cache = return (e,cache) --Useful?
+cacheAlt e@(Let bnd body) cache
+    | Rec {} <- bnd = return (e,cache) -- TODO
+    | NonRec b e <- bnd = do
+        (e',cache') <- cacheAlt e cache
+        (body',cache'') <- cacheAlt body cache
+        return (Let (NonRec b e') body',cache'')
+cacheAlt (Cast e co) cache = do
+    (e', cache') <- cacheAlt e cache
+    return (Cast e' co,cache')
+cacheAlt (Tick t e) cache = do
+    (e', cache') <- cacheAlt e cache
+    return (Tick t e', cache')
+cacheAlt e@(Type {}) cache = return (e,cache)
+cacheAlt e@(Coercion {}) cache = return (e,cache)
+
+
+shareAlts :: CoreExpr -> DsM CoreExpr
+shareAlts (Case scrut b ty alts) =
+    undefined
+shareAlts other = return other

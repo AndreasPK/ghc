@@ -30,7 +30,7 @@ module CoreMap(
    TrieMap(..), insertTM, deleteTM,
    lkDFreeVar, xtDFreeVar,
    lkDNamed, xtDNamed,
-   (>.>), (|>), (|>>),
+   (>.>), (|>), (|>>), deBruijnize
  ) where
 
 import GhcPrelude

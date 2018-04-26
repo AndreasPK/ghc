@@ -32,6 +32,8 @@ import SrcLoc
 import Maybes
 import Data.List
 
+import {-# SOURCE #-}  MatchTree ( cacheExpr )
+
 {-
 ************************************************************************
 *                                                                      *
@@ -54,7 +56,6 @@ tidyBind env (Rec prs)
     in
     map (tidyExpr env') (map snd prs)   =: \ rhss' ->
     (env', Rec (zip bndrs' rhss'))
-
 
 ------------  Expressions  --------------
 tidyExpr :: TidyEnv -> CoreExpr -> CoreExpr
