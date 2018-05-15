@@ -867,6 +867,8 @@ data DynFlags = DynFlags {
   floatLamArgs          :: Maybe Int,   -- ^ Arg count for lambda floating
                                         --   See CoreMonad.FloatOutSwitches
 
+  cmmProcAlignment      :: Maybe Int,   -- ^ Align Cmm functions at this boundry or use default.
+
   historySize           :: Int,         -- ^ Simplification history size
 
   importPaths           :: [FilePath],
@@ -1746,6 +1748,7 @@ defaultDynFlags mySettings myLlvmTargets =
         specConstrRecursive     = 3,
         liberateCaseThreshold   = Just 2000,
         floatLamArgs            = Just 0, -- Default: float only if no fvs
+        cmmProcAlignment        = Nothing,
 
         historySize             = 20,
         strictnessBefore        = [],
@@ -3428,6 +3431,10 @@ dynamic_flags_deps = [
       (intSuffix (\n d -> d { floatLamArgs = Just n }))
   , make_ord_flag defFlag "ffloat-all-lams"
       (noArg (\d -> d { floatLamArgs = Nothing }))
+  , make_ord_flag defFlag "fproc-alignment"
+      (intSuffix (\n d -> d { cmmProcAlignment = Just n }))
+
+
   , make_ord_flag defFlag "fhistory-size"
       (intSuffix (\n d -> d { historySize = n }))
   , make_ord_flag defFlag "funfolding-creation-threshold"
