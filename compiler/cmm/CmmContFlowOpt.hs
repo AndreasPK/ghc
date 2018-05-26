@@ -285,6 +285,9 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
 
           -- See Note [Invert Cmm conditionals]
           swapcond_last
+            | CmmCondBranch _cond t f _l <- shortcut_last
+            , t == f
+            = CmmBranch t
             | CmmCondBranch cond t f l <- shortcut_last
             , hasOnePredecessor t -- inverting will make t a fallthrough
             , likelyTrue l || (numPreds f > 1)
