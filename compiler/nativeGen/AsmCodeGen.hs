@@ -710,9 +710,9 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
         when (gopt Opt_DoAsmLinting dflags || debugIsOn ) $ do
                 let blocks = concatMap getBlks shorted
                 let labels = fmap blockId blocks :: [BlockId]
-                unless (sanityCheckCfg postShortCFG labels)
-                       (panic "cfg not in lockstep")
-
+                return $! seq (sanityCheckCfg postShortCFG labels $
+                                text "cfg not in lockstep") ()
+                     
         ---- sequence blocks
         let sequenced   =
                 {-# SCC "sequenceBlocks" #-}

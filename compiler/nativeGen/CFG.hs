@@ -21,8 +21,6 @@ import Hoopl.Block
 import Util
 
 import Outputable
-import Maybes
-
 -- DEBUGGING ONLY
 --import Debug
 --import OrdList
@@ -30,7 +28,6 @@ import Maybes
 import PprCmm ()
 
 import Data.List
-import Data.Foldable
 import Hoopl.Graph
 
 import qualified Data.Map.Strict as M
@@ -45,14 +42,16 @@ getCfgNodes :: CFG -> [BlockId]
 getCfgNodes m = M.keys m ++ concat (M.elems . M.map M.keys $ m)
 
 -- | Check if the nodes in the cfg and the list of labels match up.
-sanityCheckCfg :: CFG -> [BlockId] -> Bool
-sanityCheckCfg m blocks
+sanityCheckCfg :: CFG -> [BlockId] -> SDoc -> Bool
+sanityCheckCfg m blocks msg
     | setNull diff = True
     | otherwise =
-        pprPanic "Block list and cfg nodes don't match" $
+        pprPanic "Block list and cfg nodes don't match" (
             text "difference:" <+> ppr diff $$
             text "blocks:" <+> ppr blocks $$
-            text "cfg:" <+> ppr m
+            text "cfg:" <+> ppr m $$
+            msg )
+            False
     where
       cfgNodes = setFromList $ getCfgNodes m :: LabelSet
       blockSet = setFromList blocks :: LabelSet
@@ -78,8 +77,10 @@ it's a single jmp ins in a block.
 
 We preserve the weight from A -> B so that's fine too.
 
-If we shortcut to a immediate (Nothing) we remove the edge
-A -> B as well.
+If we shortcut to a immediate (Nothing):
+    A -> B => A -> IMM 
+we remove the edge A -> B. We can also delete the node B
+as all jumps to it will be replaced by jumps to the immediate.
 
 See Note [What is shortcutting] in the control flow optimization
 for a explanation on shortcutting.
@@ -90,7 +91,8 @@ shortcutWeightMap m cuts =
     where     -- B -> C
       applyMapping :: CFG -> (BlockId,Maybe BlockId) -> CFG
       applyMapping m (from, Nothing) =
-        fmap (M.delete from) m
+        M.delete from . 
+        fmap (M.delete from) $ m
       applyMapping m (from, Just to) =
         let updatedMap
               = fmap (M.mapKeys (updateKey (from,to))) $
@@ -255,4 +257,4 @@ getCFG (CmmProc info _lab _live graph) =
         branch = lastNode block :: CmmNode O C
         bid = entryLabel block
 
-    blocks = toBlockList graph :: [CmmBlock]
+    blocks = revPostorder graph :: [CmmBlock]
