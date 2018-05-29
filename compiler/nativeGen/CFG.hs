@@ -78,7 +78,7 @@ it's a single jmp ins in a block.
 We preserve the weight from A -> B so that's fine too.
 
 If we shortcut to a immediate (Nothing):
-    A -> B => A -> IMM 
+    A -> B => A -> IMM
 we remove the edge A -> B. We can also delete the node B
 as all jumps to it will be replaced by jumps to the immediate.
 
@@ -91,7 +91,7 @@ shortcutWeightMap m cuts =
     where     -- B -> C
       applyMapping :: CFG -> (BlockId,Maybe BlockId) -> CFG
       applyMapping m (from, Nothing) =
-        M.delete from . 
+        M.delete from .
         fmap (M.delete from) $ m
       applyMapping m (from, Just to) =
         let updatedMap

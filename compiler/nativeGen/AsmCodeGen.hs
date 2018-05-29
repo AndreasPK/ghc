@@ -712,7 +712,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 let labels = fmap blockId blocks :: [BlockId]
                 return $! seq (sanityCheckCfg postShortCFG labels $
                                 text "cfg not in lockstep") ()
-                     
+
         ---- sequence blocks
         let sequenced   =
                 {-# SCC "sequenceBlocks" #-}
