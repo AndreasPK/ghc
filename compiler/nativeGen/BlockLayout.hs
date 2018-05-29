@@ -13,8 +13,6 @@ import CFG
 
 import BlockId
 import Cmm
-import CmmUtils
-import CmmSwitch
 import Hoopl.Collections
 import Hoopl.Label
 import Hoopl.Block
@@ -38,7 +36,6 @@ import Data.Foldable
 import Hoopl.Graph
 
 import qualified Data.Sequence as Seq
-import qualified Data.Map.Strict as M
 
 -- | Size of a block before it no longer is inlined in a
 --   triangle shaped control flow. See Note [Chain based CFG serialization]
