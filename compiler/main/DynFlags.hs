@@ -492,6 +492,7 @@ data GeneralFlag
    | Opt_SolveConstantDicts
    | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
+   | Opt_AssumeOrderedFloat   -- ^ Don't check for valid ordering on float compare.
 
    -- PreInlining is on by default. The option is there just to see how
    -- bad things get if you turn it off!
@@ -668,6 +669,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_CmmSink
    , Opt_CmmElimCommonBlocks
    , Opt_AsmShortcutting
+   , Opt_AssumeOrderedFloat
    , Opt_OmitYields
    , Opt_FunToThunk
    , Opt_DictsStrict
@@ -3856,6 +3858,7 @@ fFlagsDeps = [
 -- See Note [Supporting CLI completion]
 -- Please keep the list of flags below sorted alphabetically
   flagSpec "asm-shortcutting"                 Opt_AsmShortcutting,
+  flagSpec "assume-ordered-floats"            Opt_AssumeOrderedFloat,
   flagGhciSpec "break-on-error"               Opt_BreakOnError,
   flagGhciSpec "break-on-exception"           Opt_BreakOnException,
   flagSpec "building-cabal-package"           Opt_BuildingCabalPackage,

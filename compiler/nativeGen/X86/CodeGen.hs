@@ -1667,6 +1667,7 @@ genCondJump' is32Bit true (CmmMachOp mop [e1,e2])
 genCondJump' _ id bool = do
   CondCode is_float cond cond_code <- getCondCode bool
   use_sse2 <- sse2Enabled
+  dflags <- getDynFlags
   if not is_float || not use_sse2
     then
         return (cond_code `snocOL` JXX cond id)
@@ -1674,11 +1675,15 @@ genCondJump' _ id bool = do
         lbl <- getBlockIdNat
 
         -- see comment with condFltReg
-        let code = case cond of
-                        NE  -> or_unordered
-                        GU  -> plain_test
-                        GEU -> plain_test
-                        _   -> and_ordered
+        let code
+              | gopt Opt_AssumeOrderedFloat dflags
+              = plain_test
+              | otherwise
+              = case cond of
+                  NE  -> or_unordered
+                  GU  -> plain_test
+                  GEU -> plain_test
+                  _   -> and_ordered
 
             plain_test = unitOL (
                   JXX cond id
