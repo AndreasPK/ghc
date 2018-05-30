@@ -555,7 +555,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 Opt_D_dump_opt_cmm "Optimised Cmm"
                 (pprCmmGroup [opt_cmm])
 
-        let cmmCfg =
+        let cmmCfg = {-# SCC "getCFG" #-}
                      getCFG opt_cmm
 
         -- generate native code from cmm

@@ -179,7 +179,7 @@ combineChains weights _ chains
         applyEdges [] chains = chains
         applyEdges ((from,to,w):edges) chains
             | w <= minChainLinkWeight
-            = applyEdges edges chains
+            = chains
             | [c1,c2] <- candidates
             , atEnd from c1 && inFront to c2
             = applyEdges edges $ combine c1 c2 : rest
@@ -222,7 +222,7 @@ combineNeighbourhood weights chains
         applyEdges [] chains = chains
         applyEdges ((from,to,w):edges) chains
             | w <= minNeighbourPriority
-            = applyEdges edges chains
+            = chains
 
             | [c1,c2] <- candidates
             = applyEdges edges $ (combine c1 c2) : rest
@@ -240,9 +240,11 @@ combineNeighbourhood weights chains
                 partition (\c -> atEnd from c || atBeginning to c) chains
 
             atBeginning bid c =
-                elem bid $ map blockId . takeL neighbourOverlapp $ c
+              chainMember bid c &&
+              (elem bid . map blockId . takeL neighbourOverlapp $ c)
             atEnd bid c =
-                elem bid $ map blockId . takeR neighbourOverlapp $ c
+              chainMember bid c &&
+              (elem bid . map blockId . takeR neighbourOverlapp $ c)
 
 {-
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
