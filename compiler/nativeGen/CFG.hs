@@ -4,8 +4,9 @@
 module CFG
     ( CFG, CfgEdge, addWeightEdge, delEdge, edgeList
     , shortcutWeightMap, getBlockTargets, addImmediateSuccessor
-    , getEdgeWeight, getSortedEdges, reverseEdges
-    , getCFG, addNodeBetween, pprEdgeWeights, getCfgNodes, sanityCheckCfg )
+    , getEdgeWeight, getOutgoingEdges, reverseEdges
+    , getCFG, addNodeBetween, pprEdgeWeights, getCfgNodes, sanityCheckCfg
+    , filterEdges )
 where
 
 import GhcPrelude
@@ -57,7 +58,12 @@ sanityCheckCfg m blocks msg
       blockSet = setFromList blocks :: LabelSet
       diff = setDifference cfgNodes blockSet :: LabelSet
 
-
+filterEdges :: (CfgEdge -> Bool) -> CFG -> CFG
+filterEdges f cfg =
+    M.mapWithKey filterSources cfg
+    where
+      filterSources from m =
+        M.filterWithKey (\to w -> f (from,to,Just w)) m
 
 
 --If we shortcut to a non-block we simply remove the edge.
@@ -132,12 +138,12 @@ delEdge from to m =
         remDest (Just wm) = Just $ M.delete to wm
 
 -- | Destinations from bid ordered by weight
-getSortedEdges :: CFG -> BlockId -> [(Label,Int)]
-getSortedEdges m bid =
+getOutgoingEdges :: CFG -> BlockId -> [(Label,Int)]
+getOutgoingEdges m bid =
     let destMap = M.findWithDefault M.empty bid m
         edges = M.toList destMap
         sortedEdges = sortWith (negate . snd) edges
-    in  --pprTrace "getSortedEdges" (ppr bid <+> text "map:" <+> ppr m)
+    in  --pprTrace "getOutgoingEdges" (ppr bid <+> text "map:" <+> ppr m)
         sortedEdges
 
 getEdgeWeight :: BlockId -> BlockId -> CFG -> Maybe Int
