@@ -37,215 +37,6 @@ import Hoopl.Graph
 
 import qualified Data.Sequence as Seq
 
--- | Size of a block before it no longer is inlined in a
---   triangle shaped control flow. See Note [Chain based CFG serialization]
-maxTriangleSize :: Int
-maxTriangleSize = 1
-
--- | Look at X number of blocks in two chains to determine
---   if they are "neighbours".
-neighbourOverlapp :: Int
-neighbourOverlapp = 2
-
--- | Only edges heavier than this are considered for neighbourhood checks.
-minNeighbourPriority :: Int
-minNeighbourPriority = 0
-
--- | Only edges heavier than this are considered
---   for combining into a single chain.
-minChainLinkWeight :: Int
-minChainLinkWeight = 0
-
-
-
-
-
--- | A non empty ordered sequence of basic blocks.
---   It is suitable for serialization in this order.
-data BlockChain i
-    = BlockChain
-    { chainMembers :: LabelSet
-    , chainBlocks :: (Seq.Seq (GenBasicBlock i))
-    }
-
-instance Eq (BlockChain i) where
-    (BlockChain _ blks1) == (BlockChain _ blks2)
-        = fmap blockId blks1 == fmap blockId blks2
-
---instance Ord (BlockChain i) where
---    (BlockChain lbls1 _) `compare` (BlockChain lbls2 _)
---        = lbls1 `compare` lbls2
-
-instance Outputable (BlockChain i) where
-    ppr (BlockChain _ blks) =
-        parens (text "Chain:" <+> ppr (map blockId . toList $ blks) )
-
-inFront :: BlockId -> BlockChain i -> Bool
-inFront bid chain
-  | BasicBlock lbl _ <- (Seq.index (chainBlocks chain) 0)
-  = lbl == bid
-  | otherwise = panic "Empty Chain"
-
-atEnd :: BlockId -> BlockChain i -> Bool
-atEnd bid chain
-  | _ Seq.:> (BasicBlock lbl _) <- Seq.viewr (chainBlocks chain)
-  = lbl == bid
-  | otherwise = panic "empty chain"
-
---lastId :: BlockChain i -> BlockId
---lastId (BlockChain _ blks)
---  | _ Seq.:> (BasicBlock lbl _) <- Seq.viewr blks
---  = lbl
-
---firstId :: BlockChain i -> BlockId
---firstId (BlockChain _ blks)
---  | (BasicBlock lbl _) Seq.:< _ <- Seq.viewl blks
---  = lbl
-
-chainMember :: BlockId -> BlockChain i -> Bool
-chainMember bid chain
-  = setMember bid . chainMembers $ chain
-
-chainSingleton :: GenBasicBlock i -> BlockChain i
-chainSingleton b@(BasicBlock lbl _)
-    = BlockChain (setSingleton lbl) (Seq.singleton b)
-
-chainCons :: forall i. GenBasicBlock i -> BlockChain i -> BlockChain i
-chainCons blk@(BasicBlock lbl _) (BlockChain lbls blks)
-  = BlockChain (setInsert lbl lbls) (blk Seq.<| blks)
-
-chainSnoc :: forall i. BlockChain i -> GenBasicBlock i -> BlockChain i
-chainSnoc (BlockChain lbls blks) blk@(BasicBlock lbl _)
-  = BlockChain (setInsert lbl lbls) (blks Seq.|> blk)
-
-chainConcat :: forall i. BlockChain i -> BlockChain i -> BlockChain i
-chainConcat (BlockChain lbls1 blks1) (BlockChain lbls2 blks2)
-  = BlockChain (setUnion lbls1 lbls2) (blks1 Seq.>< blks2)
-
-chainToBlocks :: BlockChain i -> [GenBasicBlock i]
-chainToBlocks (BlockChain _ blks) = toList blks
-
-chainFromBlocks :: [GenBasicBlock i] -> BlockChain i
-chainFromBlocks blocks
-    = BlockChain (setFromList . map blockId $ blocks) (Seq.fromList blocks)
-
--- | Given the Chain A -> B -> C -> D and we break at C
---   we get the two Chains (A -> B, C -> D) as result.
-breakChainAt :: forall i. BlockId -> BlockChain i
-             -> (BlockChain i,BlockChain i)
-breakChainAt bid (BlockChain lbls blks)
-    | not (setMember bid lbls)
-    = panic "Block not in chain"
-    | otherwise
-    = let (lblks, rblks) = Seq.breakl (\(BasicBlock lbl _) -> lbl == bid) blks
-          --lblSet :: [GenBasicBlock i] -> BlockChain i
-          lblSet blks =
-            setFromList
-                (map (\(BasicBlock lbl _) -> lbl) $ toList blks)
-      in
-      (BlockChain (lblSet lblks) lblks, BlockChain (lblSet rblks) rblks)
-
--- | Get the block following `bid` in the chain.
---chainSucc :: forall i. BlockId -> BlockChain i -> Maybe BlockId
---chainSucc bid (BlockChain _ blks)
---    = snd <$> (find ((==bid) . fst ) . zip blkList $ tail blkList)
---    where
---        blkList = map blockId . toList $ blks
-
--- | Get the block before `bid` in the chain.
-chainPred :: forall i. BlockId -> BlockChain i -> Maybe BlockId
-chainPred bid (BlockChain _ blks)
-    = fst <$> (find ((==bid) . snd ) . zip blkList $ tail blkList)
-    where
-        blkList = map blockId . toList $ blks
-
-takeR :: forall i. Int -> BlockChain i -> [GenBasicBlock i]
-takeR n (BlockChain _ blks) =
-    take n . toList . Seq.reverse $ blks
-
-takeL :: forall i. Int -> BlockChain i -> [GenBasicBlock i]
-takeL n (BlockChain _ blks) =
-    take n . toList $ blks
-
--- | For a given list of chains try to combine chains with strong
---   edges between them into a single chain.
-combineChains :: forall i. CFG -> CFG
-              -> [BlockChain i] -> [BlockChain i]
-combineChains weights _ chains
-    = applyEdges prioEdges chains
-    where
-        applyEdges :: [(BlockId,BlockId,Int)] -> [BlockChain i]
-                   -> [BlockChain i]
-        applyEdges [] chains = chains
-        applyEdges ((from,to,w):edges) chains
-            | w <= minChainLinkWeight
-            = chains
-            | [c1,c2] <- candidates
-            , atEnd from c1 && inFront to c2
-            = applyEdges edges $ combine c1 c2 : rest
-            | otherwise
-            = applyEdges edges chains
-          where
-            combine c1 c2
-              | atEnd from c1
-              = chainConcat c1 c2
-              | otherwise
-              = chainConcat c2 c1
-            (candidates,rest) =
-                partition (\c -> chainMember from c || chainMember to c) chains
-        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
-
--- See also Note [Chain based CFG serialization]
--- We have the chains ABCD and EF.
--- There is a indirect link C->E between them.
---
--- So we want to place them next to each other even if we can't merge them.
---
---   A -> B -> C -> D
---             v
---             - -> E -> F ...
---
--- Simple heuristic:
---   * Check if the ends of a chain contain a edge if so merge them.
---   * Process edges in descending priority.
-
--- | For a given list of chains try to combine chains with strong
---   edges between them into a single chain.
-combineNeighbourhood :: forall i. CFG -> [BlockChain i] -> [BlockChain i]
-combineNeighbourhood weights chains
-    = applyEdges prioEdges chains
-    where
-        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
-
-        applyEdges :: [(BlockId,BlockId,Int)] -> [BlockChain i]
-                   -> [BlockChain i]
-        applyEdges [] chains = chains
-        applyEdges ((from,to,w):edges) chains
-            | w <= minNeighbourPriority
-            = chains
-
-            | [c1,c2] <- candidates
-            = applyEdges edges $ (combine c1 c2) : rest
-
-            | otherwise
-            = applyEdges edges chains
-          where
-            combine c1 c2
-              | chainMember from c1
-              = chainConcat c1 c2
-              | otherwise
-              = chainConcat c2 c1
-              where
-            (candidates,rest) =
-                partition (\c -> atEnd from c || atBeginning to c) chains
-
-            atBeginning bid c =
-              chainMember bid c &&
-              (elem bid . map blockId . takeL neighbourOverlapp $ c)
-            atEnd bid c =
-              chainMember bid c &&
-              (elem bid . map blockId . takeR neighbourOverlapp $ c)
-
 {-
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   ~~~ Note [Chain based CFG serialization]
@@ -320,6 +111,10 @@ combineNeighbourhood weights chains
   *)  Otherwise we create a singleton chain from the block we are looking at.
       Eg if we have [A->B] alread and look at D we create the chain [D].
 
+  *)  TODO: Improve loops (Maybe add explicit loop detection?)
+
+
+
   -----------------------------------------------------------------------------
       We then try to combine chains.
   -----------------------------------------------------------------------------
@@ -354,25 +149,240 @@ combineNeighbourhood weights chains
   While E does not follow X it's still beneficial to place them near each other.
   This can be advantageous if eg C,X,E will end up in the same cache line.
 
+  TODO: If we remove edges as we use them (eg if we build up A->B remove A->B
+        from the list) we could save some more work in later phases.
+
 -}
+
+
+-- | Size of a block before it no longer is inlined in a
+--   triangle shaped control flow. See Note [Chain based CFG serialization]
+maxTriangleSize :: Int
+maxTriangleSize = 1
+
+-- | Look at X number of blocks in two chains to determine
+--   if they are "neighbours".
+neighbourOverlapp :: Int
+neighbourOverlapp = 2
+
+-- | Only edges heavier than this are considered for neighbourhood checks.
+minNeighbourPriority :: Int
+minNeighbourPriority = 0
+
+-- | Only edges heavier than this are considered
+--   for combining into a single chain.
+minChainLinkWeight :: Int
+minChainLinkWeight = 0
+
+
+-- | A non empty ordered sequence of basic blocks.
+--   It is suitable for serialization in this order.
+data BlockChain i
+    = BlockChain
+    { chainMembers :: LabelSet
+    , chainBlocks :: (Seq.Seq (GenBasicBlock i))
+    }
+
+instance Eq (BlockChain i) where
+    (BlockChain _ blks1) == (BlockChain _ blks2)
+        = fmap blockId blks1 == fmap blockId blks2
+
+--instance Ord (BlockChain i) where
+--    (BlockChain lbls1 _) `compare` (BlockChain lbls2 _)
+--        = lbls1 `compare` lbls2
+
+instance Outputable (BlockChain i) where
+    ppr (BlockChain _ blks) =
+        parens (text "Chain:" <+> ppr (map blockId . toList $ blks) )
+
+inFront :: BlockId -> BlockChain i -> Bool
+inFront bid chain
+  | BasicBlock lbl _ <- (Seq.index (chainBlocks chain) 0)
+  = lbl == bid
+  | otherwise = panic "Empty Chain"
+
+atEnd :: BlockId -> BlockChain i -> Bool
+atEnd bid chain
+  | _ Seq.:> (BasicBlock lbl _) <- Seq.viewr (chainBlocks chain)
+  = lbl == bid
+  | otherwise = panic "empty chain"
+
+--lastId :: BlockChain i -> BlockId
+--lastId (BlockChain _ blks)
+--  | _ Seq.:> (BasicBlock lbl _) <- Seq.viewr blks
+--  = lbl
+
+--firstId :: BlockChain i -> BlockId
+--firstId (BlockChain _ blks)
+--  | (BasicBlock lbl _) Seq.:< _ <- Seq.viewl blks
+--  = lbl
+
+chainMember :: BlockId -> BlockChain i -> Bool
+chainMember bid chain
+  = setMember bid . chainMembers $ chain
+
+chainSingleton :: GenBasicBlock i -> BlockChain i
+chainSingleton b@(BasicBlock lbl _)
+    = BlockChain (setSingleton lbl) (Seq.singleton b)
+
+--chainCons :: forall i. GenBasicBlock i -> BlockChain i -> BlockChain i
+--chainCons blk@(BasicBlock lbl _) (BlockChain lbls blks)
+--  = BlockChain (setInsert lbl lbls) (blk Seq.<| blks)
+
+chainSnoc :: forall i. BlockChain i -> GenBasicBlock i -> BlockChain i
+chainSnoc (BlockChain lbls blks) blk@(BasicBlock lbl _)
+  = BlockChain (setInsert lbl lbls) (blks Seq.|> blk)
+
+chainConcat :: forall i. BlockChain i -> BlockChain i -> BlockChain i
+chainConcat (BlockChain lbls1 blks1) (BlockChain lbls2 blks2)
+  = BlockChain (setUnion lbls1 lbls2) (blks1 Seq.>< blks2)
+
+chainToBlocks :: BlockChain i -> [GenBasicBlock i]
+chainToBlocks (BlockChain _ blks) = toList blks
+
+chainFromBlocks :: [GenBasicBlock i] -> BlockChain i
+chainFromBlocks blocks
+    = BlockChain (setFromList . map blockId $ blocks) (Seq.fromList blocks)
+
+-- | Given the Chain A -> B -> C -> D and we break at C
+--   we get the two Chains (A -> B, C -> D) as result.
+breakChainAt :: forall i. BlockId -> BlockChain i
+             -> (BlockChain i,BlockChain i)
+breakChainAt bid (BlockChain lbls blks)
+    | not (setMember bid lbls)
+    = panic "Block not in chain"
+    | otherwise
+    = let (lblks, rblks) = Seq.breakl (\(BasicBlock lbl _) -> lbl == bid) blks
+          --lblSet :: [GenBasicBlock i] -> BlockChain i
+          lblSet blks =
+            setFromList
+                (map (\(BasicBlock lbl _) -> lbl) $ toList blks)
+      in
+      (BlockChain (lblSet lblks) lblks, BlockChain (lblSet rblks) rblks)
+
+-- | Get the block following `bid` in the chain.
+--chainSucc :: forall i. BlockId -> BlockChain i -> Maybe BlockId
+--chainSucc bid (BlockChain _ blks)
+--    = snd <$> (find ((==bid) . fst ) . zip blkList $ tail blkList)
+--    where
+--        blkList = map blockId . toList $ blks
+
+-- | Get the block before `bid` in the chain.
+--chainPred :: forall i. BlockId -> BlockChain i -> Maybe BlockId
+--chainPred bid (BlockChain _ blks)
+--    = fst <$> (find ((==bid) . snd ) . zip blkList $ tail blkList)
+--    where
+--       blkList = map blockId . toList $ blks
+
+takeR :: forall i. Int -> BlockChain i -> [GenBasicBlock i]
+takeR n (BlockChain _ blks) =
+    take n . toList . Seq.reverse $ blks
+
+takeL :: forall i. Int -> BlockChain i -> [GenBasicBlock i]
+takeL n (BlockChain _ blks) =
+    take n . toList $ blks
+
+-- | For a given list of chains try to combine chains with strong
+--   edges between them into a single chain.
+combineChains :: forall i. CFG -> [BlockChain i]
+              -> ([BlockChain i], CFG)
+combineChains weights chains
+    = applyEdges prioEdges chains weights
+    where
+        applyEdges :: [(BlockId,BlockId,Int)] -> [BlockChain i] -> CFG
+                   -> ([BlockChain i], CFG)
+        applyEdges [] chains cfg
+            = (chains, cfg)
+        applyEdges ((from,to,w):edges) chains cfg
+            | w <= minChainLinkWeight
+            = ( chains, cfg)
+            | [c1,c2] <- candidates
+            , atEnd from c1 && inFront to c2
+            = applyEdges edges (combine c1 c2 : rest)
+                         (delEdge from to cfg)
+            | otherwise
+            = applyEdges edges chains cfg
+
+          where
+            -- Combine the two chains in the right order.
+            combine c1 c2
+              | atEnd from c1
+              = chainConcat c1 c2
+              | otherwise
+              = chainConcat c2 c1
+            (candidates,rest) =
+                partition (\c -> chainMember from c || chainMember to c) chains
+        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
+
+-- See also Note [Chain based CFG serialization]
+-- We have the chains ABCD and EF.
+-- There is a indirect link C->E between them.
+--
+-- So we want to place them next to each other even if we can't merge them.
+--
+--   A -> B -> C -> D
+--             v
+--             - -> E -> F ...
+--
+-- Simple heuristic:
+--   * Check if the ends of a chain contain a edge if so merge them.
+--   * Process edges in descending priority.
+
+-- | For a given list of chains try to combine chains with strong
+--   edges between them into a single chain.
+combineNeighbourhood :: forall i. CFG -> [BlockChain i] -> [BlockChain i]
+combineNeighbourhood weights chains
+    = applyEdges prioEdges chains
+    where
+        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
+
+        applyEdges :: [(BlockId,BlockId,Int)] -> [BlockChain i]
+                   -> [BlockChain i]
+        applyEdges [] chains = chains
+        applyEdges ((from,to,w):edges) chains
+            | w <= minNeighbourPriority
+            = chains
+
+            | [c1,c2] <- candidates
+            = applyEdges edges $ (combine c1 c2) : rest
+
+            | otherwise
+            = applyEdges edges chains
+          where
+            combine c1 c2
+              | chainMember from c1
+              = chainConcat c1 c2
+              | otherwise
+              = chainConcat c2 c1
+              where
+            (candidates,rest) =
+                partition (\c -> atEnd from c || atBeginning to c) chains
+
+            atBeginning bid c =
+              chainMember bid c &&
+              (elem bid . map blockId . takeL neighbourOverlapp $ c)
+            atEnd bid c =
+              chainMember bid c &&
+              (elem bid . map blockId . takeR neighbourOverlapp $ c)
+
+-- See [Chain based CFG serialization]
 buildChains :: forall a i. (Instruction i, Outputable i) => LabelMap a
             -> CFG -> CFG -> LabelMap (GenBasicBlock i)
             -> LabelSet -> [BlockChain i] -> [GenBasicBlock i]
-            -> [BlockChain i]
-buildChains _    _           _           _        _      chains [] = chains
+            -> ( [BlockChain i]  -- Resulting chains.
+               , CFG)            -- CFG with linked chains removed.
+buildChains _    cfg           _           _        _      chains [] = (chains, cfg)
 buildChains info succWeights predWeights blockMap placed chains (block:todo)
   | setMember lbl placed
   = buildChains info succWeights predWeights blockMap placed chains todo
   | otherwise =
-        let (newBlocks,chains') = findChain
-        in  buildChains info succWeights predWeights blockMap
+        let (newBlocks, chains', cfg') = findChain
+        in  ( buildChains info cfg' predWeights blockMap
                 (foldl' (flip setInsert) placed newBlocks)
-                chains'
-                todo
+                chains' todo )
   where
-    findChain :: ([BlockId],[BlockChain i])
+    findChain :: ([BlockId],[BlockChain i], CFG)
     findChain
-      --
       | Just (b,c) <- isTriangle
       , all (not . alreadyPlaced) [b,c]
       , Just (BasicBlock _ ins) <- mapLookup b blockMap
@@ -382,38 +392,25 @@ buildChains info succWeights predWeights blockMap placed chains (block:todo)
         , ( chainFromBlocks .
             map (\b -> expectJust "block should exist" . mapLookup b $ blockMap) $
             [lbl,b,c]
-          ):chains )
+          ):chains
+        , delEdge lbl b . delEdge lbl c . delEdge b c $ succWeights )
 --{-
     -- B) place block at end of existing chain if
-    -- there is no better block left to append.
+    -- there is no better block remains to append.
       | (pred:_) <- preds
       , alreadyPlaced pred
       , ([predChain],chains') <- partition (atEnd pred) chains
       , (best:_) <- filter (not . alreadyPlaced) $ getSuccs pred
       , best == lbl
       , Just w <- getEdgeWeight pred lbl succWeights
-      , w > 0
+      , w > minChainLinkWeight
       = --pprTrace "B.2)" (ppr (pred,lbl)) $
         ( [lbl]
-        , (chainSnoc predChain block) : chains')
----}
---{-
-    -- C.1 current block replaces existing (worse) predecessor
-      | (succ:_) <- succs
-      , alreadyPlaced succ
-      , ([succChain],rest) <- partition (chainMember succ) chains
-      , Just pred <- chainPred succ succChain
-      , linkWeight <- getEdgeWeight pred succ succWeights
-      , newWeight <- getEdgeWeight lbl succ succWeights
-      , linkWeight < newWeight
-      , (lc, sc) <- breakChainAt succ succChain
-      = --pprTrace "C.1)" (
-        --    ppr (lbl,pred,succ) <+> ppr ((chainCons block sc) : lc : rest)) $
-        ( [lbl]
-        , (chainCons block sc) : lc : rest )
+        , (chainSnoc predChain block) : chains'
+        , delEdge pred lbl succWeights)
 ---}
       | otherwise
-      = ([lbl], (chainSingleton block):chains)
+      = ([lbl], (chainSingleton block):chains, succWeights)
         where
           alreadyPlaced blkId
             = (setMember blkId placed)
@@ -430,9 +427,9 @@ buildChains info succWeights predWeights blockMap placed chains (block:todo)
       | otherwise = Nothing
 
     BasicBlock lbl _ins = block
-    getSuccs = map fst . getSortedEdges succWeights
-    succs = map fst $ getSortedEdges succWeights lbl
-    preds = map fst $ getSortedEdges predWeights lbl
+    getSuccs = map fst . getOutgoingEdges succWeights
+    succs = map fst $ getOutgoingEdges succWeights lbl
+    preds = map fst $ getOutgoingEdges predWeights lbl
 
 -- We make the CFG a Hoopl Graph, so we can reuse revPostOrder.
 newtype BlockNode i e x = BN (GenBasicBlock i,[BlockId])
@@ -465,25 +462,26 @@ sequenceChain  info  weights blocks@((BasicBlock entry _):_) =
               map fromNode $
               revPostorderFrom (fmap toNode blockMap) entry
 
-        --For efficiency we also create the map to look up predecessors here
-        predWeights = reverseEdges weights
+        relevantCFG = filterEdges (\(_,_,Just w) -> w > 0) weights
 
-        chains
+        --For efficiency we also create the map to look up predecessors here
+        predWeights = reverseEdges relevantCFG
+        (chains, remEdges)
             = {-# SCC "buildChains" #-}
             --pprTraceIt "generatedChains" $
               buildChains
-                info weights predWeights blockMap
+                info relevantCFG predWeights blockMap
                 setEmpty [] orderedBlocks
 
-        combinedChains
+        (combinedChains, remCombEdges)
             = {-# SCC "combineChains" #-}
               --pprTraceIt "CombinedChains" $
-              combineChains weights predWeights chains
+              combineChains remEdges chains
 
         neighbourChains
             = {-# SCC "groupNeighbourChains" #-}
             --pprTraceIt "ResultChains" .
-              combineNeighbourhood weights combinedChains
+              combineNeighbourhood remCombEdges combinedChains
 
         ([entryChain],chains')
             = partition (chainMember entry) neighbourChains
