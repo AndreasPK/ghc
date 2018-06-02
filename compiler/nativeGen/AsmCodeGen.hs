@@ -570,6 +570,8 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 {-# SCC "cmmToCmm" #-}
                 cmmToCmm dflags this_mod fixed_cmm
 
+        seq res $ return ()
+
         dumpIfSet_dyn dflags
                 Opt_D_dump_opt_cmm "Optimised Cmm"
                 (pprCmmGroup [opt_cmm])

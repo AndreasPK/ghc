@@ -21,7 +21,7 @@ module CmmUtils(
         mkStgWordCLit,
 
         -- CmmExpr
-        mkIntExpr, zeroExpr,
+        mkIntExpr, zeroExpr, cmmRegExpr,
         mkLblExpr,
         cmmRegOff,  cmmOffset,  cmmLabelOff,  cmmOffsetLit,  cmmOffsetExpr,
         cmmRegOffB, cmmOffsetB, cmmLabelOffB, cmmOffsetLitB, cmmOffsetExprB,
@@ -54,7 +54,7 @@ module CmmUtils(
         mkLiveness,
 
         -- * Operations that probably don't belong here
-        modifyGraph,
+        modifyGraph, newCmmReg,
 
         ofBlockMap, toBlockMap,
         ofBlockList, toBlockList, bodyToBlockList,
@@ -77,6 +77,7 @@ import CLabel
 import Outputable
 import DynFlags
 import CodeGen.Platform
+import UniqSupply
 
 import Data.Word
 import Data.Bits
@@ -303,6 +304,9 @@ cmmLabelOffB = cmmLabelOff
 
 cmmOffsetLitB :: CmmLit -> ByteOff -> CmmLit
 cmmOffsetLitB = cmmOffsetLit
+
+cmmRegExpr :: CmmReg -> CmmExpr
+cmmRegExpr = CmmReg
 
 -----------------------
 -- The "W" variants take word offsets
@@ -581,3 +585,7 @@ hpLimExpr = CmmReg hpLimReg
 currentTSOExpr = CmmReg currentTSOReg
 currentNurseryExpr = CmmReg currentNurseryReg
 cccsExpr = CmmReg cccsReg
+
+newCmmReg :: MonadUnique m => CmmType -> m CmmReg
+newCmmReg rep = do { uniq <- getUniqueM
+                 ; return (CmmLocal $ LocalReg uniq rep) }

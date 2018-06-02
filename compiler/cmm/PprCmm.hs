@@ -58,6 +58,9 @@ import BasicTypes
 import Hoopl.Block
 import Hoopl.Graph
 
+import Data.Maybe
+import Data.Bitraversable (bimapM)
+
 -------------------------------------------------
 -- Outputable instances
 
@@ -208,6 +211,22 @@ pprNode node = pp_node <+> pp_debug
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
 
+      -- reg = cond ? true : false
+      CmmCondAssign cond assignments ->
+          vcat [ text "if" <+> parens(ppr cond)
+               , braces ( nest 4 $ vcat trueAssigns )
+               , text "else"
+               , braces ( nest 4 $ vcat falseAssigns )
+                ]
+            where
+              pprAssign dest src = ppr dest <+> equals <+> ppr src <> semi
+              trueAssigns = map (uncurry pprAssign) $
+                                mapMaybe (bimapM return getTrueInfo) assignments
+              falseAssigns = map (uncurry pprAssign) $
+                                mapMaybe (bimapM return getFalseInfo) assignments
+
+
+
       -- rep[lv] = expr;
       CmmStore lv expr -> rep <> brackets(ppr lv) <+> equals <+> ppr expr <> semi
           where
@@ -299,6 +318,7 @@ pprNode node = pp_node <+> pp_debug
              CmmTick {}              -> empty
              CmmUnwind {}            -> text "  // CmmUnwind"
              CmmAssign {}            -> text "  // CmmAssign"
+             CmmCondAssign {}            -> text "  // CmmCondAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"
              CmmBranch {}            -> text "  // CmmBranch"

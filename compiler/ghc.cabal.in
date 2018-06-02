@@ -227,6 +227,7 @@ Library
         CmmCommonBlockElim
         CmmImplementSwitchPlans
         CmmContFlowOpt
+        CmmCmov
         CmmExpr
         CmmInfo
         CmmLex

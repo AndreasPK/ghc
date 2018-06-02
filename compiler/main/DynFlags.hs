@@ -333,6 +333,7 @@ data DumpFlag
    -- enabled if you run -ddump-cmm-verbose
    -- Each flag corresponds to exact stage of Cmm pipeline.
    | Opt_D_dump_cmm_cfg
+   | Opt_D_dump_cmm_cmov
    | Opt_D_dump_cmm_cbe
    | Opt_D_dump_cmm_switch
    | Opt_D_dump_cmm_proc
@@ -479,6 +480,7 @@ data GeneralFlag
    | Opt_IrrefutableTuples
    | Opt_CmmSink
    | Opt_CmmElimCommonBlocks
+   | Opt_CmmCmov
    | Opt_AsmShortcutting
    | Opt_OmitYields
    | Opt_FunToThunk               -- allow WwLib.mkWorkerArgs to remove all value lambdas
@@ -683,6 +685,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_IrrefutableTuples
    , Opt_CmmSink
    , Opt_CmmElimCommonBlocks
+   , Opt_CmmCmov
    , Opt_AsmShortcutting
    , Opt_OmitYields
    , Opt_FunToThunk
@@ -3092,6 +3095,8 @@ dynamic_flags_deps = [
         (setDumpFlag Opt_D_dump_cmm_verbose)
   , make_ord_flag defGhcFlag "ddump-cmm-cfg"
         (setDumpFlag Opt_D_dump_cmm_cfg)
+  , make_ord_flag defGhcFlag "ddump-cmm-cmov"
+        (setDumpFlag Opt_D_dump_cmm_cmov)
   , make_ord_flag defGhcFlag "ddump-cmm-cbe"
         (setDumpFlag Opt_D_dump_cmm_cbe)
   , make_ord_flag defGhcFlag "ddump-cmm-switch"
@@ -3904,6 +3909,7 @@ fFlagsDeps = [
   flagSpec "exitification"                    Opt_Exitification,
   flagSpec "case-merge"                       Opt_CaseMerge,
   flagSpec "case-folding"                     Opt_CaseFolding,
+  flagSpec "cmm-cmov"                         Opt_CmmCmov,
   flagSpec "cmm-elim-common-blocks"           Opt_CmmElimCommonBlocks,
   flagSpec "cmm-sink"                         Opt_CmmSink,
   flagSpec "cse"                              Opt_CSE,
@@ -4439,6 +4445,7 @@ optLevelFlags -- see Note [Documenting optimisation flags]
     , ([1,2],   Opt_CaseMerge)
     , ([1,2],   Opt_CaseFolding)
     , ([1,2],   Opt_CmmElimCommonBlocks)
+    , ([1,2],   Opt_CmmCmov)
     , ([2],     Opt_AsmShortcutting)
     , ([1,2],   Opt_CmmSink)
     , ([1,2],   Opt_CSE)

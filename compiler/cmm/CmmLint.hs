@@ -151,6 +151,36 @@ lintCmmMiddle node = case node of
                 then return ()
                 else cmmLintAssignErr (CmmAssign reg expr) erep reg_ty
 
+  -- TODO: Check for dependencies
+  ass@(CmmCondAssign cond assignments) -> do
+            dflags <- getDynFlags
+            _ <- lintCmmExpr cond
+            mapM_ (lintAssignments dflags) assignments
+    where
+      lintAssignments dflags (d,v) =
+        case v of
+          BranchBoth t f -> do
+            type_t <- lintCmmExpr t
+            type_f <- lintCmmExpr f
+            let type_d = cmmRegType dflags d
+            if (type_t `cmmEqType_ignoring_ptrhood` type_f)
+              then if (type_t `cmmEqType_ignoring_ptrhood` type_d )
+                then return ()
+                else cmmLintAssignErr ass type_t type_d
+              else cmmLintAssignErr ass type_t type_f
+          BranchTrue t -> do
+            type_t <- lintCmmExpr t
+            let type_d = cmmRegType dflags d
+            if (type_t `cmmEqType_ignoring_ptrhood` type_d)
+              then return ()
+              else cmmLintAssignErr ass type_t type_d
+          BranchFalse f -> do
+            type_f <- lintCmmExpr f
+            let type_d = cmmRegType dflags d
+            if (type_f `cmmEqType_ignoring_ptrhood` type_d)
+              then return ()
+              else cmmLintAssignErr ass type_f type_d
+
   CmmStore l r -> do
             _ <- lintCmmExpr l
             _ <- lintCmmExpr r
@@ -251,7 +281,6 @@ cmmLintAssignErr stmt e_ty r_ty
                 nest 2 (vcat [ppr stmt,
                               text "Reg ty:" <+> ppr r_ty,
                               text "Rhs ty:" <+> ppr e_ty]))
-
 
 {-
 cmmLintDubiousWordOffset :: CmmExpr -> CmmLint a

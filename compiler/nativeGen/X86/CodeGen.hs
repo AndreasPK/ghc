@@ -36,6 +36,7 @@ import X86.Instr
 import X86.Cond
 import X86.Regs
 import X86.RegInfo
+import X86.Ppr ()
 import CodeGen.Platform
 import CPrim
 import Debug            ( DebugBlock(..), UnwindPoint(..), UnwindTable
@@ -53,6 +54,7 @@ import BlockId
 import Module           ( primUnitId )
 import PprCmm           ()
 import CmmUtils
+import CmmCmov          (BranchInfo(..))
 import CmmSwitch
 import Cmm
 import Hoopl.Block
@@ -71,6 +73,8 @@ import Util
 import UniqSupply       ( getUniqueM )
 
 import Control.Monad
+
+import Data.Bifunctor
 import Data.Bits
 import Data.Foldable (fold)
 import Data.Int
@@ -78,6 +82,8 @@ import Data.Maybe
 import Data.Word
 
 import qualified Data.Map as M
+import qualified Data.Set as S
+
 
 is32BitPlatform :: NatM Bool
 is32BitPlatform = do
@@ -198,6 +204,13 @@ stmtToInstrs stmt = do
       | otherwise              -> assignReg_IntCode format reg src
         where ty = cmmRegType dflags reg
               format = cmmTypeFormat ty
+
+    --Invariant: There is no true dependency in the list of assignments.
+    CmmCondAssign cond assignments
+--      | isFloatType ty         -> condAssignReg_FltCode format reg cond src
+--      | is32Bit && isWord64 ty -> panic "32Bit not supported"
+      | otherwise              -> --pprTrace "Foo" (ppr stmt) $
+                                  condAssignReg_IntCode cond assignments
 
     CmmStore addr src
       | isFloatType ty         -> assignMem_FltCode format addr src
@@ -1504,6 +1517,192 @@ condFltCode cond x y
     return (CondCode True (condToUnsigned cond) code)
 
 -- -----------------------------------------------------------------------------
+-- Conditional assignments
+
+--condAssignReg_FltCode :: Format -> [CmmReg]  -> CmmExpr
+--                      -> [(Maybe CmmExpr, Maybe CmmExpr)]
+--                      -> NatM InstrBlock
+--condAssignReg_FltCode fmt regs cond srcs = do
+--  error "TODO"
+
+-- | Keep track in which branch a register is assigned.
+data AssignInfo
+  = AssignTrue Reg
+  | AssignFalse Reg
+  | AssignBoth Reg
+  deriving Eq
+
+assignedBy :: Bool -> Reg -> AssignInfo -> Bool
+assignedBy True  r (AssignTrue a)  = a == r
+assignedBy False r (AssignFalse a) = a == r
+assignedBy _     r (AssignBoth a)  = a == r
+assignedBy _ _ _ = False
+
+
+mkRegAssignInfo :: Reg -> BranchInfo a -> AssignInfo
+mkRegAssignInfo r BranchBoth {} = AssignBoth r
+mkRegAssignInfo r BranchTrue {} = AssignTrue r
+mkRegAssignInfo r BranchFalse {} = AssignFalse r
+
+{- Note [CMOV and uninitialized registers]
+
+While it seems natural we can't and should not always use cmov instead of mov
+for assignment in branches.
+
+Consider the code:
+
+  if (cond) {
+    x = r1;
+    y = r2;
+    z = r3; }
+  else {
+    y = r4;
+    z = r5;
+    x = r6;
+  }
+
+We match this up so that we do:
+
+reg true  false
+x   r1
+y   r2    r4
+z   r3    r5
+x         r6
+
+For the first assignment to x we can't use a cmov.
+X might be an unintialized register. We also don't want
+to use cmov as a mov will work just fine.
+
+To solve this we require statements to have no true dependencies.
+This frees us to use mov:
+  * If the result will be overwritten in the other branch anyway.
+
+Besides producing better code this means we will never read from
+an uninitialized register in the above sequence.
+
+If x is NOT written in the other branch we can (and must) use cmov.
+This is (assuming no dead assignments) because it will have been
+assigned before control flow splits.
+
+-}
+
+type X86RegSet = S.Set Reg
+
+condAssignReg_IntCode :: CmmExpr -> [(CmmReg, BranchInfo CmmExpr)]
+                      -> NatM InstrBlock
+condAssignReg_IntCode cond assignments = do
+  use_sse2 <- sse2Enabled
+  dflags <- getDynFlags
+  let platform = targetPlatform dflags
+  let getReg = getRegisterReg platform use_sse2
+  let assignments' = map (first getReg) assignments
+
+  CondCode _is_float cond cond_code <- getCondCode cond
+  (exprCode, cmovCode) <- getCmovCode dflags cond assignments' S.empty
+
+  return (exprCode `appOL` cond_code `appOL` cmovCode)
+  where
+    getCmovCode :: DynFlags -> Cond -> [(Reg,BranchInfo CmmExpr)]
+                -> X86RegSet
+                -> NatM (InstrBlock, InstrBlock)
+                -- ^ Code before and after condition
+    getCmovCode _dflags _cond [] _ = return (nilOL, nilOL)
+    getCmovCode dflags cond ((reg,src):assigns) assigned
+      | if (dopt Opt_D_dump_cmm_cmov dflags)
+          then pprTrace "Doing" (ppr src <+> text "->" <+> ppr reg) False
+          else False
+      = undefined
+      --Things we always do
+      | BranchBoth true false <- src
+      , true == false
+      = do
+          (rtrue, code) <- getSomeReg true
+          let cmov = unitOL $ MOV format (OpReg rtrue) (OpReg reg)
+          (exprc, cmovc) <- getCmovCode dflags cond assigns
+                                        (S.insert reg assigned)
+
+          return (code `appOL` exprc,
+                  cmov `appOL` cmovc)
+
+      -- If cond then true else false
+      | BranchBoth true false <- src
+      = do
+          (rfalse, codeFalse) <- getSomeReg false
+          (rtrue, codeTrue) <- getSomeReg true
+          let cmov = toOL [MOV       format (OpReg rfalse) (OpReg reg),
+                           CMOV cond format (OpReg rtrue)         reg]
+
+          (exprc, cmovc) <- getCmovCode dflags cond assigns
+                                        (S.insert reg assigned)
+
+          return (codeFalse `appOL` codeTrue `appOL` exprc,
+                  cmov `appOL` cmovc)
+
+      -- If cond then true
+      | BranchTrue true  <- src
+      = singleBranch true True cond
+
+      -- If (!cond) then true
+      | BranchFalse false  <- src
+      , Just invCond <- maybeInvCond cond
+      = singleBranch false False invCond
+
+      | otherwise
+      = pprPanic "Uninvertable condition in cmov codegen for" $
+          ppr (src)
+          where
+            format = cmmTypeFormat . cmmExprType dflags .
+                     getAnyInfo $ src
+            --Assignments which are only executed in one branch
+            singleBranch expr branch condCode = do
+              when (dopt Opt_D_dump_cmm_cmov dflags) $
+                pprTraceM "single" (ppr (expr,branch,cond, condCode))
+              (expr, cmov) <-
+                if overwritten (not branch) && not isInitialized
+                  then do
+                    (rtemp, code) <- getSomeReg expr
+                    let cmov =  unitOL $ MOV format (OpReg rtemp) (OpReg reg)
+                    return (code, cmov)
+                  else do
+                    (rtemp, code) <- getSomeReg expr
+                    let cmov = unitOL $ CMOV condCode format (OpReg rtemp) reg
+                    return (code, cmov)
+
+              (exprs, cmovs) <- getCmovCode dflags cond assigns
+                                            (S.insert reg assigned)
+
+              return (expr `appOL` exprs,
+                      cmov `appOL` cmovs)
+
+            regAssignInfo = map (uncurry mkRegAssignInfo) assigns
+
+          --We can only use cmov if an register is initialized.
+          -- A register is initialized if:
+          -- * we have assigned it before (trivial)
+          -- * if we only assign it in one branch.
+          --
+          -- We don't allow true dependencies between the assignments.
+          -- This means unless the assignment is dead code it must be used
+          -- after control flow joins up again.
+          -- Given it's used after both branches it must have been initialized
+          -- in all branches.
+          -- This means either it was already initialized before control split,
+          -- or the other branch will also initialize it.
+          -- From that we conclude that if the other branch will not initialize
+          -- it
+
+            isInitialized = S.member reg assigned
+            overwritten branch = any (assignedBy branch reg) regAssignInfo
+
+
+
+
+
+
+
+
+
+-- -----------------------------------------------------------------------------
 -- Generating assignments
 
 -- Assignments are really at the heart of the whole code generation
@@ -1520,7 +1719,6 @@ assignReg_IntCode :: Format -> CmmReg  -> CmmExpr -> NatM InstrBlock
 
 assignMem_FltCode :: Format -> CmmExpr -> CmmExpr -> NatM InstrBlock
 assignReg_FltCode :: Format -> CmmReg  -> CmmExpr -> NatM InstrBlock
-
 
 -- integer assignment to memory
 

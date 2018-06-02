@@ -3,7 +3,8 @@ module X86.Cond (
         condUnsigned,
         condToSigned,
         condToUnsigned,
-        maybeFlipCond
+        maybeFlipCond,
+        maybeInvCond,
 )
 
 where
@@ -26,6 +27,7 @@ data Cond
         | POS
         | CARRY
         | OFLO
+        | NOFLO
         | PARITY
         | NOTPARITY
         deriving Eq
@@ -68,3 +70,29 @@ maybeFlipCond cond  = case cond of
         LE    -> Just GE
         GE    -> Just LE
         _other -> Nothing
+
+-- | @maybeInvCond c@ returns @Just c'@ if it is possible to invert the
+-- condition itself.
+-- In other words we can swap jcc l1; jmp l2 <-> j<invCC>; jmp l1
+-- This DOES NOT imply inv . inv == id
+-- TODO: Verify
+maybeInvCond :: Cond -> Maybe Cond
+maybeInvCond cond  = case cond of
+        EQQ   -> Just NE
+        GE    -> Just LTT
+        GEU   -> Just LU
+        GTT   -> Just LE
+        GU    -> Just LEU
+        LE    -> Just GTT
+        LEU   -> Just GU
+        LTT   -> Just GE
+        LU    -> Just GEU
+        NE    -> Just EQQ
+        NEG   -> Just POS
+        POS   -> Just NEG
+        CARRY -> Just GEU
+        OFLO  -> Just NOFLO
+        NOFLO -> Just OFLO
+        PARITY    -> Just NOTPARITY
+        NOTPARITY -> Just PARITY
+        ALWAYS -> Nothing

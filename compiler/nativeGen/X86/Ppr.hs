@@ -243,6 +243,9 @@ pprAlign bytes
 instance Outputable Instr where
     ppr instr = pprInstr instr
 
+instance Outputable Cond where
+    ppr cond = pprCond cond
+
 
 pprReg :: Format -> Reg -> SDoc
 pprReg f r
@@ -390,7 +393,8 @@ pprCond c
                 LTT     -> sLit "l";    LE    -> sLit "le";
                 LEU     -> sLit "be";   NE    -> sLit "ne";
                 NEG     -> sLit "s";    POS   -> sLit "ns";
-                CARRY   -> sLit "c";   OFLO  -> sLit "o";
+                OFLO  -> sLit "o";      NOFLO -> sLit "no";
+                CARRY   -> sLit "c";
                 PARITY  -> sLit "p";   NOTPARITY -> sLit "np";
                 ALWAYS  -> sLit "mp"})
 

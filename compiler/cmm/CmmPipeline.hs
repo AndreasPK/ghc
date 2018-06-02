@@ -13,6 +13,7 @@ import Cmm
 import CmmLint
 import CmmBuildInfoTables
 import CmmCommonBlockElim
+import CmmCmov
 import CmmImplementSwitchPlans
 import CmmProcPoint
 import CmmContFlowOpt
@@ -135,6 +136,16 @@ cpsTop hsc_env proc =
             return $ if optLevel dflags >= 1
                      then map (cmmCfgOptsProc splitting_proc_points) g
                      else g
+
+       g <- {-# SCC "cmmCmov" #-} do
+            if gopt Opt_CmmCmov dflags
+            then runUniqSM $ mapM (cmmIfToCmov dflags) g
+            else return g
+       dumps Opt_D_dump_cmm_cmov "after jump -> Cmov conversion" g
+
+
+
+
        g <- return (map removeUnreachableBlocksProc g)
             -- See Note [unreachable blocks]
        dumps Opt_D_dump_cmm_cfg "Post control-flow optimisations" g

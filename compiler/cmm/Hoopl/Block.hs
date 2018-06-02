@@ -21,6 +21,7 @@ module Hoopl.Block
     , blockToList
     , emptyBlock
     , firstNode
+    , middleBlock
     , foldBlockNodesB
     , foldBlockNodesB3
     , foldBlockNodesF
@@ -147,6 +148,11 @@ blockAppend = cat
 firstNode :: Block n C x -> n C O
 firstNode (BlockCO n _)   = n
 firstNode (BlockCC n _ _) = n
+
+middleBlock :: Block n C C -> Block n O O
+middleBlock block =
+  let (_, mid, _) = blockSplit block
+  in  mid
 
 lastNode :: Block n x C -> n O C
 lastNode (BlockOC   _ n) = n

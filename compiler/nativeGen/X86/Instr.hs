@@ -191,6 +191,9 @@ data Instr
         -- This carries a BlockId so it can be used in unwinding information.
         | DELTA  Int
 
+        | INIT   Reg -- Marks the given register as alive without changing
+                     -- the content.
+
         -- Moves.
         | MOV         Format Operand Operand
         | CMOV   Cond Format Operand Reg

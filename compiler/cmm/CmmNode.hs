@@ -7,6 +7,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TupleSections #-}
 
 -- CmmNode type for representation using Hoopl graphs.
 
@@ -17,6 +18,8 @@ module CmmNode (
      CmmReturnInfo(..),
      mapExp, mapExpDeep, wrapRecExp, foldExp, foldExpDeep, wrapRecExpf,
      mapExpM, mapExpDeepM, wrapRecExpM, mapSuccessors,
+
+     BranchInfo(..), getTrueInfo, getFalseInfo, getAnyInfo,
 
      -- * Tick scopes
      CmmTickScope(..), isTickSubScope, combineTickScopes,
@@ -40,8 +43,11 @@ import Hoopl.Graph
 import Hoopl.Label
 import Data.Maybe
 import Data.List (tails,sortBy)
+import Data.Foldable (toList)
 import Unique (nonDetCmpUnique)
 import Util
+import Data.Bifunctor (second)
+import Data.Bitraversable (bimapM)
 
 
 ------------------------
@@ -70,6 +76,14 @@ data CmmNode e x where
 
   CmmAssign :: !CmmReg -> !CmmExpr -> CmmNode O O
     -- Assign to register
+
+  --Invariant: There is no true dependency in the list of assignments.
+  CmmCondAssign :: {
+    cca_cond :: !CmmExpr,    -- ^ Condition
+    cca_assignments :: [(CmmReg, BranchInfo CmmExpr)]
+                -- ^ List of assignments
+    } -> CmmNode O O
+    -- ^ Conditional assignments to registers
 
   CmmStore :: !CmmExpr -> !CmmExpr -> CmmNode O O
     -- Assign to memory location.  Size is
@@ -310,12 +324,63 @@ foreignTargetHints target
           ForeignTarget _ (ForeignConvention _ arg_hints res_hints _) ->
              (res_hints, arg_hints)
 
+-- | Associate information with branches of an if/else statement.
+data BranchInfo a
+    = BranchBoth a a -- ^ true false
+    | BranchTrue a -- ^ Used to indicate we only got the true vale
+    | BranchFalse a -- ^ same for false
+    deriving (Eq, Ord)
+
+instance Foldable BranchInfo where
+    foldMap f (BranchBoth true false)   = (f true) `mappend` (f false)
+    foldMap f (BranchTrue true)    = (f true)
+    foldMap f (BranchFalse false)    = (f false)
+
+instance Functor BranchInfo where
+    fmap f (BranchBoth true false)   = (f true) `BranchBoth` (f false)
+    fmap f (BranchTrue true)        = BranchTrue (f true)
+    fmap f (BranchFalse false)       = BranchFalse (f false)
+
+instance Traversable BranchInfo where
+    sequenceA (BranchBoth mt mf)   = pure BranchBoth <*> mt <*> mf
+    sequenceA (BranchTrue true)   = BranchTrue <$> true
+    sequenceA (BranchFalse false)  = BranchFalse <$> false
+
+instance Outputable a => Outputable (BranchInfo a) where
+    ppr (BranchBoth a b) = text "Both " <+> ppr (a,b)
+    ppr (BranchTrue a) = text   "True " <+> ppr a
+    ppr (BranchFalse a) = text  "False" <+> ppr a
+
+getTrueInfo :: BranchInfo a -> Maybe a
+getTrueInfo (BranchTrue x) = Just x
+getTrueInfo (BranchBoth t _) = Just t
+getTrueInfo _ = Nothing
+
+getFalseInfo :: BranchInfo a -> Maybe a
+getFalseInfo (BranchFalse x) = Just x
+getFalseInfo (BranchBoth _ f) = Just f
+getFalseInfo _ = Nothing
+
+-- | Get information from any branch. Biased towards true branch.
+getAnyInfo :: BranchInfo a -> a
+getAnyInfo = head . toList
+
 --------------------------------------------------
 -- Instances of register and slot users / definers
+
+instance forall r a. UserOfRegs r a => UserOfRegs r (BranchInfo a) where
+    foldRegsUsed dflags f z mr
+        = foldl (foldRegsUsed dflags f) z mr
+
+instance forall r a. DefinerOfRegs r a => DefinerOfRegs r (BranchInfo a) where
+    foldRegsDefd dflags f z mr
+        = foldl (foldRegsDefd dflags f) z mr
 
 instance UserOfRegs LocalReg (CmmNode e x) where
   foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
+    CmmCondAssign cond ass ->
+      fold f (fold f z cond) $ map snd ass
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
     CmmCondBranch expr _ _ _ -> fold f z expr
@@ -330,6 +395,8 @@ instance UserOfRegs LocalReg (CmmNode e x) where
 instance UserOfRegs GlobalReg (CmmNode e x) where
   foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
+    CmmCondAssign cond ass ->
+      fold f (fold f z cond) $ map snd ass
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
     CmmCondBranch expr _ _ _ -> fold f z expr
@@ -350,6 +417,7 @@ instance (Ord r, UserOfRegs r CmmReg) => UserOfRegs r ForeignTarget where
 instance DefinerOfRegs LocalReg (CmmNode e x) where
   foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
+    CmmCondAssign _ assignments -> fold f z $ map fst assignments
     CmmUnsafeForeignCall _ fs _ -> fold f z fs
     CmmForeignCall {res=res} -> fold f z res
     _ -> z
@@ -360,6 +428,7 @@ instance DefinerOfRegs LocalReg (CmmNode e x) where
 instance DefinerOfRegs GlobalReg (CmmNode e x) where
   foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
+    CmmCondAssign _ assignments -> fold f z $ map fst assignments
     CmmUnsafeForeignCall tgt _ _  -> fold f z (foreignTargetRegs tgt)
     CmmCall        {} -> fold f z activeRegs
     CmmForeignCall {} -> fold f z activeRegs
@@ -466,6 +535,8 @@ mapExp _ m@(CmmComment _)                        = m
 mapExp _ m@(CmmTick _)                           = m
 mapExp f   (CmmUnwind regs)                      = CmmUnwind (map (fmap (fmap f)) regs)
 mapExp f   (CmmAssign r e)                       = CmmAssign r (f e)
+mapExp f   (CmmCondAssign cond values)         =
+  CmmCondAssign (f cond) $ map (second (fmap f)) values
 mapExp f   (CmmStore addr e)                     = CmmStore (f addr) (f e)
 mapExp f   (CmmUnsafeForeignCall tgt fs as)      = CmmUnsafeForeignCall (mapForeignTarget f tgt) fs (map f as)
 mapExp _ l@(CmmBranch _)                         = l
@@ -497,6 +568,10 @@ mapExpM _ (CmmComment _)            = Nothing
 mapExpM _ (CmmTick _)               = Nothing
 mapExpM f (CmmUnwind regs)          = CmmUnwind `fmap` mapM (\(r,e) -> mapM f e >>= \e' -> pure (r,e')) regs
 mapExpM f (CmmAssign r e)           = CmmAssign r `fmap` f e
+mapExpM f (CmmCondAssign cond assignments) = do
+  ass <- mapM (bimapM (return) (traverse f)) assignments
+  cond' <- f cond
+  return $! (CmmCondAssign cond' ass)
 mapExpM f (CmmStore addr e)         = (\[addr', e'] -> CmmStore addr' e') `fmap` mapListM f [addr, e]
 mapExpM _ (CmmBranch _)             = Nothing
 mapExpM f (CmmCondBranch e ti fi l) = (\x -> CmmCondBranch x ti fi l) `fmap` f e
@@ -550,6 +625,8 @@ foldExp _ (CmmComment {}) z                       = z
 foldExp _ (CmmTick {}) z                          = z
 foldExp f (CmmUnwind xs) z                        = foldr (maybe id f) z (map snd xs)
 foldExp f (CmmAssign _ e) z                       = f e z
+foldExp f (CmmCondAssign e s) z                 = foldr f (f e z) $
+                                                    concatMap (toList . snd) s
 foldExp f (CmmStore addr e) z                     = f addr $ f e z
 foldExp f (CmmUnsafeForeignCall t _ as) z         = foldr f (foldExpForeignTarget f t z) as
 foldExp _ (CmmBranch _) z                         = z
