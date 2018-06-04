@@ -570,9 +570,11 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 {-# SCC "cmmToCmm" #-}
                 cmmToCmm dflags this_mod fixed_cmm
 
-        dumpIfSet_dyn dflags
-                Opt_D_dump_opt_cmm "Optimised Cmm"
-                (pprCmmGroup [opt_cmm])
+        when (dopt Opt_D_dump_opt_cmm dflags ||
+              dopt Opt_D_dump_cmm_verbose dflags) $
+                  dumpSDoc dflags alwaysQualify
+                      Opt_D_dump_opt_cmm "Optimised Cmm"
+                      (pprCmmGroup [opt_cmm])
 
         -- generate native code from cmm
         let ((native, lastMinuteImports, fileIds'), usGen) =
