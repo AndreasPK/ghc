@@ -392,11 +392,11 @@ coreToStgExpr
 
 -- No LitInteger's or LitNatural's should be left by the time this is called.
 -- CorePrep should have converted them all to a real core representation.
-coreToStgExpr (Lit (LitNumber LitNumInteger _ _)) = panic "coreToStgExpr: LitInteger"
-coreToStgExpr (Lit (LitNumber LitNumNatural _ _)) = panic "coreToStgExpr: LitNatural"
-coreToStgExpr (Lit l)      = return (StgLit l, emptyFVInfo)
-coreToStgExpr (Var v)      = coreToStgApp Nothing v               [] []
-coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId [] []
+coreToStgExpr _  (Lit (LitNumber LitNumInteger _ _)) = panic "coreToStgExpr: LitInteger"
+coreToStgExpr _  (Lit (LitNumber LitNumNatural _ _)) = panic "coreToStgExpr: LitNatural"
+coreToStgExpr _  (Lit l)      = return (StgLit l, emptyFVInfo)
+coreToStgExpr df (Var v)      = coreToStgApp df Nothing v               [] []
+coreToStgExpr df (Coercion _) = coreToStgApp df Nothing coercionTokenId [] []
 
 coreToStgExpr df expr@(App _ _)
   = coreToStgApp df Nothing f args ticks

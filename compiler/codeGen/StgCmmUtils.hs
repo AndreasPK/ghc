@@ -521,7 +521,7 @@ emitCmmLitSwitch scrut  branches (deflt,dfreq) = do
 
     -- We find the necessary type information in the literals in the branches
     let signed = case head branches of
-                    (LitNumber nt _ _, _) -> litNumIsSigned nt
+                    (LitNumber nt _ _, _, _) -> litNumIsSigned nt
                     _ -> False
 
     let range | signed    = (tARGET_MIN_INT dflags, tARGET_MAX_INT dflags)
