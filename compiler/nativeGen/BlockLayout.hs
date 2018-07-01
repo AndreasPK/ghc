@@ -42,6 +42,9 @@ import qualified Data.Sequence as Seq
   ~~~ Note [Chain based CFG serialization]
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+  For additional information also look at
+  https://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/CodeLayout
+
   We have a CFG with edge weights based on which we try to place blocks next to
   each other.
 
@@ -312,7 +315,7 @@ combineChains weights chains
               = chainConcat c2 c1
             (candidates,rest) =
                 partition (\c -> chainMember from c || chainMember to c) chains
-        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
+        prioEdges = sortOn (\(_,_,z) -> -z) $ weightedEdgeList weights
 
 -- See also Note [Chain based CFG serialization]
 -- We have the chains ABCD and EF.
@@ -334,7 +337,7 @@ combineNeighbourhood :: forall i. CFG -> [BlockChain i] -> [BlockChain i]
 combineNeighbourhood weights chains
     = applyEdges prioEdges chains
     where
-        prioEdges = sortOn (\(_,_,z) -> -z) $ edgeList weights
+        prioEdges = sortOn (\(_,_,z) -> -z) $ weightedEdgeList weights
 
         applyEdges :: [(BlockId,BlockId,Int)] -> [BlockChain i]
                    -> [BlockChain i]
@@ -442,10 +445,12 @@ fromNode (BN x) = fst x
 
 sequenceChain :: forall a i. (Instruction i, Outputable i) => LabelMap a -> CFG
             -> [GenBasicBlock i] -> [GenBasicBlock i]
-sequenceChain _info _weights [] = []
-sequenceChain _info _weights [x] = [x]
-sequenceChain  info  weights blocks@((BasicBlock entry _):_) =
-    let blockMap :: LabelMap (GenBasicBlock i)
+sequenceChain _info _weights    [] = []
+sequenceChain _info _weights    [x] = [x]
+sequenceChain  info cfgWeights  blocks@((BasicBlock entry _):_) =
+    let weights = increaseBackEdgeWeight entry cfgWeights
+
+        blockMap :: LabelMap (GenBasicBlock i)
         blockMap
             = foldl' (\m blk@(BasicBlock lbl _ins) ->
                         mapInsert lbl blk m)
