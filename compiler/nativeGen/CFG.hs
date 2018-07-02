@@ -356,11 +356,13 @@ type DepthAnCFG = EdgeInfoMap Int
 
 --Find back edges by BFS
 findBackEdges :: BlockId -> CFG -> Edges
-findBackEdges root cfg = go setEmpty (setSingleton root)
+findBackEdges root cfg =
+    pprTraceIt "Backedges:" $
+    go setEmpty (setSingleton root)
   where
     go :: LabelSet -> LabelSet -> Edges
     go seen blocks
-      | setNull seen
+      | setNull blocks
       = []
       | otherwise
       = pprTrace "Finding for" (ppr blocks) $
@@ -386,5 +388,6 @@ increaseBackEdgeWeight root cfg =
           --Keep irrelevant edges irrelevant
           | weight <= 0 = 0
           | otherwise = weight + 60
-    in foldl'   (\cfg edge -> updateEdgeWeight update edge cfg)
+    in  --const cfg $
+        foldl'   (\cfg edge -> updateEdgeWeight update edge cfg)
                 cfg backedges
