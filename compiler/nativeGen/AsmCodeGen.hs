@@ -696,9 +696,12 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 {-# SCC "shortcutBranches" #-}
                 shortcutBranches dflags ncgImpl tabled postRegCFG
 
+        let optimizedCFG =
+                optimizeCFG cmm postShortCFG
+
         dumpIfSet_dyn dflags
                 Opt_D_dump_cfg_weights "CFG Final Weights"
-                ( pprEdgeWeights postShortCFG )
+                ( pprEdgeWeights optimizedCFG )
 
         --when ((not . null) cfgRegUpdates || (not . null) stack_updt_blks) $
         --        pprTraceM "regUpdated" (ppr cfgRegUpdates $$ ppr stack_updt_blks)
@@ -710,7 +713,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
         when (gopt Opt_DoAsmLinting dflags || debugIsOn ) $ do
                 let blocks = concatMap getBlks shorted
                 let labels = fmap blockId blocks :: [BlockId]
-                return $! seq (sanityCheckCfg postShortCFG labels $
+                return $! seq (sanityCheckCfg optimizedCFG labels $
                                 text "cfg not in lockstep") ()
 
         ---- sequence blocks
@@ -718,7 +721,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 {-# SCC "sequenceBlocks" #-}
                 map (BlockLayout.sequenceTop
                         (gopt Opt_NewBlocklayout dflags)
-                        ncgImpl postShortCFG)
+                        ncgImpl optimizedCFG)
                     shorted
 
         ---- expansion of SPARC synthetic instrs
@@ -746,6 +749,11 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 , ppr_raStatsColor
                 , ppr_raStatsLinear
                 , unwinds )
+
+optimizeCFG :: RawCmmDecl -> CFG -> CFG
+optimizeCFG (CmmData {}) cfg = cfg
+optimizeCFG (CmmProc info _lab _live graph) cfg =
+    increaseBackEdgeWeight (g_entry graph) cfg
 
 x86fp_kludge :: NatCmmDecl (Alignment, CmmStatics) X86.Instr.Instr -> NatCmmDecl (Alignment, CmmStatics) X86.Instr.Instr
 x86fp_kludge top@(CmmData _ _) = top

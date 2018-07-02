@@ -447,10 +447,8 @@ sequenceChain :: forall a i. (Instruction i, Outputable i) => LabelMap a -> CFG
             -> [GenBasicBlock i] -> [GenBasicBlock i]
 sequenceChain _info _weights    [] = []
 sequenceChain _info _weights    [x] = [x]
-sequenceChain  info cfgWeights  blocks@((BasicBlock entry _):_) =
-    let weights = increaseBackEdgeWeight entry cfgWeights
-
-        blockMap :: LabelMap (GenBasicBlock i)
+sequenceChain  info weights     blocks@((BasicBlock entry _):_) =
+    let blockMap :: LabelMap (GenBasicBlock i)
         blockMap
             = foldl' (\m blk@(BasicBlock lbl _ins) ->
                         mapInsert lbl blk m)
