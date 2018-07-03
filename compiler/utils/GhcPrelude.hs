@@ -6,7 +6,7 @@
 -- and abstracts over differences between the bootstrapping
 -- GHC version, and may also provide a common default vocabulary.
 --
-module GhcPrelude (module X) where
+module GhcPrelude (module X, foldl') where
 
 -- We export the 'Semigroup' class but w/o the (<>) operator to avoid
 -- clashing with the (Outputable.<>) operator which is heavily used
@@ -18,3 +18,5 @@ import Prelude as X hiding ((<>))
 import Prelude as X
 import Data.Semigroup as X (Semigroup)
 #endif
+
+import Data.Foldable (foldl')

@@ -2646,7 +2646,7 @@ safeFlagCheck :: Bool -> DynFlags -> (DynFlags, [Located String])
 safeFlagCheck _ dflags | safeLanguageOn dflags = (dflagsUnset, warns)
   where
     -- Handle illegal flags under safe language.
-    (dflagsUnset, warns) = foldl check_method (dflags, []) unsafeFlags
+    (dflagsUnset, warns) = foldl' check_method (dflags, []) unsafeFlags
 
     check_method (df, warns) (str,loc,test,fix)
         | test df   = (fix df, warns ++ safeFailure (loc df) str)

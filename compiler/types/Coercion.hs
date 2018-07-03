@@ -619,7 +619,7 @@ mkAppCo co arg = AppCo co  arg
 mkAppCos :: Coercion
          -> [Coercion]
          -> Coercion
-mkAppCos co1 cos = foldl mkAppCo co1 cos
+mkAppCos co1 cos = foldl' mkAppCo co1 cos
 
 -- | Like 'mkAppCo', but allows the second coercion to be other than
 -- nominal. See Note [mkTransAppCo]. Role r3 cannot be more stringent
@@ -697,7 +697,7 @@ mkForAllCo tv kind_co co
 mkForAllCos :: [(TyVar, Coercion)] -> Coercion -> Coercion
 mkForAllCos bndrs (Refl r ty)
   = let (refls_rev'd, non_refls_rev'd) = span (isReflCo . snd) (reverse bndrs) in
-    foldl (flip $ uncurry ForAllCo)
+    foldl' (flip $ uncurry ForAllCo)
           (Refl r $ mkInvForAllTys (reverse (map fst refls_rev'd)) ty)
           non_refls_rev'd
 mkForAllCos bndrs co = foldr (uncurry ForAllCo) co bndrs
