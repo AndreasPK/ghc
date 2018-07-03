@@ -4,7 +4,7 @@
 -- {-# OPTIONS_GHC -fprof-auto #-}
 
 module CFG
-    ( CFG, CfgEdge, addWeightEdge, delEdge, weightedEdgeList
+    ( CFG, WeightedEdge(..), addWeightEdge, delEdge, weightedEdgeList
     , shortcutWeightMap, getBlockTargets, addImmediateSuccessor
     , getEdgeWeight, getOutgoingEdges, reverseEdges
     , getCFG, addNodeBetween, pprEdgeWeights, getCfgNodes, sanityCheckCfg
@@ -51,9 +51,39 @@ import qualified Data.Set as Set
 type Edge = (BlockId, BlockId)
 type Edges = [Edge]
 
-type CfgEdge = (BlockId, BlockId, Maybe Int)
 type EdgeInfoMap edgeInfo = M.Map Label (M.Map Label edgeInfo)
+
+-- | A control flow graph where edges have been annotated with a weight.
 type CFG = EdgeInfoMap (Int)
+
+data WeightedEdge
+  = WeightedEdge
+  { edgeFrom :: !BlockId
+  , edgeTo :: !BlockId
+  , edgeWeight :: !Int }
+
+-- | Careful! Since we assume there is at most one edge from A to B
+--   the Eq instance does not consider weight.
+instance Eq WeightedEdge where
+  (==) (WeightedEdge from1 to1 _) (WeightedEdge from2 to2 _)
+    = from1 == from2 && to1 == to2
+
+-- | Edges are sorted ascending by weight, source and destination
+instance Ord WeightedEdge where
+  compare (WeightedEdge from1 to1 weight1)
+          (WeightedEdge from2 to2 weight2)
+    | weight1 < weight2 || weight1 == weight2 && from1 < from2 ||
+      weight1 == weight2 && from1 == from2 && to1 < to2
+    = LT
+    | from1 == from2 && to1 == to2 && weight1 == weight2
+    = EQ
+    | otherwise
+    = GT
+
+instance Outputable WeightedEdge where
+  ppr (WeightedEdge from1 to1 weight1)
+    = parens (ppr from1 <+> text "-" <> ppr weight1 <> text "->" <+> ppr to1)
+
 
 getCfgNodes :: CFG -> [BlockId]
 getCfgNodes m = M.keys m ++ concat (M.elems . M.map M.keys $ m)
@@ -74,12 +104,12 @@ sanityCheckCfg m blocks msg
       blockSet = setFromList blocks :: LabelSet
       diff = setDifference cfgNodes blockSet :: LabelSet
 
-filterEdges :: (CfgEdge -> Bool) -> CFG -> CFG
+filterEdges :: (BlockId -> BlockId -> Int -> Bool) -> CFG -> CFG
 filterEdges f cfg =
     M.mapWithKey filterSources cfg
     where
       filterSources from m =
-        M.filterWithKey (\to w -> f (from,to,Just w)) m
+        M.filterWithKey (\to w -> f from to w) m
 
 
 --If we shortcut to a non-block we simply remove the edge.
@@ -190,11 +220,12 @@ edges = concatMap
             (\(pred,succs) -> map (\to -> (pred, to)) (M.keys succs)
             ) . M.toList
 
-weightedEdgeList :: CFG -> [(BlockId,BlockId,Int)]
+-- | Returns a unordered list of all edges with weights
+weightedEdgeList :: CFG -> [WeightedEdge]
 weightedEdgeList m =
     let lists = M.toList $ fmap M.toList m
     in concatMap
-        (\(from, tos) -> map (\(to,weight) -> (from,to,weight)) tos )
+        (\(from, tos) -> map (\(to,weight) -> WeightedEdge from to weight) tos )
         lists
 
 getBlockTargets :: CFG -> BlockId -> [(BlockId,Int)]
@@ -205,8 +236,8 @@ getBlockTargets m bid
 
 pprEdgeWeights :: CFG -> SDoc
 pprEdgeWeights m =
-    let edges = sortOn (\(_,_,z) -> z) $ weightedEdgeList m
-        printEdge (from,to,weight)
+    let edges = sort $ weightedEdgeList m
+        printEdge (WeightedEdge from to weight)
             = text "\t" <> ppr from <+> text "->" <+> ppr to <>
               text "[label=\"" <> ppr weight <> text "\",weight=\"" <>
               ppr weight <> text "\"];\n"
