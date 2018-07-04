@@ -207,7 +207,7 @@ import qualified Data.Set as Set
 -- Limiting the size of the inlined block to one guarantees we
 -- don't inline heap/stack checks for which the failure case
 maxTriangleSize :: Int
-maxTriangleSize = 0
+maxTriangleSize = 2
 
 -- | Look at X number of blocks in two chains to determine
 --   if they are "neighbours".
