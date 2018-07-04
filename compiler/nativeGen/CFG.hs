@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies, ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
--- {-# OPTIONS_GHC -fprof-auto #-}
+{-# OPTIONS_GHC -fprof-auto #-}
 
 module CFG
     ( CFG, WeightedEdge(..), addWeightEdge, delEdge, weightedEdgeList
@@ -36,12 +36,6 @@ import PprCmm ()
 
 import Data.List
 import Control.Monad
-import Control.Monad.ST
-import Data.Array.ST
-
-import Data.Array as Arr
-import Data.Array.MArray as MArr
-
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
@@ -388,7 +382,7 @@ type DepthAnCFG = EdgeInfoMap Int
 --Find back edges by BFS
 findBackEdges :: BlockId -> CFG -> Edges
 findBackEdges root cfg =
-    pprTraceIt "Backedges:" $
+    --pprTraceIt "Backedges:" $
     go setEmpty (setSingleton root)
   where
     go :: LabelSet -> LabelSet -> Edges
@@ -396,7 +390,7 @@ findBackEdges root cfg =
       | setNull blocks
       = []
       | otherwise
-      = pprTrace "Finding for" (ppr blocks) $
+      = --pprTrace "Finding for" (ppr blocks) $
         backEdges ++ go (setUnion seen newBlocks) newBlocks
       where
         alreadyVisited bid = setMember bid seen
