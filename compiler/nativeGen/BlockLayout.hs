@@ -207,7 +207,7 @@ import qualified Data.Set as Set
 -- Limiting the size of the inlined block to one guarantees we
 -- don't inline heap/stack checks for which the failure case
 maxTriangleSize :: Int
-maxTriangleSize = 2
+maxTriangleSize = 1
 
 -- | Look at X number of blocks in two chains to determine
 --   if they are "neighbours".
@@ -556,7 +556,8 @@ sequenceChain  info weights     blocks@((BasicBlock entry _):_) =
               fuseChains rankedEdges builtChains
 
         rankedEdges' =
-            filter (\edge -> not $ Set.member edge fusedEdges) rankedEdges
+            filter (\edge -> (edgeWeight edge) > 1) .
+            filter (\edge -> not $ Set.member edge fusedEdges) $ rankedEdges
 
         neighbourChains
             = {-# SCC "groupNeighbourChains" #-}
