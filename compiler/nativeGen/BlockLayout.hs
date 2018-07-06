@@ -454,8 +454,11 @@ buildChains _info succWeights blockMap blocks
                 -> ([BlockId],[BlockChain i], Set.Set (BlockId, BlockId))
         findChain block chains
         --See Note [Triangle Control Flow]
-          | Just (b,c) <- isTriangle
+          | Just (b,c) <- isTriangle --paths join up at C
           , all (not . alreadyPlaced) [b,c]
+          , Just wb <- getEdgeWeight lbl b succWeights
+          , Just wc <- getEdgeWeight lbl c succWeights
+          , wb > 1 && wc > 1 --Ignore paths if they are calls TODO: check
           , Just (BasicBlock _ ins) <- mapLookup b blockMap
           , length ins < maxTriangleSize --label;any;jmp;
           = --pprTrace "Triangle" (ppr (lbl,b,c)) $
