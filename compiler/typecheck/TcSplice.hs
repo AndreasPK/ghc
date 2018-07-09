@@ -2051,7 +2051,7 @@ reifyModule (TH.Module (TH.PkgName pkgString) (TH.ModName mString)) = do
 
 ------------------------------
 mkThAppTs :: TH.Type -> [TH.Type] -> TH.Type
-mkThAppTs fun_ty arg_tys = foldl TH.AppT fun_ty arg_tys
+mkThAppTs fun_ty arg_tys = foldl' TH.AppT fun_ty arg_tys
 
 noTH :: LitString -> SDoc -> TcM a
 noTH s d = failWithTc (hsep [text "Can't represent" <+> ptext s <+>

@@ -657,7 +657,7 @@ ds_expr _ expr@(RecordUpd { rupd_expr = record_expr, rupd_flds = fields
                         mkWpTyApps    [ ty
                                       | (tv, ty) <- univ_tvs `zip` out_inst_tys
                                       , not (tv `elemVarEnv` wrap_subst) ]
-                 rhs = foldl (\a b -> nlHsApp a b) inst_con val_args
+                 rhs = foldl' (\a b -> nlHsApp a b) inst_con val_args
 
                         -- Tediously wrap the application in a cast
                         -- Note [Update for GADTs]
