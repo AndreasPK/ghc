@@ -82,6 +82,7 @@ import qualified GHC.LanguageExtensions as LangExt
 import TcEvidence
 
 import Control.Monad    ( zipWithM )
+
 {-
 ************************************************************************
 *                                                                      *
