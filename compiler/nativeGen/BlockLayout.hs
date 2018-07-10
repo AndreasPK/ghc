@@ -38,6 +38,18 @@ import Hoopl.Graph
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 
+dropJumps :: forall a i. Instruction i => LabelMap a -> [GenBasicBlock i]
+          -> [GenBasicBlock i]
+dropJumps _    [] = []
+dropJumps info ((BasicBlock lbl ins):todo)
+    | [dest] <- jumpDestsOfInstr (last ins)
+    , ((BasicBlock nextLbl _) : _) <- todo
+    , not (mapMember dest info)
+    , nextLbl == dest
+    = BasicBlock lbl (init ins) : dropJumps info todo
+    | otherwise
+    = BasicBlock lbl ins : dropJumps info todo
+
 
 -- -----------------------------------------------------------------------------
 -- Sequencing the basic blocks
@@ -85,7 +97,9 @@ sequenceBlocks
 
 sequenceBlocks _ edgeWeights _ [] = []
 sequenceBlocks useWeights edgeWeights infos (entry:blocks) =
-  seqBlocks infos (mkNode useWeights edgeWeights entry : reverse (flattenSCCs (sccBlocks useWeights edgeWeights blocks)))
+    dropJumps infos .
+    seqBlocks infos $ (mkNode useWeights edgeWeights entry :
+                       reverse (flattenSCCs (sccBlocks useWeights edgeWeights blocks)))
   -- the first block is the entry point ==> it must remain at the start.
 
 
