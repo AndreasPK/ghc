@@ -11,19 +11,20 @@ module CFG
     , filterEdges
 
     --Find backedges and update their weight
-    , increaseBackEdgeWeight )
+    , optimizeCFG , increaseBackEdgeWeight )
 where
 
 import GhcPrelude
 
 import BlockId
-import Cmm
+import Cmm (RawCmmDecl, GenCmmDecl( .. ), CmmBlock, succ, g_entry)
+import CmmNode
 import CmmUtils
 import CmmSwitch
 import Hoopl.Collections
 import Hoopl.Label
 import Hoopl.Block
-import Hoopl.Graph
+import qualified Hoopl.Graph as G
 
 import Util
 
@@ -31,16 +32,27 @@ import Outputable
 -- DEBUGGING ONLY
 --import Debug
 --import OrdList
-import Debug.Trace
+--import Debug.Trace
 import PprCmm ()
 
 import Data.List
-import Control.Monad
 
 import qualified Data.Map.Strict as M
-import qualified Data.Set as Set
 
-
+--List of weights
+uncondWeight, condBranchWeight, switchWeight, callWeight :: Int
+likelyCondWeight, unlikelyCondWeight, infoTablePenalty :: Int
+-- | Weight for unconditional jumps
+uncondWeight = 1000
+-- | Weight for regular if/else branches
+condBranchWeight = 800
+-- | If likely = True/False
+likelyCondWeight = 900
+unlikelyCondWeight = 50
+switchWeight = 100
+callWeight = 0
+-- | We penalize info tables since they require a jump instruction
+infoTablePenalty = 850
 
 type Edge = (BlockId, BlockId)
 type Edges = [Edge]
@@ -132,8 +144,8 @@ See Note [What is shortcutting] in the control flow optimization
 for a explanation on shortcutting.
 -}
 shortcutWeightMap :: CFG -> LabelMap (Maybe BlockId) -> CFG
-shortcutWeightMap m cuts =
-  foldl' applyMapping m $ mapToList cuts
+shortcutWeightMap cfg cuts =
+  foldl' applyMapping cfg $ mapToList cuts
     where     -- B -> C
       applyMapping :: CFG -> (BlockId,Maybe BlockId) -> CFG
       applyMapping m (from, Nothing) =
@@ -154,18 +166,20 @@ shortcutWeightMap m cuts =
 -- | Sometimes we insert a block which should unconditionally be executed
 --   after a given block. This function updates the CFG for these cases.
 addImmediateSuccessor :: BlockId -> BlockId -> CFG -> CFG
-addImmediateSuccessor node follower m
-    = updateEdges . addWeightEdge node follower 100 $ m
+addImmediateSuccessor node follower cfg
+    = updateEdges . addWeightEdge node follower 100 $ cfg
     where
         successors = map fst targets :: [BlockId]
-        targets = getBlockTargets m node
+        targets = getBlockTargets cfg node
         updateEdges = addNewSuccs . remOldSuccs
         remOldSuccs m = foldl' (flip (delEdge node)) m successors
-        addNewSuccs m = foldl' (\m (t,w) -> addWeightEdge follower t w m) m targets
+        addNewSuccs m = foldl' (\m' (t,w) -> addWeightEdge follower t w m') m targets
 
+-- | Adds a edge with the given weight to the cfg
+--   If there already existed an edge it is overwritten.
 addWeightEdge :: BlockId -> BlockId -> Int -> CFG -> CFG
-addWeightEdge from to weight m =
-    M.alter addDest from m
+addWeightEdge from to weight cfg =
+    M.alter addDest from cfg
     where
         addDest Nothing = Just $ M.singleton to weight
         addDest (Just wm) = Just $ M.insert to weight wm
@@ -181,8 +195,8 @@ delEdge from to m =
 getOutgoingEdges :: CFG -> BlockId -> [(Label,Int)]
 getOutgoingEdges m bid =
     let destMap = M.findWithDefault M.empty bid m
-        edges = M.toList destMap
-        sortedEdges = sortWith (negate . snd) edges
+        cfgEdges = M.toList destMap
+        sortedEdges = sortWith (negate . snd) cfgEdges
     in  --pprTrace "getOutgoingEdges" (ppr bid <+> text "map:" <+> ppr m)
         sortedEdges
 
@@ -202,9 +216,9 @@ getOutNodes from cfg
     = []
 
 reverseEdges :: CFG -> CFG
-reverseEdges m = foldr add M.empty flatElems
+reverseEdges cfg = foldr add M.empty flatElems
     where
-        elems = M.toList $ fmap M.toList m :: [(BlockId,[(BlockId,Int)])]
+        elems = M.toList $ fmap M.toList cfg :: [(BlockId,[(BlockId,Int)])]
         flatElems =
             concatMap (\(from,ws) -> map (\(to,w) -> (to,from,w)) ws ) elems
         add (to,from,w) m = addWeightEdge to from w m
@@ -244,12 +258,22 @@ pprEdgeWeights m =
         (foldl' (<>) empty (map printNode $ M.keys m)) <>
     text "}\n"
 
+{-# INLINE updateEdgeWeight #-} --Allows eliminating the tuple when possible
 updateEdgeWeight :: (Int -> Int) -> Edge -> CFG -> CFG
 updateEdgeWeight f (from, to) cfg
     | Just oldWeight <- getEdgeWeight from to cfg
     = addWeightEdge from to (f oldWeight) cfg
     | otherwise
     = panic "Trying to update invalid edge"
+
+mapWeights :: (BlockId -> BlockId -> Int -> Int) -> CFG -> CFG
+mapWeights f cfg =
+  foldl' (\cfg (WeightedEdge from to w)
+            -> addWeightEdge from to (f from to w) cfg)
+          cfg (weightedEdgeList cfg)
+
+
+
 
 -- | Update entries based on info:
 --   (A,B,C)
@@ -335,7 +359,7 @@ getCFG (CmmData {}) = M.empty
 getCFG (CmmProc info _lab _live graph) =
   foldl' insertEdge nodes $ concatMap weightedEdges blocks
   where
-    nodes = M.fromList $ zip (map entryLabel blocks) (repeat M.empty)
+    nodes = M.fromList $ zip (map G.entryLabel blocks) (repeat M.empty)
     insertEdge :: CFG -> ((Label,Label),Int) -> CFG
     insertEdge m ((from,to),weight) =
       M.alter f from m
@@ -346,30 +370,27 @@ getCFG (CmmProc info _lab _live graph) =
     weightedEdges :: CmmBlock -> [((Label,Label),Int)]
     weightedEdges block =
       case branch of
-        CmmBranch dest
-          --Penalize info tables since they prevent eliminating
-          --the jump
-          | mapMember dest info -> [((bid,dest),60)]
-          | otherwise           -> [((bid,dest),100)]
+        CmmBranch dest -> [((bid,dest),uncondWeight)]
         CmmCondBranch _c t f l
-          -- Prefer false branch to keep in line with old
-          -- layout algorithm.
-          | l == Nothing -> [((bid,f),51),((bid,t),49)]
-          | l == Just True -> [((bid,f),10),((bid,t),90)]
-          | l == Just False -> [((bid,t),10),((bid,f),90)]
-        (CmmSwitch _e ids) -> map (\x -> ((bid,x),5)) $ switchTargetsToList ids
-        --Calls naturally break control flow, so don't try and keep
-        --the return address in sequence
-        (CmmCall { cml_cont = Just cont})  -> [((bid,cont),0)]
-        (CmmForeignCall {Cmm.succ = cont}) -> [((bid,cont),0)]
+          -- Wee add +1 to the false branch since only the false branch
+          -- can be made a Fallthrough. (See stmtToInstrs in X86.CodeGen)
+          | l == Nothing -> [((bid,f),condBranchWeight+1),
+                             ((bid,t),condBranchWeight-1)]
+          | l == Just True -> [((bid,f),unlikelyCondWeight+1),
+                               ((bid,t),likelyCondWeight-1)]
+          | l == Just False -> [((bid,f),likelyCondWeight+1),
+                                ((bid,t),unlikelyCondWeight-1)]
+        (CmmSwitch _e ids) -> map (\x -> ((bid,x),switchWeight)) $ switchTargetsToList ids
+        (CmmCall { cml_cont = Just cont})  -> [((bid,cont),callWeight)]
+        (CmmForeignCall {Cmm.succ = cont}) -> [((bid,cont),callWeight)]
         (CmmCall { cml_cont = Nothing })  -> []
         other ->
-            --pprTrace "Unkown successor cause:"
-            --    (ppr branch <+> text "=>" <> ppr (successors other)) $
-            map (\x -> ((bid,x),5)) $ successors other
+            pprTrace "Unkown successor cause:"
+                (ppr branch <+> text "=>" <> ppr (G.successors other)) $
+            map (\x -> ((bid,x),0)) $ G.successors other
       where
         branch = lastNode block :: CmmNode O C
-        bid = entryLabel block
+        bid = G.entryLabel block
 
     blocks = revPostorder graph :: [CmmBlock]
 
@@ -412,7 +433,22 @@ increaseBackEdgeWeight root cfg =
         update weight
           --Keep irrelevant edges irrelevant
           | weight <= 0 = 0
-          | otherwise = weight + 60
+          | otherwise = weight + 400
     in  --const cfg $
         foldl'   (\cfg edge -> updateEdgeWeight update edge cfg)
                 cfg backedges
+
+
+optimizeCFG :: RawCmmDecl -> CFG -> CFG
+optimizeCFG (CmmData {}) cfg = cfg
+optimizeCFG (CmmProc info _lab _live graph) cfg =
+    penalizeInfoTables info .
+    increaseBackEdgeWeight (g_entry graph) $ cfg
+
+penalizeInfoTables :: LabelMap a -> CFG -> CFG
+penalizeInfoTables info cfg =
+    mapWeights fupdate cfg
+  where
+    fupdate _ to weight
+      | mapMember to info = weight - infoTablePenalty
+      | otherwise = weight

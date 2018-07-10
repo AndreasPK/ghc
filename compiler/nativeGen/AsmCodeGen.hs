@@ -750,11 +750,6 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 , ppr_raStatsLinear
                 , unwinds )
 
-optimizeCFG :: RawCmmDecl -> CFG -> CFG
-optimizeCFG (CmmData {}) cfg = cfg
-optimizeCFG (CmmProc info _lab _live graph) cfg =
-    increaseBackEdgeWeight (g_entry graph) cfg
-
 x86fp_kludge :: NatCmmDecl (Alignment, CmmStatics) X86.Instr.Instr -> NatCmmDecl (Alignment, CmmStatics) X86.Instr.Instr
 x86fp_kludge top@(CmmData _ _) = top
 x86fp_kludge (CmmProc info lbl live (ListGraph code)) =
