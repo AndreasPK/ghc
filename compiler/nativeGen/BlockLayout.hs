@@ -42,7 +42,8 @@ dropJumps :: forall a i. Instruction i => LabelMap a -> [GenBasicBlock i]
           -> [GenBasicBlock i]
 dropJumps _    [] = []
 dropJumps info ((BasicBlock lbl ins):todo)
-    | [dest] <- jumpDestsOfInstr (last ins)
+    | not . null $ ins
+    , [dest] <- jumpDestsOfInstr (last ins)
     , ((BasicBlock nextLbl _) : _) <- todo
     , not (mapMember dest info)
     , nextLbl == dest
