@@ -52,7 +52,7 @@ unlikelyCondWeight = 50
 switchWeight = 100
 callWeight = 0
 -- | We penalize info tables since they require a jump instruction
-infoTablePenalty = 850
+infoTablePenalty = 3000
 
 type Edge = (BlockId, BlockId)
 type Edges = [Edge]
