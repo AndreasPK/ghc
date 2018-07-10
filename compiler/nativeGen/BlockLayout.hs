@@ -102,7 +102,7 @@ sequenceBlocks useWeights edgeWeights infos (entry:blocks) =
                     (flattenSCCs (sccBlocks useWeights edgeWeights blocks))
         seqAlgo
           | useWeights = dropJumps infos . seqBlocks infos
-          | otherwise = seqBlocksOld infos
+          | otherwise = dropJumps infos . seqBlocksOld infos
     in seqAlgo ( entryNode : bodyNodes)
   -- the first block is the entry point ==> it must remain at the start.
 
