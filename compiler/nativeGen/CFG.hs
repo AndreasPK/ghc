@@ -177,7 +177,7 @@ delEdge from to m =
         remDest Nothing = Nothing
         remDest (Just wm) = Just $ M.delete to wm
 
--- | Destinations from bid ordered by weight
+-- | Destinations from bid ordered by weight (descending)
 getOutgoingEdges :: CFG -> BlockId -> [(Label,Int)]
 getOutgoingEdges m bid =
     let destMap = M.findWithDefault M.empty bid m
