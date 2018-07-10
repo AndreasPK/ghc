@@ -97,9 +97,13 @@ sequenceBlocks
 
 sequenceBlocks _ edgeWeights _ [] = []
 sequenceBlocks useWeights edgeWeights infos (entry:blocks) =
-    dropJumps infos .
-    seqBlocks infos $ (mkNode useWeights edgeWeights entry :
-                       reverse (flattenSCCs (sccBlocks useWeights edgeWeights blocks)))
+    let entryNode = mkNode useWeights edgeWeights entry
+        bodyNodes = reverse
+                    (flattenSCCs (sccBlocks useWeights edgeWeights blocks))
+        seqAlgo
+          | useWeights = dropJumps infos . seqBlocks infos
+          | otherwise = seqBlocksOld infos
+    in seqAlgo ( entryNode : bodyNodes)
   -- the first block is the entry point ==> it must remain at the start.
 
 
@@ -107,7 +111,6 @@ sccBlocks
         :: Instruction instr
         => Bool -> CFG -> [NatBasicBlock instr]
         -> [SCC (Node BlockId (NatBasicBlock instr))]
-
 sccBlocks useWeights edgeWeights blocks = stronglyConnCompFromEdgedVerticesUniqR (map (mkNode useWeights edgeWeights) blocks)
 
 mkNode :: (Instruction t)
@@ -135,6 +138,36 @@ mkNode useWeights edgeWeights block@(BasicBlock id instrs) =
 seqBlocks :: LabelMap i -> [Node BlockId (GenBasicBlock t1)]
                         -> [GenBasicBlock t1]
 seqBlocks infos blocks = placeNext pullable0 todo0
+  where
+    -- pullable: Blocks that are not yet placed
+    -- todo:     Original order of blocks, to be followed if we have no good
+    --           reason not to;
+    --           may include blocks that have already been placed, but then
+    --           these are not in pullable
+    pullable0 = listToUFM [ (i,(b,n)) | DigraphNode b i n <- blocks ]
+    todo0     = map node_key blocks
+
+    placeNext _ [] = []
+    placeNext pullable (i:rest)
+        | Just (block, pullable') <- lookupDeleteUFM pullable i
+        = place pullable' rest block
+        | otherwise
+        -- We already placed this block, so ignore
+        = placeNext pullable rest
+
+    place pullable todo (block,[])
+                          = block : placeNext pullable todo
+    place pullable todo (block@(BasicBlock id instrs),[next])
+        | Just (nextBlock, pullable') <- lookupDeleteUFM pullable next
+        = BasicBlock id instrs : place pullable' todo nextBlock
+        | otherwise
+        = block : placeNext pullable todo
+    place _ _ (_,tooManyNextNodes)
+        = pprPanic "seqBlocks" (ppr tooManyNextNodes)
+
+seqBlocksOld :: LabelMap i -> [Node BlockId (GenBasicBlock t1)]
+                        -> [GenBasicBlock t1]
+seqBlocksOld infos blocks = placeNext pullable0 todo0
   where
     -- pullable: Blocks that are not yet placed
     -- todo:     Original order of blocks, to be followed if we have no good
