@@ -223,10 +223,12 @@ reverseEdges cfg = foldr add M.empty flatElems
             concatMap (\(from,ws) -> map (\(to,w) -> (to,from,w)) ws ) elems
         add (to,from,w) m = addWeightEdge to from w m
 
+{-
 edges :: CFG -> [(BlockId,BlockId)]
 edges = concatMap
             (\(pred,succs) -> map (\to -> (pred, to)) (M.keys succs)
             ) . M.toList
+-}
 
 -- | Returns a unordered list of all edges with weights
 weightedEdgeList :: CFG -> [WeightedEdge]
@@ -356,7 +358,7 @@ addNodeBetween m updates =
 -- | Generate weights for a Cmm proc based on some simple heuristics.
 getCFG :: RawCmmDecl -> CFG
 getCFG (CmmData {}) = M.empty
-getCFG (CmmProc info _lab _live graph) =
+getCFG (CmmProc _info _lab _live graph) =
   foldl' insertEdge nodes $ concatMap weightedEdges blocks
   where
     nodes = M.fromList $ zip (map G.entryLabel blocks) (repeat M.empty)
