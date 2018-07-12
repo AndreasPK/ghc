@@ -698,8 +698,8 @@ mkForAllCos :: [(TyVar, Coercion)] -> Coercion -> Coercion
 mkForAllCos bndrs (Refl r ty)
   = let (refls_rev'd, non_refls_rev'd) = span (isReflCo . snd) (reverse bndrs) in
     foldl' (flip $ uncurry ForAllCo)
-          (Refl r $ mkInvForAllTys (reverse (map fst refls_rev'd)) ty)
-          non_refls_rev'd
+           (Refl r $ mkInvForAllTys (reverse (map fst refls_rev'd)) ty)
+           non_refls_rev'd
 mkForAllCos bndrs co = foldr (uncurry ForAllCo) co bndrs
 
 -- | Make a Coercion quantified over a type variable;

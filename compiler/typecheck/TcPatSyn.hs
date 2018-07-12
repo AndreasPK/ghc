@@ -927,7 +927,7 @@ tcPatToExpr name args pat = go pat
     mkPrefixConExpr lcon@(L loc _) pats
       = do { exprs <- mapM go pats
            ; return (foldl' (\x y -> HsApp noExt (L loc x) y)
-                           (HsVar noExt lcon) exprs) }
+                            (HsVar noExt lcon) exprs) }
 
     mkRecordConExpr :: Located Name -> HsRecFields GhcRn (LPat GhcRn)
                     -> Either MsgDoc (HsExpr GhcRn)
