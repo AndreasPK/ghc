@@ -1374,8 +1374,8 @@ getCondCode (CmmMachOp mop [x, y])
       MO_F_Ne W64 -> condFltCode NE  x y
       MO_F_Gt W64 -> condFltCode GTT x y
       MO_F_Ge W64 -> condFltCode GE  x y
-      MO_F_Lt W64 -> condFltCode GE  y x
-      MO_F_Le W64 -> condFltCode GTT y x
+      MO_F_Lt W64 -> condFltCode GTT y x
+      MO_F_Le W64 -> condFltCode GE  y x
 
       _ -> condIntCode (machOpToCond mop) x y
 
