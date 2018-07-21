@@ -1680,6 +1680,14 @@ genCondJump' _ id bool = do
                         NE  -> or_unordered
                         GU  -> plain_test
                         GEU -> plain_test
+                        -- Use ASSERT so we don't break releases if
+                        -- LTT/LE creep in somehow.
+                        LTT ->
+                          ASSERT2 (False, ppr "Should have been turned into >")
+                          and_ordered
+                        LE  ->
+                          ASSERT2 (False, ppr "Should have been turned into >=")
+                          and_ordered
                         _   -> and_ordered
 
             plain_test = unitOL (
@@ -2961,6 +2969,11 @@ condFltReg is32Bit cond x y = if_sse2 condFltReg_sse2 condFltReg_x87
                 NE  -> or_unordered dst
                 GU  -> plain_test   dst
                 GEU -> plain_test   dst
+                -- Use ASSERT so we don't break releases if these creep in.
+                LTT -> ASSERT2 (False, ppr "Should have been turned into >")
+                       and_ordered  dst
+                LE  -> ASSERT2 (False, ppr "Should have been turned into >=")
+                       and_ordered  dst
                 _   -> and_ordered  dst)
 
         plain_test dst = toOL [
