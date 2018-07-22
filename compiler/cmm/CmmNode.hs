@@ -80,8 +80,9 @@ data CmmNode e x where
   --Invariant: There is no true dependency in the list of assignments.
   CmmCondAssign :: {
     cca_cond :: !CmmExpr,    -- ^ Condition
-    cca_assignments :: [(CmmReg, BranchInfo CmmExpr)]
-                -- ^ List of assignments
+    cca_assignments :: [(CmmReg, BranchInfo CmmExpr, Bool)]
+                -- ^ List of assignments and marker if the assignment
+                -- was live before branching
     } -> CmmNode O O
     -- ^ Conditional assignments to registers
 
@@ -380,7 +381,7 @@ instance UserOfRegs LocalReg (CmmNode e x) where
   foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
     CmmCondAssign cond ass ->
-      fold f (fold f z cond) $ map snd ass
+      fold f (fold f z cond) $ map sndOf3 ass
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
     CmmCondBranch expr _ _ _ -> fold f z expr
@@ -396,7 +397,7 @@ instance UserOfRegs GlobalReg (CmmNode e x) where
   foldRegsUsed dflags f !z n = case n of
     CmmAssign _ expr -> fold f z expr
     CmmCondAssign cond ass ->
-      fold f (fold f z cond) $ map snd ass
+      fold f (fold f z cond) $ map sndOf3 ass
     CmmStore addr rval -> fold f (fold f z addr) rval
     CmmUnsafeForeignCall t _ args -> fold f (fold f z t) args
     CmmCondBranch expr _ _ _ -> fold f z expr
@@ -417,7 +418,7 @@ instance (Ord r, UserOfRegs r CmmReg) => UserOfRegs r ForeignTarget where
 instance DefinerOfRegs LocalReg (CmmNode e x) where
   foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
-    CmmCondAssign _ assignments -> fold f z $ map fst assignments
+    CmmCondAssign _ assignments -> fold f z $ map fstOf3 assignments
     CmmUnsafeForeignCall _ fs _ -> fold f z fs
     CmmForeignCall {res=res} -> fold f z res
     _ -> z
@@ -428,7 +429,7 @@ instance DefinerOfRegs LocalReg (CmmNode e x) where
 instance DefinerOfRegs GlobalReg (CmmNode e x) where
   foldRegsDefd dflags f !z n = case n of
     CmmAssign lhs _ -> fold f z lhs
-    CmmCondAssign _ assignments -> fold f z $ map fst assignments
+    CmmCondAssign _ assignments -> fold f z $ map fstOf3 assignments
     CmmUnsafeForeignCall tgt _ _  -> fold f z (foreignTargetRegs tgt)
     CmmCall        {} -> fold f z activeRegs
     CmmForeignCall {} -> fold f z activeRegs
@@ -536,7 +537,7 @@ mapExp _ m@(CmmTick _)                           = m
 mapExp f   (CmmUnwind regs)                      = CmmUnwind (map (fmap (fmap f)) regs)
 mapExp f   (CmmAssign r e)                       = CmmAssign r (f e)
 mapExp f   (CmmCondAssign cond values)         =
-  CmmCondAssign (f cond) $ map (second (fmap f)) values
+  CmmCondAssign (f cond) $ map (snd3 (fmap f)) values
 mapExp f   (CmmStore addr e)                     = CmmStore (f addr) (f e)
 mapExp f   (CmmUnsafeForeignCall tgt fs as)      = CmmUnsafeForeignCall (mapForeignTarget f tgt) fs (map f as)
 mapExp _ l@(CmmBranch _)                         = l
@@ -569,7 +570,7 @@ mapExpM _ (CmmTick _)               = Nothing
 mapExpM f (CmmUnwind regs)          = CmmUnwind `fmap` mapM (\(r,e) -> mapM f e >>= \e' -> pure (r,e')) regs
 mapExpM f (CmmAssign r e)           = CmmAssign r `fmap` f e
 mapExpM f (CmmCondAssign cond assignments) = do
-  ass <- mapM (bimapM (return) (traverse f)) assignments
+  ass <- mapM (second3M (traverse f)) assignments
   cond' <- f cond
   return $! (CmmCondAssign cond' ass)
 mapExpM f (CmmStore addr e)         = (\[addr', e'] -> CmmStore addr' e') `fmap` mapListM f [addr, e]
@@ -626,7 +627,7 @@ foldExp _ (CmmTick {}) z                          = z
 foldExp f (CmmUnwind xs) z                        = foldr (maybe id f) z (map snd xs)
 foldExp f (CmmAssign _ e) z                       = f e z
 foldExp f (CmmCondAssign e s) z                 = foldr f (f e z) $
-                                                    concatMap (toList . snd) s
+                                                    concatMap (toList . sndOf3) s
 foldExp f (CmmStore addr e) z                     = f addr $ f e z
 foldExp f (CmmUnsafeForeignCall t _ as) z         = foldr f (foldExpForeignTarget f t z) as
 foldExp _ (CmmBranch _) z                         = z

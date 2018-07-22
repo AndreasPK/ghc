@@ -1125,7 +1125,10 @@ data DynFlags = DynFlags {
 
   -- | Unique supply configuration for testing build determinism
   initialUnique         :: Int,
-  uniqueIncrement       :: Int
+  uniqueIncrement       :: Int,
+
+  -- | Limit number of expressions conditionally assigned
+  maxCmovCost :: Int
 }
 
 class HasDynFlags m where
@@ -1932,7 +1935,9 @@ defaultDynFlags mySettings (myLlvmTargets, myLlvmPasses) =
         uniqueIncrement = 1,
 
         reverseErrors = False,
-        maxErrors     = Nothing
+        maxErrors     = Nothing,
+
+        maxCmovCost   = 30
       }
 
 defaultWays :: Settings -> [Way]
@@ -3277,6 +3282,10 @@ dynamic_flags_deps = [
         (noArg (flip dopt_unset Opt_D_no_debug_output))
   , make_ord_flag defGhcFlag "dno-debug-output"
         (setDumpFlag Opt_D_no_debug_output)
+
+-- Temporary for benchmarking
+  , make_ord_flag defFlag "fcmov-max-expr"
+      (intSuffix (\n d -> d { maxCmovCost = n }))
 
         ------ Machine dependent (-m<blah>) stuff ---------------------------
 

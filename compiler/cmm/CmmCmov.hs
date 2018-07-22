@@ -5,6 +5,8 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, InstanceSigs #-}
 
+{-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
+
 module CmmCmov
     (BranchInfo(..), cmmIfToCmov)
 where
@@ -68,6 +70,7 @@ If yes -> Try to turn them into conditional moves:
 
 
 cmmIfToCmov :: DynFlags -> CmmDecl -> UniqSM CmmDecl
+--cmmIfToCmov dflags proc@(CmmProc info lbl live graph) = return proc
 cmmIfToCmov dflags (CmmProc info lbl live graph) = do
 
     --Try to combine split control flow using cmov
@@ -247,29 +250,38 @@ mkCmov dflags cond true' false' = do
         getAssignmentInfo info
             = pprPanic "cmov assignment info not supported for " $ ppr info
 
+data CmovCheckInfo
+    = CheckInfo
+    { localRegs :: !(RegSet LocalReg)
+    , globalRegs :: !(RegSet GlobalReg)
+    , estimatedCost :: !Int
+    } deriving (Eq)
 
 -- | Check the pairings
 -- We rule out true dependencies between the assignments when executed in order
 -- as well as between the assignments and the condition.
+-- We also filter out cases with too expensive expressions or assignments to memory
 checkDependencies :: DynFlags -> CmmExpr -> [BranchInfo (CmmNode O O)]
                   -> Either FastString ()
 checkDependencies dflags cond pairs
-    = go pairs (S.empty, S.empty)
+    = go pairs (CheckInfo S.empty S.empty 0)
   where
+    maxCost = maxCmovCost dflags
     condLocalRegs = foldRegsUsed dflags extendRegSet emptyRegSet cond
     condGlobalRegs = foldRegsUsed dflags extendRegSet emptyRegSet cond
 
-    go :: [BranchInfo (CmmNode O O)] -> (RegSet LocalReg, RegSet GlobalReg)
+    go :: [BranchInfo (CmmNode O O)] -> CmovCheckInfo
        -> Either FastString ()
-    go [] (localAss, globalAss)
+    go [] (CheckInfo localAss globalAss cost)
       | condConflict = Left $ fsLit "Assignment <-> Cond conflict"
+      | cost > maxCost = Left $ fsLit "Expression cost too high"
       | otherwise = Right ()
       where
         setsConflict s1 s2 = not . nullRegSet $ timesRegSet s1 s2
         condConflict = setsConflict condLocalRegs localAss ||
                        setsConflict condGlobalRegs globalAss
 
-    go (mr : ms) (localAss, globalAss)
+    go (mr : ms) (CheckInfo localAss globalAss cost)
       | not (all isAssign mr)
       = Left $ fsLit "Store"
       | any floatType mr
@@ -278,8 +290,11 @@ checkDependencies dflags cond pairs
       = Left $ fsLit "Global Register Dependency"
       | localConflict
       = Left $ fsLit "Local Variable Dependency"
+      | cost > maxCost
+      = Left $ fsLit "Expression cost too high"
       | otherwise
-      = go ms (plusRegSet localDefd localAss, plusRegSet globalDefd globalAss)
+      = go ms (CheckInfo (plusRegSet localDefd localAss)
+                         (plusRegSet globalDefd globalAss) (cost + biCost))
 
       where
         localConflict = not . nullRegSet $ timesRegSet localAss localRead
@@ -294,6 +309,11 @@ checkDependencies dflags cond pairs
           = foldLocalRegsUsed dflags extendRegSet emptyRegSet mr
         (globalRead :: GlobalRegSet)
           = foldRegsUsed dflags extendRegSet emptyRegSet mr
+        biCost = foldl' (\r n -> r + nodeCost n) 0 mr
+        nodeCost :: CmmNode O O -> Int
+        nodeCost (CmmAssign _to expr) = exprCost expr
+        nodeCost (CmmStore to expr) = 5 + exprCost to + exprCost expr
+        nodeCost n = pprPanic "Invalid node:" (ppr n)
 
     floatType :: CmmNode O O -> Bool
     floatType (CmmAssign r _e)  =
@@ -310,6 +330,62 @@ checkDependencies dflags cond pairs
     isAssign (CmmAssign {})   = True
     isAssign _other          = False
 
+-- | An estimate of the overhead caused by unneccesary
+--   evaluation of the expression at the CPU level.
+exprCost :: CmmExpr -> Int
+exprCost (CmmLit {}) = 1
+exprCost (CmmLoad e _) = 3 + exprCost e -- Can increase cache pressure
+exprCost (CmmReg {}) = 1
+exprCost (CmmStackSlot {}) = 1
+exprCost (CmmRegOff {}) = 2
+exprCost (CmmMachOp mo exprs) =
+    mcost mo + (sum . map exprCost $ exprs)
+  where
+    mcost (MO_Add {}) = 1
+    mcost (MO_Sub {}) = 1
+    mcost (MO_Eq {}) = 1
+    mcost (MO_Ne {}) = 1
+    mcost (MO_Mul {}) = 3
+
+    mcost (MO_S_MulMayOflo {}) = 3
+    mcost (MO_S_Neg {}) = 1
+
+    mcost (MO_S_Ge {}) = 1
+    mcost (MO_S_Le {}) = 1
+    mcost (MO_S_Gt {}) = 1
+    mcost (MO_S_Lt {}) = 1
+    mcost (MO_U_Ge {}) = 1
+    mcost (MO_U_Le {}) = 1
+    mcost (MO_U_Gt {}) = 1
+    mcost (MO_U_Lt {}) = 1
+
+    mcost (MO_F_Add {}) = 2
+    mcost (MO_F_Sub {}) = 2
+    mcost (MO_F_Neg {}) = 1
+    mcost (MO_F_Mul {}) = 5
+
+    mcost (MO_F_Eq {}) = 2
+    mcost (MO_F_Ne {}) = 2
+    mcost (MO_F_Ge {}) = 2
+    mcost (MO_F_Le {}) = 2
+    mcost (MO_F_Gt {}) = 2
+    mcost (MO_F_Lt {}) = 2
+
+    mcost (MO_And {}) = 1
+    mcost (MO_Or {}) = 1
+    mcost (MO_Xor {}) = 1
+    mcost (MO_Not {}) = 1
+    mcost (MO_Shl {}) = 1
+    mcost (MO_U_Shr {}) = 1
+    mcost (MO_S_Shr {}) = 1
+    mcost (MO_SF_Conv {}) = 1
+    mcost (MO_FS_Conv {}) = 1
+    mcost (MO_SS_Conv {}) = 0
+    mcost (MO_UU_Conv {}) = 0
+    mcost (MO_FF_Conv {}) = 0
+
+    --Expensive things
+    mcost _ = 1000
 
 
 -- We have list of stores/assignments we try to match up based on their
