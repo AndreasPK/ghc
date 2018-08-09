@@ -1683,10 +1683,10 @@ genCondJump' _ id bool = do
                         -- Use ASSERT so we don't break releases if
                         -- LTT/LE creep in somehow.
                         LTT ->
-                          ASSERT2 (False, ppr "Should have been turned into >")
+                          ASSERT2(False, ppr "Should have been turned into >")
                           and_ordered
                         LE  ->
-                          ASSERT2 (False, ppr "Should have been turned into >=")
+                          ASSERT2(False, ppr "Should have been turned into >=")
                           and_ordered
                         _   -> and_ordered
 
@@ -2970,9 +2970,9 @@ condFltReg is32Bit cond x y = if_sse2 condFltReg_sse2 condFltReg_x87
                 GU  -> plain_test   dst
                 GEU -> plain_test   dst
                 -- Use ASSERT so we don't break releases if these creep in.
-                LTT -> ASSERT2 (False, ppr "Should have been turned into >")
+                LTT -> ASSERT2(False, ppr "Should have been turned into >")
                        and_ordered  dst
-                LE  -> ASSERT2 (False, ppr "Should have been turned into >=")
+                LE  -> ASSERT2(False, ppr "Should have been turned into >=")
                        and_ordered  dst
                 _   -> and_ordered  dst)
 
