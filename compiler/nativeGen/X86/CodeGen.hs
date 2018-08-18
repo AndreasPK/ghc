@@ -2969,11 +2969,12 @@ condIntReg cond x y = do
 -- We can avoid this by exchanging the arguments and inverting the direction
 -- of the comparison. This results in the sequence of:
 --
--- 	ucomiss %xmm1,%xmm2
+--  ucomiss %xmm1,%xmm2
 --  ja _c2g2
 --  jmp _c2g1
 --
--- Removing the jump reduces the pressure on the branch predidiction system and plays better with the uOP cache.
+-- Removing the jump reduces the pressure on the branch predidiction system
+-- and plays better with the uOP cache.
 
 condFltReg :: Bool -> Cond -> CmmExpr -> CmmExpr -> NatM Register
 condFltReg is32Bit cond x y = if_sse2 condFltReg_sse2 condFltReg_x87
