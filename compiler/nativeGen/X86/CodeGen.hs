@@ -750,6 +750,7 @@ getRegister' _ is32Bit (CmmMachOp mop [x, y]) = do -- dyadic MachOps
       MO_F_Ne _ -> condFltReg is32Bit NE  x y
       MO_F_Gt _ -> condFltReg is32Bit GTT x y
       MO_F_Ge _ -> condFltReg is32Bit GE  x y
+      -- Invert comparison condition and swap operands
       -- See Note [SSE Parity Checks]
       MO_F_Lt _ -> condFltReg is32Bit GTT  y x
       MO_F_Le _ -> condFltReg is32Bit GE   y x
@@ -1366,6 +1367,7 @@ getCondCode (CmmMachOp mop [x, y])
       MO_F_Ne W32 -> condFltCode NE  x y
       MO_F_Gt W32 -> condFltCode GTT x y
       MO_F_Ge W32 -> condFltCode GE  x y
+      -- Invert comparison condition and swap operands
       -- See Note [SSE Parity Checks]
       MO_F_Lt W32 -> condFltCode GTT  y x
       MO_F_Le W32 -> condFltCode GE   y x
@@ -2939,11 +2941,39 @@ condIntReg cond x y = do
 -- for < and <= as well. If any of the arguments is an NaN we
 -- return false either way. If both arguments are valid then
 -- x <= y  <->  y >= x  holds. So it's safe to swap these.
-
+--
 -- We invert the condition inside getRegister'and  getCondCode
 -- which should cover all invertable cases.
--- All other relevant functions should call these in the end.
-
+-- All other functions translating FP comparisons to assembly
+-- use these to two generate the comparison code.
+--
+-- As an example consider a simple check:
+--
+-- func :: Float -> Float -> Int
+-- func x y = if x < y then 1 else 0
+--
+-- Which in Cmm gives the floating point comparison.
+--
+--  if (%MO_F_Lt_W32(F1, F2)) goto c2gg; else goto c2gf;
+--
+-- We used to compile this to an assembly code block like this:
+-- _c2gh:
+--  ucomiss %xmm2,%xmm1
+--  jp _c2gf
+--  jb _c2gg
+--  jmp _c2gf
+--
+-- Where we have to introduce an explicit
+-- check for unordered results (using jmp parity):
+--
+-- We can avoid this by exchanging the arguments and inverting the direction
+-- of the comparison. This results in the sequence of:
+--
+-- 	ucomiss %xmm1,%xmm2
+--  ja _c2g2
+--  jmp _c2g1
+--
+-- Removing the jump reduces the pressure on the branch predidiction system and plays better with the uOP cache.
 
 condFltReg :: Bool -> Cond -> CmmExpr -> CmmExpr -> NatM Register
 condFltReg is32Bit cond x y = if_sse2 condFltReg_sse2 condFltReg_x87
