@@ -53,6 +53,8 @@ import Data.List.NonEmpty (nonEmpty, toList)
 import Data.Maybe    (isJust, fromMaybe)
 import Control.Monad (liftM, ap)
 
+import LetAlts
+
 -- Note [Live vs free]
 -- ~~~~~~~~~~~~~~~~~~~
 --
@@ -988,7 +990,7 @@ lookupVarCts v = CtsM $ \env -> lookupBinding env v
 lookupBinding :: IdEnv HowBound -> Id -> HowBound
 lookupBinding env v = case lookupVarEnv env v of
                         Just xx -> xx
-                        Nothing -> ASSERT2( isGlobalId v, ppr v ) ImportBound
+                        Nothing -> ASSERT2( isGlobalId v, text "Id not found" <+> ppr v ) ImportBound
 
 getAllCAFsCC :: Module -> (CostCentre, CostCentreStack)
 getAllCAFsCC this_mod =

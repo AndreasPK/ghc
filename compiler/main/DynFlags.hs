@@ -497,6 +497,7 @@ data GeneralFlag
    | Opt_SimplPreInlining
 
    | Opt_TreeMatching
+   | Opt_LetbindAlts
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -4010,7 +4011,8 @@ fFlagsDeps = [
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
-  flagSpec "tree-matching"                    Opt_TreeMatching
+  flagSpec "tree-matching"                    Opt_TreeMatching,
+  flagSpec "lettify"                          Opt_LetbindAlts
   ]
   ++ fHoleFlags
 
