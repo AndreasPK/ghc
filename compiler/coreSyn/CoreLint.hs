@@ -285,6 +285,9 @@ coreDumpFlag CoreDoPrintCore          = Nothing
 coreDumpFlag (CoreDoRuleCheck {})     = Nothing
 coreDumpFlag CoreDoNothing            = Nothing
 coreDumpFlag (CoreDoPasses {})        = Nothing
+coreDumpFlag CoreLetAlts              = Just Opt_D_verbose_core2core
+coreDumpFlag f = pprPanic "coreDumpFlag" (ppr f)
+
 
 {-
 ************************************************************************

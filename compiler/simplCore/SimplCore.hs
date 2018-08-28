@@ -48,6 +48,8 @@ import CallArity        ( callArityAnalProgram )
 import Exitify          ( exitifyProgram )
 import WorkWrap         ( wwTopBinds )
 import Vectorise        ( vectorise )
+import LetAlts          ( letAlts )
+
 import SrcLoc
 import Util
 import Module
@@ -138,6 +140,7 @@ getCoreToDo dflags
     ww_on         = gopt Opt_WorkerWrapper                dflags
     vectorise_on  = gopt Opt_Vectorise                    dflags
     static_ptrs   = xopt LangExt.StaticPointers           dflags
+    lettify       = gopt Opt_LetbindAlts                  dflags
 
     maybe_rule_check phase = runMaybe rule_check (CoreDoRuleCheck phase)
 
@@ -325,7 +328,6 @@ getCoreToDo dflags
                 -- catch it.  For the record, the redex is
                 --        f_el22 (f_el21 r_midblock)
 
-
         runWhen cse CoreCSE,
                 -- We want CSE to follow the final full-laziness pass, because it may
                 -- succeed in commoning up things floated out by full laziness.
@@ -363,7 +365,47 @@ getCoreToDo dflags
         -- can become /exponentially/ more expensive. See Trac #11731, #12996.
         runWhen (strictness || late_dmd_anal) CoreDoStrictness,
 
-        maybe_rule_check (Phase 0)
+
+        maybe_rule_check (Phase 0),
+
+        runWhen lettify $ CoreDoPasses
+            [
+            --Letwrap alts stuff
+            CoreLetAlts,
+            CoreDoPrintCore,
+            CoreDoFloatOutwards FloatOutSwitches {
+                            floatOutLambdas     = Just 0,
+                            floatOutConstants   = False,
+                            floatOutOverSatApps = False,
+                            -- ^ Only float our new let bindings and
+                            -- join points
+                            floatToTopLevelOnly = False },
+            CoreDoCallArity,
+            CoreDoStrictness,
+            CoreCSE,
+            -- CoreDoPrintCore,
+            CoreDoFloatInwards,
+            CoreDoCallArity,
+            CoreDoStrictness,
+            -- CoreDoPrintCore,
+            CoreCSE,
+            CoreDoPrintCore,
+            CoreDoSimplify 3
+                (SimplMode
+                    ["lettify1"]
+                    (Phase 0)
+                    dflags
+                    False --rules
+                    True --inline
+                    True --case of case
+                    True --eta-expand
+                    ),
+            CoreDoCallArity,
+            CoreDoStrictness,
+            simpl_phase 0 ["lettify"] max_iter,
+            CoreDoCallArity,
+            CoreDoStrictness
+            ]
      ]
 
     -- Remove 'CoreDoNothing' and flatten 'CoreDoPasses' for clarity.
@@ -503,6 +545,9 @@ doCorePass CoreDoPrintCore              = observe   printCore
 doCorePass (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat
 doCorePass CoreDoNothing                = return
 doCorePass (CoreDoPasses passes)        = runCorePasses passes
+
+doCorePass (CoreLetAlts)            = {-# SCC "LetwrapAlts" #-}
+                                      doPassDU letAlts
 
 #if defined(GHCI)
 doCorePass (CoreDoPluginPass _ pass) = {-# SCC "Plugin" #-} pass

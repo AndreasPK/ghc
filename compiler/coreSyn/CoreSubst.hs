@@ -242,7 +242,7 @@ extendSubstWithVar :: Subst -> Var -> Var -> Subst
 extendSubstWithVar subst v1 v2
   | isTyVar v1 = ASSERT( isTyVar v2 ) extendTvSubst subst v1 (mkTyVarTy v2)
   | isCoVar v1 = ASSERT( isCoVar v2 ) extendCvSubst subst v1 (mkCoVarCo v2)
-  | otherwise  = ASSERT( isId    v2 ) extendIdSubst subst v1 (Var v2)
+  | otherwise  = ASSERT2( isId    v2, ppr (v1,v2) ) extendIdSubst subst v1 (Var v2)
 
 -- | Add a substitution as appropriate to each of the terms being
 --   substituted (whether expressions, types, or coercions). See also

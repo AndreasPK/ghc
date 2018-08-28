@@ -486,6 +486,7 @@ data GeneralFlag
    | Opt_SimplPreInlining
 
    | Opt_TreeMatching
+   | Opt_LetbindAlts
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -3898,7 +3899,8 @@ fFlagsDeps = [
   flagSpec "show-hole-constraints"            Opt_ShowHoleConstraints,
   flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs,
-  flagSpec "tree-matching"                    Opt_TreeMatching
+  flagSpec "tree-matching"                    Opt_TreeMatching,
+  flagSpec "lettify"                          Opt_LetbindAlts
   ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
