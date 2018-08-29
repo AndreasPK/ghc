@@ -179,6 +179,7 @@ Library
         GhcPrelude
 
     Exposed-Modules:
+        LetAlts
         Ar
         FileCleanup
         DriverBkp

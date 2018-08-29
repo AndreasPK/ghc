@@ -946,7 +946,8 @@ splitFunTy :: Type -> (Type, Type)
 -- panics if that is not possible. See also 'splitFunTy_maybe'
 splitFunTy ty | Just ty' <- coreView ty = splitFunTy ty'
 splitFunTy (FunTy arg res) = (arg, res)
-splitFunTy other           = pprPanic "splitFunTy" (ppr other)
+splitFunTy other           =
+  pprPanic "splitFunTy - argument not a function type" (ppr other)
 
 splitFunTy_maybe :: Type -> Maybe (Type, Type)
 -- ^ Attempts to extract the argument and result types from a type

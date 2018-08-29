@@ -59,6 +59,8 @@ import UniqFM
 import Outputable
 import Control.Monad
 import qualified GHC.LanguageExtensions as LangExt
+
+import LetAlts
 {-
 ************************************************************************
 *                                                                      *
@@ -343,6 +345,28 @@ getCoreToDo dflags
         runWhen (strictness || late_dmd_anal) CoreDoStrictness,
 
         maybe_rule_check (Phase 0)
+
+        --Letwrap alts stuff
+        -- CoreLetAlts,
+        -- CoreDoPrintCore,
+        -- CoreCSE,
+        -- CoreDoCallArity,
+        -- CoreDoStrictness,
+        -- CoreDoPrintCore,
+        -- CoreDoSimplify 3
+        --     (SimplMode
+        --         ["letAlt"]
+        --         (Phase 0)
+        --         dflags
+        --         True --rules
+        --         False --inline
+        --         True --case of case
+        --         True --eta-expand
+        --         ),
+        -- CoreDoPrintCore,
+        -- CoreDoCallArity,
+        -- CoreDoStrictness,
+        -- CoreDoPrintCore
      ]
 
     -- Remove 'CoreDoNothing' and flatten 'CoreDoPasses' for clarity.
@@ -456,6 +480,9 @@ doCorePass CoreDoSpecialising        = {-# SCC "Specialise" #-}
 
 doCorePass CoreDoSpecConstr          = {-# SCC "SpecConstr" #-}
                                        specConstrProgram
+
+doCorePass CoreLetAlts               =
+                                       doPassDU letAlts
 
 doCorePass CoreDoPrintCore              = observe   printCore
 doCorePass (CoreDoRuleCheck phase pat)  = ruleCheckPass phase pat
