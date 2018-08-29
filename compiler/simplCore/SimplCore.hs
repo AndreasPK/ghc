@@ -351,7 +351,7 @@ getCoreToDo dflags
             [
             --Letwrap alts stuff
             CoreLetAlts,
-            CoreDoPrintCore,
+            --CoreDoPrintCore,
             CoreDoFloatOutwards FloatOutSwitches {
                             floatOutLambdas     = Just 0,
                             floatOutConstants   = False,
@@ -363,12 +363,12 @@ getCoreToDo dflags
             CoreDoStrictness,
             CoreCSE,
             -- CoreDoPrintCore,
-            CoreDoFloatInwards,
+            --CoreDoFloatInwards,
             CoreDoCallArity,
             CoreDoStrictness,
             -- CoreDoPrintCore,
             CoreCSE,
-            CoreDoPrintCore,
+            --CoreDoPrintCore,
             CoreDoSimplify 3
                 (SimplMode
                     ["lettify1"]
