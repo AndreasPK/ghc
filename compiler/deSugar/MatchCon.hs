@@ -17,6 +17,7 @@ import GhcPrelude
 
 import {-# SOURCE #-} Match     ( match )
 
+import DynFlags ( getDynFlags )
 import HsSyn
 import DsBinds
 import ConLike

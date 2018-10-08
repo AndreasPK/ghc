@@ -76,11 +76,12 @@ Current issues:
 
 letAlts :: DynFlags -> UniqSupply -> CoreProgram -> CoreProgram --, UniqSupply)
 letAlts dflags us pgm =
-    -- (pgm,us)
-    fst . initUs us $ do
-        res <- mapM lettifyTop pgm
-        return $ --pprTrace "letAlts" (ppr res)
-            res
+    pgm
+    -- -- (pgm,us)
+    -- fst . initUs us $ do
+    --     res <- mapM lettifyTop pgm
+    --     return $ --pprTrace "letAlts" (ppr res)
+    --         res
 
 lettifyTopBind :: Id -> CoreExpr -> UniqSM (Id,CoreExpr)
 lettifyTopBind v rhs = do

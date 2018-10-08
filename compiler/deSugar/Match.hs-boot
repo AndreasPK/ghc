@@ -39,3 +39,7 @@ matchSinglePat
         -> Type
         -> MatchResult
         -> DsM MatchResult
+
+matchSinglePatVar :: Id   -- See Note [Match Ids]
+                  -> HsMatchContext Name -> LPat GhcTc
+                  -> Type -> MatchResult -> DsM MatchResult
