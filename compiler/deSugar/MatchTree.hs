@@ -130,8 +130,10 @@ A condition represents that a occurence must be one of
     * matches a constructor (Right tag)
     * doesn't match it (Left tag)
 
-Conditions are always conjunctive and represents the
-    conditions that must be met before we can select a rhs.
+Conditions are ordered and represent the conditions that must
+be met before we can select a rhs. If any of the conditions fail
+we either have to move to the next row in the matrix or fail.
+
 A constraint is a list of conditions as described above.
 
 Constraints are the sum of all constraints applicable to a rhs.
@@ -156,8 +158,6 @@ instance Eq CondValue where
     _              == _              = False
 
 
-
-
 instance Outputable CondValue where
     ppr (ConCond {cv_con = con}) = lparen O.<> text "ConVal " O.<> ppr con O.<> rparen
     ppr (LitCond lit) = lparen O.<> text "LitVal " O.<> ppr (lit) O.<> rparen
@@ -177,17 +177,38 @@ instance Outputable PatInfo where
 --Represents knowledge about the given occurence.
 --Left => Constructors which the Occurence does not match.
 --Right Tag => Occurence matches the constructor.
-type Evidence = (Occurrence, (Either [CondValue] CondValue))
+data Evidence = Evidence Occurrence (Either [CondValue] CondValue)
 
 {-
-Taking apart nested constructors (W (A B)) requires us to insert new conditions into the list of conditions
-In order to facilitate this we keep the PatInfo of the original pattern around which allows as to insert
-new conditions in the middle of the list based on the patCol
+Taking apart nested constructors like (Just (Either a b)) requires us to
+generate new constraints which only apply to paths which actually inspect the
+outer constructor.
+When doing so however we have to resolve constraints in the same order they
+semantically apply. To facilitate this we keep the PatInfo of the original pattern around.
+This allows as to insert new conditions in the middle of the list at the position given by patCol
 -}
---Represents a condition on the given occurence. Nothing represents evaluation.
---Just => Occurence matches the constructor.
---Nothing -> Just evaluation
-type Condition = (PatInfo, Maybe CondValue)
+--Represents a condition on the given occurence.
+data Condition = CondEvaluate PatInfo | CondMatch PatInfo CondValue
+
+-- | Get the origin of a condition
+getCondPos :: Condition -> [Int]
+getCondPos = patCol . getCondPat
+
+getCondPat :: Condition -> PatInfo
+getCondPat (CondEvaluate i) = i
+getCondPat (CondMatch i _)  = i
+
+getCondMatchVal :: Condition -> Maybe CondValue
+getCondMatchVal (CondEvaluate _) = Nothing
+getCondMatchVal (CondMatch _ v)  = Just v
+
+instance Outputable Condition where
+    ppr (CondEvaluate i) =
+        text "eval@" O.<> ppr i
+    ppr (CondMatch i val) =
+        text "match@" O.<> ppr i O.<>
+        text ":" O.<> ppr val
+
 type Conditions = [Condition]
 
 type Constraint = Conditions
@@ -229,7 +250,7 @@ type MatrixRHS = (MatchResult, (Constraint, Constraints))
 
 type Entry e = (Pat GhcTc, e)
 
--- Pattern matrix row major. The plan is to store the pattern in a and additional info in e
+-- Pattern matrix row major. The plan is to store additional info in e
 type PM e rhs = (Seq.Seq (Seq.Seq (Entry e), rhs))
 
 type PatternMatrix e rhs = PM e rhs
@@ -706,13 +727,13 @@ getPatternConstraint :: HasCallStack => Entry PatInfo -> DsM (Maybe (Condition))
 -}
 getPatternConstraint ((LitPat _ lit),info) = do
     df <- getDynFlags :: DsM DynFlags
-    return $ Just $ (info, Just (LitCond (hsLitKey df lit)) )
+    return $ Just $ CondMatch info $ (LitCond (hsLitKey df lit))
 getPatternConstraint (pat@(ConPatOut { pat_con = con}), info) = do
     -- TODO: Extend for nested arguments
     df <- getDynFlags :: DsM DynFlags
     --traceM "conConstraint"
     conConstraint <- getConConstraint pat
-    return $ Just $  (info, Just $ conConstraint )
+    return $ Just $ CondMatch info conConstraint
 getPatternConstraint (WildPat {}, info) =
     --traceM "wp" >>
     return Nothing
@@ -720,8 +741,8 @@ getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >>
     return Nothing
 getPatternConstraint (BangPat _ (L _ p), info)
-    | WildPat {} <- p = return $ Just (info, Nothing)
-    | VarPat {} <- p = return $ Just (info, Nothing)
+    | WildPat {} <- p = return $ Just (CondEvaluate info)
+    | VarPat {} <- p = return $ Just (CondEvaluate info)
 getPatternConstraint (p@BangPat {}, info) =
     fallBack $ "Bang patterns should have been stripped of all supported patterns " ++ showSDocUnsafe (ppr p)
 getPatternConstraint (p, info) =
@@ -770,7 +791,7 @@ addConstraints m newRowEntries = do
     let setConstraint row newStuff = do
             let (oldConstraint, inherited) = snd . snd $ row :: (Constraint, Constraints)
             newConstraint <- rowConstraint newStuff
-            let combined = sortOn (patCol . fst) $ mappend oldConstraint newConstraint :: Constraint
+            let combined = sortOn (getCondPos) $ mappend oldConstraint newConstraint :: Constraint
             return $ setEqConstraint row (combined, inherited)
 
 {-
@@ -1168,7 +1189,11 @@ mkCase heuristic df ty m knowledge colIndex =
                     let arg_info = zip vars bangs
 
                     --At this point we reorder the given ids to match the order of the written record.
-                    let adjusted_arg_info = unzip $ if isRecord then matchFields arg_info conFields paddedLabels else arg_info
+                    adjusted_arg_info <-
+                            if isRecord
+                                then failDs --for now skip records
+                                    -- unzip $ matchFields arg_info conFields paddedLabels
+                                else return $ unzip arg_info
 
 
 
@@ -1484,10 +1509,11 @@ dsPrint doc =
 mkConstraintCase :: HasCallStack => CPM -> Type -> DecompositionKnowledge -> Constraints -> DsM (CoreExpr -> DsM CoreExpr)
 {-
 Resolve at least one constraint by introducing a additional case statement
-There is some bookkeeping not done here which needs to be fixed.
+There is some bookkeeping not done here which needs to be fixed.???
 -}
 mkConstraintCase m ty knowledge constraints = --trace "mkConstraintCase" $
-    let cond@(info,conVal) = head . head $ constraints :: Condition
+    let cond = head . head $ constraints :: Condition
+        info = getCondPat cond
         occ = patOcc info :: Occurrence
         occType = varType occ
         --ty = varType occ :: Kind
@@ -1495,8 +1521,8 @@ mkConstraintCase m ty knowledge constraints = --trace "mkConstraintCase" $
         occValues = concatMap
             (\constraint ->
                 foldMap
-                    (\(info, condVal) ->
-                        if (patOcc info) == occ then [conVal] else [])
+                    (\cond' ->
+                        if (patOcc . getCondPat $ cond') == occ then [getCondMatchVal cond'] else [])
                     constraint)
             constraints
         occVals = nub $ catMaybes occValues :: [CondValue]
@@ -1585,10 +1611,11 @@ simplifyConstraint :: HasCallStack => Constraint -> DecompositionKnowledge -> Co
 --Take a constraint and remove all entries which are satisfied
 simplifyConstraint constraint knowledge =
     L.filter
-        (\cond@(info,_) ->
-            let occ = patOcc info :: Occurrence
+        (\cond ->
+            let info = getCondPat cond
+                occ = patOcc info :: Occurrence
                 evidence = fromJust $ Map.lookup occ knowledge :: Either [CondValue] CondValue
-                m = case evidenceMatchesCond (occ, evidence) cond of
+                m = case evidenceMatchesCond (Evidence occ evidence) cond of
                         Nothing -> False
                         Just False -> False
                         Just True -> True
@@ -1598,10 +1625,10 @@ simplifyConstraint constraint knowledge =
         constraint
 
 knowledgeMatchesCond :: HasCallStack => DecompositionKnowledge -> Condition -> Maybe Bool
-knowledgeMatchesCond knowledge condition@(info, _occVal) = do
-    let occ = patOcc info
+knowledgeMatchesCond knowledge condition = do
+    let occ = patOcc . getCondPat $ condition
     evidence <- Map.lookup occ knowledge :: Maybe (Either [CondValue] CondValue)
-    evidenceMatchesCond (occ, evidence) condition
+    evidenceMatchesCond (Evidence occ evidence) condition
 
 {--
     Answers the question if the given evidence satifies the given condition.
@@ -1613,7 +1640,7 @@ knowledgeMatchesCond knowledge condition@(info, _occVal) = do
 * We can't tell
 -}
 evidenceMatchesCond :: HasCallStack => Evidence -> Condition -> Maybe Bool
-evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
+evidenceMatchesCond (Evidence eOcc eVal) cond
     | eOcc /= cOcc = Nothing
     | eOcc == cOcc && cVal == Nothing = Just True
     | otherwise =
@@ -1626,6 +1653,8 @@ evidenceMatchesCond (eOcc, eVal) (cInfo, cVal)
                     (Left evs) -> if (any (==condVal) evs) then Just False else Nothing
         in match (fromJust cVal)
     where
+        cInfo = getCondPat cond
+        cVal = getCondMatchVal cond
         cOcc = patOcc cInfo :: Occurrence
 
 tidyEntry :: HasCallStack => Entry PatInfo -> DsM (DsWrapper, Entry PatInfo)
@@ -1648,10 +1677,16 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 -- It eliminates many pattern forms (as-patterns, variable patterns,
 -- list patterns, etc) and returns any created bindings in the wrapper.
 
+-- tidy1 v pat
+--     | pprTrace "tidy" (showAstData NoBlankSrcSpan pat) False
+--     = undefined
 tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
 tidy1 v (SigPat _ pat)    = tidy1 v (unLoc pat)
 tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat _ (L l p)) = tidy_bang_pat v l p
+tidy1 v (BangPat _ (L l p))
+    | pprTrace "tidy" (showAstData NoBlankSrcSpan p) False
+    = undefined
+    | otherwise = tidy_bang_pat v l p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
