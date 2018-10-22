@@ -144,7 +144,7 @@ adjustEdgeWeight cfg f from to
   | otherwise = cfg
 
 getCfgNodes :: CFG -> LabelSet
-getCfgNodes m = setFromList $ mapKeys m ++ concat (mapElems . mapMap mapKeys $ m)
+getCfgNodes m = mapFoldMapWithKey (\k v -> setFromList (k:mapKeys v)) m
 
 hasNode :: CFG -> BlockId -> Bool
 hasNode m node = mapMember node m || any (mapMember node) m

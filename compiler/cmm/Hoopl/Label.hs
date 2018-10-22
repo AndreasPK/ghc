@@ -46,7 +46,7 @@ instance Outputable Label where
 -----------------------------------------------------------------------------
 -- LabelSet
 
-newtype LabelSet = LS UniqueSet deriving (Eq, Ord, Show)
+newtype LabelSet = LS UniqueSet deriving (Eq, Ord, Show, Monoid, Semigroup)
 
 instance IsSet LabelSet where
   type ElemOf LabelSet = Label

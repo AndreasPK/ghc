@@ -109,7 +109,7 @@ mapUnions maps = foldl1' mapUnion maps
 -- Basic instances
 -----------------------------------------------------------------------------
 
-newtype UniqueSet = US S.IntSet deriving (Eq, Ord, Show)
+newtype UniqueSet = US S.IntSet deriving (Eq, Ord, Show, Semigroup, Monoid)
 
 instance IsSet UniqueSet where
   type ElemOf UniqueSet = Int
