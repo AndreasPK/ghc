@@ -646,7 +646,7 @@ sequenceTop
 sequenceTop _     _       _           top@(CmmData _ _) = top
 sequenceTop dflags ncgImpl edgeWeights
             (CmmProc info lbl live (ListGraph blocks))
-  | (gopt Opt_NewBlocklayout dflags) && backendMaintainsCfg dflags
+  | (gopt Opt_CfgBlocklayout dflags) && backendMaintainsCfg dflags
   --Use chain based algorithm
   = CmmProc info lbl live ( ListGraph $ ncgMakeFarBranches ncgImpl info $
                             sequenceChain info edgeWeights blocks )
@@ -656,7 +656,7 @@ sequenceTop dflags ncgImpl edgeWeights
                             sequenceBlocks cfg info blocks)
   where
     cfg
-      | (gopt Opt_VanillaBlocklayout dflags) ||
+      | (gopt Opt_WeightlessBlocklayout dflags) ||
         (not $ backendMaintainsCfg dflags)
       -- Don't make use of cfg in the old algorithm
       = Nothing

@@ -219,21 +219,25 @@ by saying ``-fno-wombat``.
     This is mostly done during Cmm passes. However this can miss corner cases. So at -O2
     we run the pass again at the asm stage to catch these.
 
-.. ghc-flag:: -fnew-blocklayout
-    :shortdesc: Use the new experimental block layout algorithm.
+.. ghc-flag:: -fcfg-blocklayout
+    :shortdesc: Use the new cfg based block layout algorithm.
     :type: dynamic
-    :reverse: -fno-new-blocklayout
+    :reverse: -fno-cfg-blocklayout
     :category:
 
-    :default: off
+    :default: off but enabled with :ghc-flag:`-O`.
 
     The new algorithm considers all outgoing edges of a basic blocks for
     code layout instead of only the last jump instruction.
-    This allows us do a better job at placing hot code paths
-    sequentially in memory leading to better cache utilization and performance.
+    It also builds a control flow graph for functions, tries to find
+    hot code paths and place them sequentially leading to better cache utilization
+    and performance.
 
-    This is expected to improve performance on average. In case of performance regressions
-    please open a ticket.
+    This is expected to improve performance on average, but actual performance
+    difference can vary.
+
+    If you find cases of significant performance regressions, which can
+    be traced back to obviously bad code layout please open a ticket.
 
 .. ghc-flag:: -fcfg-weights
     :shortdesc: Sets edge weights used by the new code layout algorithm.
@@ -249,20 +253,24 @@ by saying ``-fno-wombat``.
     the source code for default values and documentation. But I strongly
     advise against this.
 
-.. ghc-flag:: -fvanilla-blocklayout
-    :shortdesc: Use old behaviour when not using the new code layout.
+.. ghc-flag:: -fweightless-blocklayout
+    :shortdesc: Ignore cfg weights for code layout.
     :type: dynamic
-    :reverse: -fno-vanilla-blocklayout
+    :reverse: -fno-weightless-blocklayout
     :category:
 
-    :default: on
+    :default: off
 
-    With this flag enabled and new-blocklayout disabled GHC falls back to
-    the old code layout behaviour.
+    When not using the cfg based blocklayout layout is determined either
+    by the last jump in a basic block or the heaviest outgoing edge of the
+    block in the cfg.
 
-    When this flag is disabled GHC will use the old layout algorithm but use
-    the same static analysis used by the new code layout to decide which blocks
-    should be placed after each other.
+    With this flag enabled we use the last jump instruction in blocks.
+    Without this flags the old algorithm also uses the heaviest outgoing
+    edge.
+
+    When this flag is enabled and :ghc-flag:`-fcfg-blocklayout` is disabled
+    block layout behaves the same as in 8.6 and earlier.
 
 .. ghc-flag:: -fcpr-anal
     :shortdesc: Turn on CPR analysis in the demand analyser. Implied by :ghc-flag:`-O`.

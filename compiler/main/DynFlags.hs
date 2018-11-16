@@ -489,8 +489,8 @@ data GeneralFlag
    | Opt_DictsStrict                     -- be strict in argument dictionaries
    | Opt_DmdTxDictSel              -- use a special demand transformer for dictionary selectors
    | Opt_Loopification                  -- See Note [Self-recursive tail calls]
-   | Opt_NewBlocklayout       -- ^ Use the chain based block layout algorithm.
-   | Opt_VanillaBlocklayout   -- ^ Layout based on last instruction per block.
+   | Opt_CfgBlocklayout             -- ^ Use the cfg based block layout algorithm.
+   | Opt_WeightlessBlocklayout         -- ^ Layout based on last instruction per block.
    | Opt_CprAnal
    | Opt_WorkerWrapper
    | Opt_SolveConstantDicts
@@ -696,8 +696,8 @@ optimisationFlags = EnumSet.fromList
    , Opt_DictsStrict
    , Opt_DmdTxDictSel
    , Opt_Loopification
-   , Opt_NewBlocklayout
-   , Opt_VanillaBlocklayout
+   , Opt_CfgBlocklayout
+   , Opt_WeightlessBlocklayout
    , Opt_CprAnal
    , Opt_WorkerWrapper
    , Opt_SolveConstantDicts
@@ -4054,8 +4054,8 @@ fFlagsDeps = [
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
   flagSpec "loopification"                    Opt_Loopification,
-  flagSpec "new-blocklayout"                  Opt_NewBlocklayout,
-  flagSpec "vanilla-blocklayout"              Opt_VanillaBlocklayout,
+  flagSpec "cfg-blocklayout"                  Opt_CfgBlocklayout,
+  flagSpec "weightless-blocklayout"           Opt_WeightlessBlocklayout,
   flagSpec "omit-interface-pragmas"           Opt_OmitInterfacePragmas,
   flagSpec "omit-yields"                      Opt_OmitYields,
   flagSpec "optimal-applicative-do"           Opt_OptimalApplicativeDo,
@@ -4545,9 +4545,7 @@ optLevelFlags -- see Note [Documenting optimisation flags]
     , ([1,2],   Opt_FullLaziness)
     , ([1,2],   Opt_IgnoreAsserts)
     , ([1,2],   Opt_Loopification)
-    , ([1,2],   Opt_NewBlocklayout)      -- Experimental
-    , ([0,1,2], Opt_VanillaBlocklayout)  -- If not using the new algorithm
-                                         -- default to the classic.
+    , ([1,2],   Opt_CfgBlocklayout)      -- Experimental
 
     , ([1,2],   Opt_Specialise)
     , ([1,2],   Opt_CrossModuleSpecialise)
