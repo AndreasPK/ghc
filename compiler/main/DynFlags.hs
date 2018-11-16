@@ -3519,7 +3519,7 @@ dynamic_flags_deps = [
       (noArg (\d -> d { floatLamArgs = Nothing }))
   , make_ord_flag defFlag "fproc-alignment"
       (intSuffix (\n d -> d { cmmProcAlignment = Just n }))
-  , make_ord_flag defFlag "fcfg-weights"
+  , make_ord_flag defFlag "fblock-layout-weights"
         (HasArg (\s ->
             upd (\d -> d { cfgWeightInfo =
                 parseCfgWeights s (cfgWeightInfo d)})))
@@ -4054,8 +4054,8 @@ fFlagsDeps = [
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
   flagSpec "loopification"                    Opt_Loopification,
-  flagSpec "cfg-blocklayout"                  Opt_CfgBlocklayout,
-  flagSpec "weightless-blocklayout"           Opt_WeightlessBlocklayout,
+  flagSpec "block-layout-cfg"                 Opt_CfgBlocklayout,
+  flagSpec "block-layout-weightless"          Opt_WeightlessBlocklayout,
   flagSpec "omit-interface-pragmas"           Opt_OmitInterfacePragmas,
   flagSpec "omit-yields"                      Opt_OmitYields,
   flagSpec "optimal-applicative-do"           Opt_OptimalApplicativeDo,

@@ -219,10 +219,10 @@ by saying ``-fno-wombat``.
     This is mostly done during Cmm passes. However this can miss corner cases. So at -O2
     we run the pass again at the asm stage to catch these.
 
-.. ghc-flag:: -fcfg-blocklayout
+.. ghc-flag:: -fblock-layout-cfg
     :shortdesc: Use the new cfg based block layout algorithm.
     :type: dynamic
-    :reverse: -fno-cfg-blocklayout
+    :reverse: -fno-block-layout-cfg
     :category:
 
     :default: off but enabled with :ghc-flag:`-O`.
@@ -239,7 +239,7 @@ by saying ``-fno-wombat``.
     If you find cases of significant performance regressions, which can
     be traced back to obviously bad code layout please open a ticket.
 
-.. ghc-flag:: -fcfg-weights
+.. ghc-flag:: -fblock-layout-weights
     :shortdesc: Sets edge weights used by the new code layout algorithm.
     :type: dynamic
     :category:
@@ -253,10 +253,10 @@ by saying ``-fno-wombat``.
     the source code for default values and documentation. But I strongly
     advise against this.
 
-.. ghc-flag:: -fweightless-blocklayout
+.. ghc-flag:: -fblock-layout-weightless
     :shortdesc: Ignore cfg weights for code layout.
     :type: dynamic
-    :reverse: -fno-weightless-blocklayout
+    :reverse: -fno-block-layout-weightless
     :category:
 
     :default: off
@@ -269,7 +269,7 @@ by saying ``-fno-wombat``.
     Without this flags the old algorithm also uses the heaviest outgoing
     edge.
 
-    When this flag is enabled and :ghc-flag:`-fcfg-blocklayout` is disabled
+    When this flag is enabled and :ghc-flag:`-fblock-layout-cfg` is disabled
     block layout behaves the same as in 8.6 and earlier.
 
 .. ghc-flag:: -fcpr-anal
