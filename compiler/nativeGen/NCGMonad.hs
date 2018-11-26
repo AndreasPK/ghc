@@ -204,6 +204,9 @@ addImportNat :: CLabel -> NatM ()
 addImportNat imp
         = NatM $ \ st -> ((), st {natm_imports = imp : natm_imports st})
 
+getCfgNat :: NatM CFG
+getCfgNat = NatM $ \ st -> (natm_cfg st, st)
+
 updateCfgNat :: (CFG -> CFG) -> NatM ()
 updateCfgNat f
         = NatM $ \ st -> ((), st { natm_cfg = f (natm_cfg st) })
