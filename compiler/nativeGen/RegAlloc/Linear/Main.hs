@@ -121,8 +121,10 @@ import Reg
 
 import BlockId
 import Hoopl.Collections
+import Hoopl.Label
 import Cmm hiding (RegSet)
 
+import CFG
 import Digraph
 import DynFlags
 import Unique
@@ -136,6 +138,9 @@ import Data.Maybe
 import Data.List
 import Control.Monad
 
+import Outputable
+import Debug.Trace
+
 -- -----------------------------------------------------------------------------
 -- Top level of the register allocator
 
@@ -143,6 +148,7 @@ import Control.Monad
 regAlloc
         :: (Outputable instr, Instruction instr)
         => DynFlags
+        -> Maybe CFG
         -> LiveCmmDecl statics instr
         -> UniqSM ( NatCmmDecl statics instr
                   , Maybe Int  -- number of extra stack slots required,
@@ -150,23 +156,23 @@ regAlloc
                   , Maybe RegAllocStats
                   )
 
-regAlloc _ (CmmData sec d)
+regAlloc _ _ (CmmData sec d)
         = return
                 ( CmmData sec d
                 , Nothing
                 , Nothing )
 
-regAlloc _ (CmmProc (LiveInfo info _ _ _) lbl live [])
+regAlloc _ _ (CmmProc (LiveInfo info _ _ _) lbl live [])
         = return ( CmmProc info lbl live (ListGraph [])
                  , Nothing
                  , Nothing )
 
-regAlloc dflags (CmmProc static lbl live sccs)
+regAlloc dflags mCfg (CmmProc static lbl live sccs)
         | LiveInfo info entry_ids@(first_id:_) (Just block_live) _ <- static
         = do
                 -- do register allocation on each component.
                 (final_blocks, stats, stack_use)
-                        <- linearRegAlloc dflags entry_ids block_live sccs
+                        <- linearRegAlloc dflags mCfg entry_ids block_live sccs
 
                 -- make sure the block that was first in the input list
                 --      stays at the front of the output
@@ -185,7 +191,7 @@ regAlloc dflags (CmmProc static lbl live sccs)
                         , Just stats)
 
 -- bogus. to make non-exhaustive match warning go away.
-regAlloc _ (CmmProc _ _ _ _)
+regAlloc _ _ (CmmProc _ _ _ _)
         = panic "RegAllocLinear.regAlloc: no match"
 
 
@@ -200,6 +206,7 @@ regAlloc _ (CmmProc _ _ _ _)
 linearRegAlloc
         :: (Outputable instr, Instruction instr)
         => DynFlags
+        -> Maybe CFG
         -> [BlockId] -- ^ entry points
         -> BlockMap RegSet
               -- ^ live regs on entry to each basic block
@@ -207,7 +214,7 @@ linearRegAlloc
               -- ^ instructions annotated with "deaths"
         -> UniqSM ([NatBasicBlock instr], RegAllocStats, Int)
 
-linearRegAlloc dflags entry_ids block_live sccs
+linearRegAlloc dflags mCfg entry_ids block_live sccs
  = case platformArch platform of
       ArchX86        -> go $ (frInitFreeRegs platform :: X86.FreeRegs)
       ArchX86_64     -> go $ (frInitFreeRegs platform :: X86_64.FreeRegs)
@@ -223,25 +230,64 @@ linearRegAlloc dflags entry_ids block_live sccs
       ArchJavaScript -> panic "linearRegAlloc ArchJavaScript"
       ArchUnknown    -> panic "linearRegAlloc ArchUnknown"
  where
-  go f = linearRegAlloc' dflags f entry_ids block_live sccs
+  go f = linearRegAlloc' dflags mCfg f entry_ids block_live sccs
   platform = targetPlatform dflags
 
 linearRegAlloc'
         :: (FR freeRegs, Outputable instr, Instruction instr)
         => DynFlags
+        -> Maybe CFG
         -> freeRegs
         -> [BlockId]                    -- ^ entry points
         -> BlockMap RegSet              -- ^ live regs on entry to each basic block
         -> [SCC (LiveBasicBlock instr)] -- ^ instructions annotated with "deaths"
         -> UniqSM ([NatBasicBlock instr], RegAllocStats, Int)
 
-linearRegAlloc' dflags initFreeRegs entry_ids block_live sccs
+linearRegAlloc' dflags mCfg initFreeRegs entry_ids block_live sccs
  = do   us      <- getUniqueSupplyM
-        let (_, stack, stats, blocks) =
-                runR dflags mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
-                    $ linearRA_SCCs entry_ids block_live [] sccs
+
+        let (_, stack, stats, blocks) = case mCfg of
+                Just cfg
+                  | gopt Opt_RegsCfgAlloc dflags -- Priorizize heavy edges
+                  -> runR dflags mCfg mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
+                            $ linearRA_dfs cfg entry_ids block_live sccs
+                otherwise ->
+                        runR dflags mCfg mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
+                            $ linearRA_SCCs entry_ids block_live [] sccs
         return  (blocks, stats, getStackUse stack)
 
+linearRA_dfs :: forall instr freeRegs. (FR freeRegs, Instruction instr, Outputable instr)
+              => CFG
+              -> [BlockId]
+              -> BlockMap RegSet
+              -> [SCC (LiveBasicBlock instr)]
+              -> RegM freeRegs [NatBasicBlock instr]
+
+linearRA_dfs _ _ _ []
+        = return []
+linearRA_dfs cfg (entry_id:_) block_live sccs
+ = do
+        blocks' <- mapM (processBlock block_live) orderedBlocks
+        return $ concat blocks'
+    where
+        blocks = concat . map sccBlocks $ sccs
+        blockIds = map blockId blocks :: [BlockId]
+        blockMap = mapFromList $
+                        map (\b -> (blockId b, b)) blocks :: LabelMap (GenBasicBlock (LiveInstr instr))
+        orderedIds = dfsOrder setEmpty [entry_id] []
+        orderedBlocks = map (\b -> fromJust . mapLookup b $ blockMap) orderedIds
+        sccBlocks (AcyclicSCC b) = [b]
+        sccBlocks (CyclicSCC bs) = bs
+
+        dfsOrder :: LabelSet -> [BlockId] -> [BlockId] -> [BlockId]
+        dfsOrder _ [] acc = reverse acc
+        dfsOrder done (block : todo) acc
+            | setMember block done = dfsOrder done todo acc
+            | otherwise
+            = dfsOrder (setInsert block done) (next ++ todo) (block:acc)
+          where
+            next = getOrderedSuccessors cfg block
+linearRA_dfs _ _ _ _ = error "Impossible cfg error"
 
 linearRA_SCCs :: (FR freeRegs, Instruction instr, Outputable instr)
               => [BlockId]
@@ -261,10 +307,19 @@ linearRA_SCCs entry_ids block_live blocksAcc (AcyclicSCC block : sccs)
 
 linearRA_SCCs entry_ids block_live blocksAcc (CyclicSCC blocks : sccs)
  = do
-        blockss' <- process entry_ids block_live blocks [] (return []) False
-        linearRA_SCCs entry_ids block_live
-                (reverse (concat blockss') ++ blocksAcc)
-                sccs
+        cfg <- getCfgR
+        -- if (isNothing cfg) then do
+        do
+                blockss' <- process entry_ids block_live blocks [] (return []) False
+                linearRA_SCCs entry_ids block_live
+                        (reverse (concat blockss') ++ blocksAcc)
+                        sccs
+                -- else do
+                --   blockss' <- linearRA_cfg (fromJust cfg) block_live blocks
+                --   linearRA_SCCs entry_ids block_live
+                --         (reverse (blockss') ++ blocksAcc)
+                --         sccs
+
 
 {- from John Dias's patch 2008/10/16:
    The linear-scan allocator sometimes allocates a block
@@ -279,12 +334,12 @@ linearRA_SCCs entry_ids block_live blocksAcc (CyclicSCC blocks : sccs)
 -}
 
 process :: (FR freeRegs, Instruction instr, Outputable instr)
-        => [BlockId]
-        -> BlockMap RegSet
-        -> [GenBasicBlock (LiveInstr instr)]
-        -> [GenBasicBlock (LiveInstr instr)]
-        -> [[NatBasicBlock instr]]
-        -> Bool
+        => [BlockId] --entry ids
+        -> BlockMap RegSet --assignments
+        -> [GenBasicBlock (LiveInstr instr)] --blocks to do
+        -> [GenBasicBlock (LiveInstr instr)] --next rounds
+        -> [[NatBasicBlock instr]] --accum - allocated blocks
+        -> Bool --progress flag
         -> RegM freeRegs [[NatBasicBlock instr]]
 
 process _ _ [] []         accum _

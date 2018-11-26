@@ -27,6 +27,7 @@ module RegAlloc.Linear.State (
 
         getUniqueR,
 
+        getCfgR,
         recordSpill,
         recordFixupBlock
 )
@@ -41,6 +42,7 @@ import RegAlloc.Liveness
 import Instruction
 import Reg
 import BlockId
+import CFG
 
 import DynFlags
 import Unique
@@ -68,6 +70,7 @@ instance HasDynFlags (RegM a) where
 
 -- | Run a computation in the RegM register allocator monad.
 runR    :: DynFlags
+        -> Maybe CFG
         -> BlockAssignment freeRegs
         -> freeRegs
         -> RegMap Loc
@@ -76,7 +79,7 @@ runR    :: DynFlags
         -> RegM freeRegs a
         -> (BlockAssignment freeRegs, StackMap, RegAllocStats, a)
 
-runR dflags block_assig freeregs assig stack us thing =
+runR dflags cfg block_assig freeregs assig stack us thing =
   case unReg thing
         (RA_State
                 { ra_blockassig = block_assig
@@ -87,7 +90,8 @@ runR dflags block_assig freeregs assig stack us thing =
                 , ra_us         = us
                 , ra_spills     = []
                 , ra_DynFlags   = dflags
-                , ra_fixups     = [] })
+                , ra_fixups     = []
+                , ra_cfg        = cfg })
    of
         (# state'@RA_State
                 { ra_blockassig = block_assig
@@ -103,6 +107,10 @@ makeRAStats state
         = RegAllocStats
         { ra_spillInstrs        = binSpillReasons (ra_spills state)
         , ra_fixupList          = ra_fixups state }
+
+getCfgR :: RegM freeRegs (Maybe CFG)
+getCfgR = RegM $ \ s@RA_State{ra_cfg = cfg} ->
+  (# s, cfg #)
 
 
 spillR :: Instruction instr

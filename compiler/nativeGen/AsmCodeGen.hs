@@ -643,10 +643,13 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                         , [], [])
 
           else do
+                let xoptCfg = optimizeCFG (cfgWeightInfo dflags) cmm <$> livenessCfg --TODO: CLeanup
                 -- do linear register allocation
                 let reg_alloc proc = do
                        (alloced, maybe_more_stack, ra_stats) <-
-                               Linear.regAlloc dflags proc
+                        --        Linear.regAlloc dflags livenessCfg proc
+                               Linear.regAlloc dflags xoptCfg proc
+
                        case maybe_more_stack of
                          Nothing -> return ( alloced, ra_stats, [] )
                          Just amount -> do

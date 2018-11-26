@@ -479,6 +479,7 @@ data GeneralFlag
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_RegsGraph                      -- do graph coloring register allocation
    | Opt_RegsIterative                  -- do iterative coalescing graph coloring register allocation
+   | Opt_RegsCfgAlloc                   -- ^ Prioritize heavy edges in register allocation
    | Opt_PedanticBottoms                -- Be picky about how we treat bottom
    | Opt_LlvmTBAA                       -- Use LLVM TBAA infastructure for improving AA (hidden flag)
    | Opt_LlvmFillUndefWithGarbage       -- Testing for undef bugs (hidden flag)
@@ -700,6 +701,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_Loopification
    , Opt_CfgBlocklayout
    , Opt_WeightlessBlocklayout
+   , Opt_RegsCfgAlloc
    , Opt_CprAnal
    , Opt_WorkerWrapper
    , Opt_SolveConstantDicts
@@ -4084,6 +4086,7 @@ fFlagsDeps = [
   flagSpec "prof-count-entries"               Opt_ProfCountEntries,
   flagSpec "regs-graph"                       Opt_RegsGraph,
   flagSpec "regs-iterative"                   Opt_RegsIterative,
+  flagSpec "regs-cfg"                         Opt_RegsCfgAlloc,
   depFlagSpec' "rewrite-rules"                Opt_EnableRewriteRules
    (useInstead "-f" "enable-rewrite-rules"),
   flagSpec "shared-implib"                    Opt_SharedImplib,

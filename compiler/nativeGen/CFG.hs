@@ -20,13 +20,13 @@ module CFG
 
     --Query the CFG
     , infoEdgeList, edgeList
-    , getSuccessorEdges, getSuccessors
+    , getSuccessorEdges, getSuccessors, getOrderedSuccessors
     , getSuccEdgesSorted, weightedEdgeList
     , getEdgeInfo
     , getCfgNodes, hasNode
-
     --Construction/Misc
     , getCfg, getCfgProc, pprEdgeWeights, sanityCheckCfg
+
 
     --Find backedges and update their weight
     , optimizeCFG )
@@ -346,10 +346,19 @@ edgeList m =
         mapFoldMapWithKey (\from toMap -> fmap (from,) (mapKeys toMap)) m
 
 -- | Get successors of a given node without edge weights.
+--   Results are not ordered.
 getSuccessors :: CFG -> BlockId -> [BlockId]
 getSuccessors m bid
     | Just wm <- mapLookup bid m
     = mapKeys wm
+    | otherwise = []
+
+-- | Get successors of a given node without edge weights.
+--   Results are ordered descending by outgoing weight.
+getOrderedSuccessors :: CFG -> BlockId -> [BlockId]
+getOrderedSuccessors m bid
+    | Just wm <- mapLookup bid m
+    = map fst . sortWith (negate . edgeWeight . snd) $ mapToList wm
     | otherwise = []
 
 pprEdgeWeights :: CFG -> SDoc
