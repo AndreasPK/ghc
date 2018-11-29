@@ -15,11 +15,11 @@ module CmmSwitch (
 
 import GhcPrelude
 
-import BasicTypes (BranchWeight, combinedFreqs, moreLikely, neverFreq, getWeight)
+import BasicTypes (BranchWeight, combinedFreqs, moreLikely,
+                   neverFreq, getWeight, EdgeWeight(..))
 import Outputable
 import DynFlags
 import Hoopl.Label (Label)
-import CFG
 
 import Data.Maybe
 import Data.Bifunctor

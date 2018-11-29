@@ -15,6 +15,7 @@ types that
 -}
 
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module BasicTypes(
         Version, bumpVersion, initialVersion,
@@ -110,7 +111,10 @@ module BasicTypes(
 
         BranchWeight(..), neverFreq, rareFreq, someFreq, defFreq, oftenFreq,
         usuallyFreq, alwaysFreq, combinedFreqs, moreLikely, getWeight,
-        multiplyWeight
+        multiplyWeight,
+        -- Similar to BranchWeight but absolute numbers and only used in the
+        -- backend.
+        EdgeWeight(..)
    ) where
 
 import GhcPrelude
@@ -1721,3 +1725,12 @@ multiplyWeight (Weight w) f = Weight (w * f)
 
 getWeight :: BranchWeight -> Int
 getWeight (Weight f) = f
+
+-- | Edge weight used by CFG in the native backend.
+-- Weights are absolute comperable across a single CFG.
+newtype EdgeWeight
+  = EdgeWeight Int
+  deriving (Eq,Ord,Enum,Num,Real,Integral)
+
+instance Outputable EdgeWeight where
+  ppr (EdgeWeight w) = ppr w
