@@ -18,6 +18,7 @@ module NCGMonad (
         addNodeBetweenNat,
         addImmediateSuccessorNat,
         updateCfgNat,
+        getCfgNat,
         getUniqueNat,
         mapAccumLNat,
         setDeltaNat,

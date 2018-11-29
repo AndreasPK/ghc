@@ -4,7 +4,7 @@ module CmmSwitch (
      liLbl, liWeight, mkSwitchTargets,
      switchTargetsCases, switchTargetsDefault, switchTargetsRange, switchTargetsSigned,
      mapSwitchTargets, switchTargetsToTable, switchTargetsFallThrough,
-     switchTargetsToList, eqSwitchTargetWith,
+     switchTargetsToList, eqSwitchTargetWith, switchTargestsToWeightedList,
 
      SwitchPlan(..),
      targetSupportsSwitch,
@@ -15,16 +15,18 @@ module CmmSwitch (
 
 import GhcPrelude
 
+import BasicTypes (BranchWeight, combinedFreqs, moreLikely, neverFreq, getWeight)
 import Outputable
 import DynFlags
 import Hoopl.Label (Label)
+import CFG
 
 import Data.Maybe
 import Data.Bifunctor
 import Data.List (groupBy)
 import Data.Function (on)
 import qualified Data.Map as M
-import BasicTypes (BranchWeight, combinedFreqs, moreLikely, neverFreq, getWeight)
+
 
 -- Note [Cmm Switches, the general plan]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -215,6 +217,21 @@ switchTargetsToTable (SwitchTargets _ (lo,hi) mbdef branches)
 switchTargetsToList :: SwitchTargets -> [Label]
 switchTargetsToList (SwitchTargets _ _ mbdef branches)
     = map liLbl (maybeToList mbdef ++ M.elems branches)
+
+-- | Get a list of labels and their weights, if inital weights are
+--   given they are normalized such that they sum up to around 1k
+switchTargestsToWeightedList :: SwitchTargets -> [(Label,EdgeWeight)]
+switchTargestsToWeightedList (SwitchTargets _ _ mbdef branches)
+    = let (labels, weights) = unzip (maybeToList mbdef ++ M.elems branches)
+          --Avoid overflow by using double
+          floatWeights = map (fromIntegral . getWeight) weights :: [Double]
+          totalWeight = sum floatWeights :: Double
+          adjustedWeights = map
+            (\x -> fromInteger . floor $ (x * 1000)/totalWeight) floatWeights :: [EdgeWeight]
+    in if (totalWeight < 1)
+        then zip labels (repeat 1) -- avoid zeros from rounding
+        else zip labels adjustedWeights
+
 
 -- | Groups cases with equal targets, suitable for pretty-printing to a
 -- c-like switch statement with fall-through semantics.

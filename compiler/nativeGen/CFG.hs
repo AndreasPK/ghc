@@ -65,6 +65,7 @@ import Data.List
 type Edge = (BlockId, BlockId)
 type Edges = [Edge]
 
+-- | Edge weight used by CFG in the native backend.
 newtype EdgeWeight
   = EdgeWeight Int
   deriving (Eq,Ord,Enum,Num,Real,Integral)
