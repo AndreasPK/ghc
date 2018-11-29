@@ -91,6 +91,15 @@ The algorithm is roughly:
         (j) For each spilled reg known to be now dead, re-add its stack slot
             to the free list.
 
+The dfs variant is slightly different in the order
+in which blocks are processed.
+In particular we process blocks as they are encountered
+in a dfs search, directed by the edge weights in the cfg.
+
+However this does only perform better when these weights are accurate,
+so unless weights for something like an inner loop are given this should
+not be enabled by default.
+
 -}
 
 module RegAlloc.Linear.Main (
@@ -137,9 +146,6 @@ import Platform
 import Data.Maybe
 import Data.List
 import Control.Monad
-
-import Outputable
-import Debug.Trace
 
 -- -----------------------------------------------------------------------------
 -- Top level of the register allocator
@@ -245,17 +251,19 @@ linearRegAlloc'
 
 linearRegAlloc' dflags mCfg initFreeRegs entry_ids block_live sccs
  = do   us      <- getUniqueSupplyM
-
         let (_, stack, stats, blocks) = case mCfg of
                 Just cfg
-                  | gopt Opt_RegsCfgAlloc dflags -- Priorizize heavy edges
-                  -> runR dflags mCfg mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
+                  | gopt Opt_RegsCfgAlloc dflags -- Use edge weights to guide allocation.
+                  -> runR dflags mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
                             $ linearRA_dfs cfg entry_ids block_live sccs
-                otherwise ->
-                        runR dflags mCfg mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
+                _ ->
+                        runR dflags mapEmpty initFreeRegs emptyRegMap (emptyStackMap dflags) us
                             $ linearRA_SCCs entry_ids block_live [] sccs
         return  (blocks, stats, getStackUse stack)
 
+-- | Linear register allocation in a depth first search order.
+--   Branches are taken in order of their branch weight
+--   This will likely be beneficial once
 linearRA_dfs :: forall instr freeRegs. (FR freeRegs, Instruction instr, Outputable instr)
               => CFG
               -> [BlockId]
@@ -267,11 +275,12 @@ linearRA_dfs _ _ _ []
         = return []
 linearRA_dfs cfg (entry_id:_) block_live sccs
  = do
+        --pprTraceM "RegAlloc - Block order:" $ ppr (map blockId orderedBlocks)
         blocks' <- mapM (processBlock block_live) orderedBlocks
         return $ concat blocks'
     where
         blocks = concat . map sccBlocks $ sccs
-        blockIds = map blockId blocks :: [BlockId]
+        --blockIds = map blockId blocks :: [BlockId] --debugging
         blockMap = mapFromList $
                         map (\b -> (blockId b, b)) blocks :: LabelMap (GenBasicBlock (LiveInstr instr))
         orderedIds = dfsOrder setEmpty [entry_id] []
@@ -307,19 +316,10 @@ linearRA_SCCs entry_ids block_live blocksAcc (AcyclicSCC block : sccs)
 
 linearRA_SCCs entry_ids block_live blocksAcc (CyclicSCC blocks : sccs)
  = do
-        cfg <- getCfgR
-        -- if (isNothing cfg) then do
-        do
-                blockss' <- process entry_ids block_live blocks [] (return []) False
-                linearRA_SCCs entry_ids block_live
-                        (reverse (concat blockss') ++ blocksAcc)
-                        sccs
-                -- else do
-                --   blockss' <- linearRA_cfg (fromJust cfg) block_live blocks
-                --   linearRA_SCCs entry_ids block_live
-                --         (reverse (blockss') ++ blocksAcc)
-                --         sccs
-
+        blockss' <- process entry_ids block_live blocks [] (return []) False
+        linearRA_SCCs entry_ids block_live
+                (reverse (concat blockss') ++ blocksAcc)
+                sccs
 
 {- from John Dias's patch 2008/10/16:
    The linear-scan allocator sometimes allocates a block

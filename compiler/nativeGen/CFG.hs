@@ -570,7 +570,28 @@ findBackEdges root cfg =
     typedEdges =
       classifyEdges root getSuccs edges :: [((BlockId,BlockId),EdgeType)]
 
+{- Note [Optimize for Fallthrough]
 
+  Turning jumps into fallthroughs is very beneficial,
+  not only do we save the execution of an instruction,
+  we also reduce code size!
+
+  For this reason we penalize edges crossing an info table.
+  These always force the generate of a jump with tables next
+  to code. However we assume all performance critical code uses
+  tables next to code and hence check for that here.
+
+  Similar reasoning for @favourFewerPreds@.
+
+  Given a graph like:
+       E1  E2
+      /  \ |
+     A     B
+  we want to get two fallthroughs, E1-A and E2-B,
+  but since layout mostly works locally we give the
+  edge E1-A a small boost to make it preferable over
+  E1-B.
+-}
 optimizeCFG :: D.CfgWeights -> RawCmmDecl -> CFG -> CFG
 optimizeCFG _ (CmmData {}) cfg = cfg
 optimizeCFG weights (CmmProc info _lab _live graph) cfg =
@@ -603,10 +624,6 @@ optimizeCFG weights (CmmProc info _lab _live graph) cfg =
           = weight - (fromIntegral $ D.infoTablePenalty weights)
           | otherwise = weight
 
-
-{- Note [Optimize for Fallthrough]
-
--}
     -- | If a block has two successors, favour the one with fewer
     -- predecessors. (As that one is more likely to become a fallthrough)
     favourFewerPreds :: CFG -> CFG
