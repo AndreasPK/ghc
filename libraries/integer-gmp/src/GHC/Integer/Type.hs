@@ -35,7 +35,7 @@ module GHC.Integer.Type where
 
 import GHC.Classes
 import GHC.Magic
-import GHC.Prim
+import GHC.Prim hiding (minI#) -- TODO - use this version
 import GHC.Types
 #if WORD_SIZE_IN_BITS < 64
 import GHC.IntWord64
@@ -1411,7 +1411,7 @@ gcdExtSBigNat x y = case runS go of (g,s) -> (# g, s #)
     xn# = ssizeofSBigNat# x
     yn# = ssizeofSBigNat# y
 
-    gn0# = minI# (absI# xn#) (absI# yn#)
+    gn0# = GHC.Integer.Type.minI# (absI# xn#) (absI# yn#)
 
 ----------------------------------------------------------------------------
 -- modular exponentiation

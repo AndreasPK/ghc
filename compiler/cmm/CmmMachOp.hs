@@ -623,6 +623,10 @@ data CallishMachOp
   | MO_AtomicRead Width
   | MO_AtomicWrite Width
   | MO_Cmpxchg Width
+
+  -- These trash the flags so we have to give them the call treatment.
+  | MO_S_Min Width
+  | MO_U_Min Width
   deriving (Eq, Show)
 
 -- | The operation to perform atomically.

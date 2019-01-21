@@ -936,6 +936,10 @@ callishPrimOpSupported dflags op
                          || llvm      -> Left MO_F64_Fabs
                      | otherwise      -> Right $ genericFabsOp W64
 
+      IntMinOp       | (ncg && x86ish )
+                                      -> Left MO_S_Min
+                     | otherwise      -> Right $ genericMinOp
+
       _ -> pprPanic "emitPrimOp: can't translate PrimOp " (ppr op)
  where
   ncg = case hscTarget dflags of
@@ -1233,6 +1237,12 @@ genericFabsOp w [res_r] [aa]
       emit =<< mkCmmIfThenElse (eq aa zero) g1 g4
 
 genericFabsOp _ _ _ = panic "genericFabsOp"
+
+genericMinOp :: Bool -> Width -> GenericOp
+genericMinOp isSigned w [res_r] [arg_x, arg_y]
+ = do
+    dflags <- getDynFlags
+    panic "TODO"
 
 -- These PrimOps are NOPs in Cmm
 

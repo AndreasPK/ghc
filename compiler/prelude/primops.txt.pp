@@ -343,6 +343,9 @@ primop   ISrlOp   "uncheckedIShiftRL#" GenPrimOp Int# -> Int# -> Int#
          {Shift right logical.  Result undefined if shift amount is not
           in the range 0 to word size - 1 inclusive.}
 
+primop   IntMinOp   "minI#"   Dyadic    Int# -> Int# -> Int#
+   with commutable = True
+
 ------------------------------------------------------------------------
 section "Int8#"
         {Operations on 8-bit integers.}
