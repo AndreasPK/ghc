@@ -75,6 +75,7 @@ instance Ord Int8 where
     (<=) = leInt8
     (>=) = geInt8
     (>)  = gtInt8
+    --TODO min/max
 
 {-# INLINE [1] gtInt8 #-}
 {-# INLINE [1] geInt8 #-}
@@ -275,17 +276,20 @@ instance Ord Int16 where
     (<=) = leInt16
     (>=) = geInt16
     (>)  = gtInt16
+    min = minInt16
 
 {-# INLINE [1] gtInt16 #-}
 {-# INLINE [1] geInt16 #-}
 {-# INLINE [1] ltInt16 #-}
 {-# INLINE [1] leInt16 #-}
+{-# INLINE [1] minInt16 #-}
 gtInt16, geInt16, ltInt16, leInt16 :: Int16 -> Int16 -> Bool
 (I16# x) `gtInt16` (I16# y) = isTrue# (x >#  y)
 (I16# x) `geInt16` (I16# y) = isTrue# (x >=# y)
 (I16# x) `ltInt16` (I16# y) = isTrue# (x <#  y)
 (I16# x) `leInt16` (I16# y) = isTrue# (x <=# y)
-
+minInt16 :: Int16 -> Int16 -> Int16
+minInt16 (I16# x) (I16# y) = I16# (minInt16# x y)
 -- | @since 2.01
 instance Show Int16 where
     showsPrec p x = showsPrec p (fromIntegral x :: Int)

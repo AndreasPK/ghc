@@ -343,7 +343,7 @@ primop   ISrlOp   "uncheckedIShiftRL#" GenPrimOp Int# -> Int# -> Int#
          {Shift right logical.  Result undefined if shift amount is not
           in the range 0 to word size - 1 inclusive.}
 
-primop   IntMinOp   "minI#"   Dyadic    Int# -> Int# -> Int#
+primop   IntMinOp   "minInt#"   Dyadic    Int# -> Int# -> Int#
    with commutable = True
 
 ------------------------------------------------------------------------
@@ -469,6 +469,9 @@ primop Int16LeOp "leInt16#" Compare Int16# -> Int16# -> Int#
 primop Int16LtOp "ltInt16#" Compare Int16# -> Int16# -> Int#
 primop Int16NeOp "neInt16#" Compare Int16# -> Int16# -> Int#
 
+primop Int16MinOp   "minInt16#"   Dyadic    Int16# -> Int16# -> Int16#
+   with commutable = True
+
 ------------------------------------------------------------------------
 section "Word16#"
         {Operations on 16-bit unsigned integers.}
@@ -509,6 +512,9 @@ primop Word16GtOp "gtWord16#" Compare Word16# -> Word16# -> Int#
 primop Word16LeOp "leWord16#" Compare Word16# -> Word16# -> Int#
 primop Word16LtOp "ltWord16#" Compare Word16# -> Word16# -> Int#
 primop Word16NeOp "neWord16#" Compare Word16# -> Word16# -> Int#
+
+primop Word16MinOp "minWord16#"   Dyadic    Word16# -> Word16# -> Word16#
+   with commutable = True
 
 ------------------------------------------------------------------------
 section "Word#"
@@ -593,6 +599,9 @@ primop   WordEqOp   "eqWord#"   Compare   Word# -> Word# -> Int#
 primop   WordNeOp   "neWord#"   Compare   Word# -> Word# -> Int#
 primop   WordLtOp   "ltWord#"   Compare   Word# -> Word# -> Int#
 primop   WordLeOp   "leWord#"   Compare   Word# -> Word# -> Int#
+
+primop   WordMinOp  "minWord#"  Dyadic    Word# -> Word# -> Word#
+   with commutable = True
 
 primop   PopCnt8Op   "popCnt8#"   Monadic   Word# -> Word#
     {Count the number of set bits in the lower 8 bits of a word.}

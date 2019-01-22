@@ -936,9 +936,16 @@ callishPrimOpSupported dflags op
                          || llvm      -> Left MO_F64_Fabs
                      | otherwise      -> Right $ genericFabsOp W64
 
-      IntMinOp       | (ncg && x86ish )
-                                      -> Left MO_S_Min
-                     | otherwise      -> Right $ genericMinOp
+      IntMinOp       | (ncg && x86ish ) -> Left (MO_S_Min (wordWidth dflags))
+                     | otherwise        -> Right $ genericMinOp True (wordWidth dflags)
+      WordMinOp      | (ncg && x86ish ) -> Left (MO_U_Min (wordWidth dflags))
+                     | otherwise        -> Right $ genericMinOp False (wordWidth dflags)
+      Int16MinOp     | (ncg && x86ish ) -> Left (MO_S_Min W16)
+                     | otherwise        -> Right $ genericMinOp True W16
+      Word16MinOp    | (ncg && x86ish ) -> Left (MO_U_Min W16)
+                     | otherwise        -> Right $ genericMinOp False W16
+
+
 
       _ -> pprPanic "emitPrimOp: can't translate PrimOp " (ppr op)
  where
@@ -1242,7 +1249,8 @@ genericMinOp :: Bool -> Width -> GenericOp
 genericMinOp isSigned w [res_r] [arg_x, arg_y]
  = do
     dflags <- getDynFlags
-    panic "TODO"
+    panic "TODO Implement branchless generic min"
+genericMinOp _ _ _ _ = error "TODO"
 
 -- These PrimOps are NOPs in Cmm
 

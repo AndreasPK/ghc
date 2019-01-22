@@ -2128,6 +2128,41 @@ genCCall dflags is32Bit (PrimTarget (MO_Ctz width)) [dst] [src] bid
     platform = targetPlatform dflags
     format = if width == W8 then II16 else intFormat width
 
+genCCall dflags _is32Bit (PrimTarget (MO_S_Min width)) [dst] [x,y] bid = do
+  let dst_r = getRegisterReg platform False (CmmLocal dst)
+  (r1, ins1) <- getSomeReg x
+  (r2, ins2) <- getSomeReg y
+
+  return $ ins1 `appOL` ins2 `appOL` toOL
+    [ CMP format (OpReg r1) (OpReg r2)
+    , MOV format (OpReg r2) (OpReg dst_r)
+    , CMOV GTT format (OpReg r1) dst_r
+    ]
+
+  where
+    platform = targetPlatform dflags
+    format
+      | width == W8 = panic "Byte sized min not supported"
+      | otherwise = intFormat width
+
+genCCall dflags _is32Bit (PrimTarget (MO_U_Min width)) [dst] [x,y] bid = do
+  let dst_r = getRegisterReg platform False (CmmLocal dst)
+  (r1, ins1) <- getSomeReg x
+  (r2, ins2) <- getSomeReg y
+
+  return $ ins1 `appOL` ins2 `appOL` toOL
+    [ CMP format (OpReg r1) (OpReg r2)
+    , MOV format (OpReg r2) (OpReg dst_r)
+    , CMOV GEU format (OpReg r1) dst_r
+    ]
+
+  where
+    platform = targetPlatform dflags
+    format
+      | width == W8 = panic "Byte sized min not supported"
+      | otherwise = intFormat width
+
+
 genCCall dflags is32Bit (PrimTarget (MO_UF_Conv width)) dest_regs args bid = do
     targetExpr <- cmmMakeDynamicReference dflags
                   CallReference lbl
@@ -2345,6 +2380,7 @@ genCCall _ is32Bit target dest_regs args bid = do
                                 MOV format (OpReg rax) (OpReg reg_l)]
                return code
         _ -> panic "genCCall: Wrong number of arguments/results for mul2"
+
 
     _ -> if is32Bit
          then genCCall32' dflags target dest_regs args
@@ -2934,6 +2970,8 @@ outOfLineCmmOp bid mop res args
               MO_WriteBarrier  -> unsupported
               MO_Touch         -> unsupported
               (MO_Prefetch_Data _ ) -> unsupported
+              MO_S_Min {}      -> unsupported
+              MO_U_Min {}      -> unsupported
         unsupported = panic ("outOfLineCmmOp: " ++ show mop
                           ++ " not supported here")
 
