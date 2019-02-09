@@ -75,7 +75,8 @@ instance Ord Int8 where
     (<=) = leInt8
     (>=) = geInt8
     (>)  = gtInt8
-    --TODO min/max
+    min  = minInt8
+    max  = maxInt8
 
 {-# INLINE [1] gtInt8 #-}
 {-# INLINE [1] geInt8 #-}
@@ -86,6 +87,12 @@ gtInt8, geInt8, ltInt8, leInt8 :: Int8 -> Int8 -> Bool
 (I8# x) `geInt8` (I8# y) = isTrue# (x >=# y)
 (I8# x) `ltInt8` (I8# y) = isTrue# (x <#  y)
 (I8# x) `leInt8` (I8# y) = isTrue# (x <=# y)
+
+{-# INLINE [1] minInt8 #-}
+{-# INLINE [1] maxInt8 #-}
+minInt8, maxInt8 :: Int8 -> Int8 -> Int8 --No narrow as we don't modify the values.
+minInt8 (I8# x) (I8# y) = I8# (minInt# x y)
+maxInt8 (I8# x) (I8# y) = I8# (maxInt# x y)
 
 -- | @since 2.01
 instance Show Int8 where
@@ -276,20 +283,25 @@ instance Ord Int16 where
     (<=) = leInt16
     (>=) = geInt16
     (>)  = gtInt16
-    min = minInt16
+    min  = minInt16
+    max  = maxInt16
 
 {-# INLINE [1] gtInt16 #-}
 {-# INLINE [1] geInt16 #-}
 {-# INLINE [1] ltInt16 #-}
 {-# INLINE [1] leInt16 #-}
-{-# INLINE [1] minInt16 #-}
 gtInt16, geInt16, ltInt16, leInt16 :: Int16 -> Int16 -> Bool
 (I16# x) `gtInt16` (I16# y) = isTrue# (x >#  y)
 (I16# x) `geInt16` (I16# y) = isTrue# (x >=# y)
 (I16# x) `ltInt16` (I16# y) = isTrue# (x <#  y)
 (I16# x) `leInt16` (I16# y) = isTrue# (x <=# y)
-minInt16 :: Int16 -> Int16 -> Int16
-minInt16 (I16# x) (I16# y) = I16# (minInt16# x y)
+
+{-# INLINE [1] minInt16 #-}
+{-# INLINE [1] maxInt16 #-}
+minInt16, maxInt16 :: Int16 -> Int16 -> Int16 --No narrow as we don't modify the values.
+minInt16 (I16# x) (I16# y) = I16# (minInt# x y)
+maxInt16 (I16# x) (I16# y) = I16# (maxInt# x y)
+
 -- | @since 2.01
 instance Show Int16 where
     showsPrec p x = showsPrec p (fromIntegral x :: Int)
@@ -484,6 +496,8 @@ instance Ord Int32 where
     (<=) = leInt32
     (>=) = geInt32
     (>)  = gtInt32
+    min  = minInt32
+    max  = maxInt32
 
 {-# INLINE [1] gtInt32 #-}
 {-# INLINE [1] geInt32 #-}
@@ -494,6 +508,12 @@ gtInt32, geInt32, ltInt32, leInt32 :: Int32 -> Int32 -> Bool
 (I32# x) `geInt32` (I32# y) = isTrue# (x >=# y)
 (I32# x) `ltInt32` (I32# y) = isTrue# (x <#  y)
 (I32# x) `leInt32` (I32# y) = isTrue# (x <=# y)
+
+{-# INLINE [1] minInt32 #-}
+{-# INLINE [1] maxInt32 #-}
+minInt32, maxInt32 :: Int32 -> Int32 -> Int32 --No narrow as we don't modify the values.
+minInt32 (I32# x) (I32# y) = I32# (minInt# x y)
+maxInt32 (I32# x) (I32# y) = I32# (maxInt# x y)
 
 -- | @since 2.01
 instance Show Int32 where
@@ -900,6 +920,8 @@ instance Ord Int64 where
     (<=) = leInt64
     (>=) = geInt64
     (>)  = gtInt64
+    min  = minInt64
+    max  = maxInt64
 
 {-# INLINE [1] gtInt64 #-}
 {-# INLINE [1] geInt64 #-}
@@ -910,6 +932,12 @@ gtInt64, geInt64, ltInt64, leInt64 :: Int64 -> Int64 -> Bool
 (I64# x) `geInt64` (I64# y) = isTrue# (x >=# y)
 (I64# x) `ltInt64` (I64# y) = isTrue# (x <#  y)
 (I64# x) `leInt64` (I64# y) = isTrue# (x <=# y)
+
+{-# INLINE [1] minInt64 #-}
+{-# INLINE [1] maxInt64 #-}
+minInt64, maxInt64 :: Int64 -> Int64 -> Int64
+minInt64 (I64# x) (I64# y) = I64# (minInt# x y)
+maxInt64 (I64# x) (I64# y) = I64# (maxInt# x y)
 
 -- | @since 2.01
 instance Show Int64 where

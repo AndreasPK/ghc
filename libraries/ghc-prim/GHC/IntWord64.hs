@@ -44,6 +44,8 @@ foreign import ccall unsafe "hs_gtInt64"     gtInt64#      :: Int64# -> Int64# -
 foreign import ccall unsafe "hs_geInt64"     geInt64#      :: Int64# -> Int64# -> Int#
 foreign import ccall unsafe "hs_quotInt64"   quotInt64#    :: Int64# -> Int64# -> Int64#
 foreign import ccall unsafe "hs_remInt64"    remInt64#     :: Int64# -> Int64# -> Int64#
+foreign import ccall unsafe "hs_minInt64"    minInt64#     :: Int64# -> Int64# -> Int64#
+foreign import ccall unsafe "hs_maxInt64"    maxInt64#     :: Int64# -> Int64# -> Int64#
 
 foreign import ccall unsafe "hs_plusInt64"   plusInt64#    :: Int64# -> Int64# -> Int64#
 foreign import ccall unsafe "hs_minusInt64"  minusInt64#   :: Int64# -> Int64# -> Int64#
@@ -51,6 +53,8 @@ foreign import ccall unsafe "hs_timesInt64"  timesInt64#   :: Int64# -> Int64# -
 foreign import ccall unsafe "hs_negateInt64" negateInt64#  :: Int64# -> Int64#
 foreign import ccall unsafe "hs_quotWord64"  quotWord64#   :: Word64# -> Word64# -> Word64#
 foreign import ccall unsafe "hs_remWord64"   remWord64#    :: Word64# -> Word64# -> Word64#
+foreign import ccall unsafe "hs_minWord64"   minWord64#    :: Word64# -> Word64# -> Word64#
+foreign import ccall unsafe "hs_maxWord64"   maxWord64#    :: Word64# -> Word64# -> Word64#
 
 foreign import ccall unsafe "hs_and64"       and64#        :: Word64# -> Word64# -> Word64#
 foreign import ccall unsafe "hs_or64"        or64#         :: Word64# -> Word64# -> Word64#

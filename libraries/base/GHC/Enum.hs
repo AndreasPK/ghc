@@ -473,8 +473,8 @@ instance  Enum Int  where
     fromEnum x = x
 
     {-# INLINE enumFrom #-}
-    enumFrom (I# x) = eftInt x maxInt#
-        where !(I# maxInt#) = maxInt
+    enumFrom (I# x) = eftInt x maxIntVal#
+        where !(I# maxIntVal#) = maxInt
         -- Blarg: technically I guess enumFrom isn't strict!
 
     {-# INLINE enumFromTo #-}
@@ -655,8 +655,8 @@ instance Enum Word where
         | otherwise       = fromEnumError "Word" x
 
     {-# INLINE enumFrom #-}
-    enumFrom (W# x#)      = eftWord x# maxWord#
-        where !(W# maxWord#) = maxBound
+    enumFrom (W# x#)      = eftWord x# maxWordVal#
+        where !(W# maxWordVal#) = maxBound
         -- Blarg: technically I guess enumFrom isn't strict!
 
     {-# INLINE enumFromTo #-}

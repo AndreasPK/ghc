@@ -304,7 +304,7 @@ data Instr
         | SQRT          Format Operand Reg      -- src, dst
 
 
-        -- Comparison
+        -- Comparison - Operands in gas order
         | TEST          Format Operand Operand
         | CMP           Format Operand Operand
         | SETCC         Cond Operand

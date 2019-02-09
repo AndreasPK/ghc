@@ -76,6 +76,13 @@ data MachOp
   | MO_U_Gt Width
   | MO_U_Lt Width
 
+  -- Brancheless min/max operations
+  | MO_S_Min Width
+  | MO_U_Min Width
+  | MO_S_Max Width
+  | MO_U_Max Width
+
+
   -- Floating point arithmetic
   | MO_F_Add  Width
   | MO_F_Sub  Width
@@ -250,6 +257,10 @@ isCommutableMachOp mop =
         MO_Xor _                -> True
         MO_F_Add _              -> True
         MO_F_Mul _              -> True
+        MO_S_Min _              -> True
+        MO_U_Min _              -> True
+        MO_S_Max _              -> True
+        MO_U_Max _              -> True
         _other                  -> False
 
 -- ----------------------------------------------------------------------------
@@ -265,11 +276,15 @@ native routes, but is otherwise harmless.
 isAssociativeMachOp :: MachOp -> Bool
 isAssociativeMachOp mop =
   case mop of
-        MO_Add {} -> True       -- NB: does not include
-        MO_Mul {} -> True --     floatint point!
-        MO_And {} -> True
-        MO_Or  {} -> True
-        MO_Xor {} -> True
+        MO_Add {}   -> True       -- NB: does not include
+        MO_Mul {}   -> True --     floatint point!
+        MO_And {}   -> True
+        MO_Or  {}   -> True
+        MO_Xor {}   -> True
+        MO_S_Min {} -> True
+        MO_U_Min {} -> True
+        MO_S_Max {} -> True
+        MO_U_Max {} -> True
         _other    -> False
 
 
@@ -376,6 +391,10 @@ machOpResultType dflags mop tys =
     MO_U_MulMayOflo r   -> cmmBits r
     MO_U_Quot r         -> cmmBits r
     MO_U_Rem  r         -> cmmBits r
+    MO_S_Min  r         -> cmmBits r
+    MO_U_Min  r         -> cmmBits r
+    MO_S_Max  r         -> cmmBits r
+    MO_U_Max  r         -> cmmBits r
 
     MO_Eq {}            -> comparisonResultRep dflags
     MO_Ne {}            -> comparisonResultRep dflags
@@ -470,6 +489,10 @@ machOpArgReps dflags op =
     MO_U_MulMayOflo r   -> [r,r]
     MO_U_Quot r         -> [r,r]
     MO_U_Rem  r         -> [r,r]
+    MO_S_Min  r         -> [r,r]
+    MO_U_Min  r         -> [r,r]
+    MO_S_Max  r         -> [r,r]
+    MO_U_Max  r         -> [r,r]
 
     MO_S_Ge r           -> [r,r]
     MO_S_Le r           -> [r,r]
@@ -623,10 +646,6 @@ data CallishMachOp
   | MO_AtomicRead Width
   | MO_AtomicWrite Width
   | MO_Cmpxchg Width
-
-  -- These trash the flags so we have to give them the call treatment.
-  | MO_S_Min Width
-  | MO_U_Min Width
   deriving (Eq, Show)
 
 -- | The operation to perform atomically.

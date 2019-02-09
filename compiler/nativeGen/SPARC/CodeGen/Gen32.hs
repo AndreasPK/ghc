@@ -24,6 +24,7 @@ import Format
 import Reg
 
 import Cmm
+import CmmMachOp
 
 import Control.Monad (liftM)
 import DynFlags
@@ -177,6 +178,7 @@ getRegister (CmmMachOp mop [x])
         MO_SS_Conv W8  W32      -> integerExtend W8  W32 x
         MO_SS_Conv W16 W32      -> integerExtend W16 W32 x
 
+        -- TODO: Min/Max
         _                       -> panic ("Unknown unary mach op: " ++ show mop)
 
 
@@ -211,6 +213,11 @@ getRegister (CmmMachOp mop [x, y])
 
       MO_S_Rem  W32     -> irem True  x y
       MO_U_Rem  W32     -> irem False x y
+
+      MO_S_Min  w       -> codeMinMax w (MO_S_Le w) x y
+      MO_U_Min  w       -> codeMinMax w (MO_U_Le w) x y
+      MO_S_Max  w       -> codeMinMax w (MO_S_Ge w) x y
+      MO_U_Max  w       -> codeMinMax w (MO_U_Ge w) x y
 
       MO_F_Eq _         -> condFltReg EQQ x y
       MO_F_Ne _         -> condFltReg NE x y
@@ -261,6 +268,34 @@ getRegister (CmmLit lit)
 
 getRegister _
         = panic "SPARC.CodeGen.Gen32.getRegister: no match"
+
+codeMinMax :: Width -> MachOp -> CmmExpr -> CmmExpr-> NatM Register
+codeMinMax w mop x y = do
+    -- We assign one value to the destination
+    -- jumping over the "wrong" assignment if appropriate.
+    -- pseudo code:
+    -- dst = x
+    -- if (x `cond` y) then (dst = y)
+    let format = intFormat w
+    lblTrue <- getBlockIdNat
+    (x_reg, x_code) <- getSomeReg x
+    (y_reg, y_code) <- getSomeReg y
+
+    --jmp to lblTrue if the condition we test is true.
+    brCode <- do
+          -- Logic taken from `genCondJump` dropping the float case.
+          CondCode is_float cond code <- getCondCode (CmmMachOp (mop) [x,y])
+          return (
+            code `appOL`
+            toOL [BI cond False lblTrue, NOP]
+                )
+    let code = \dst_reg ->
+            x_code `appOL` y_code `appOL`
+                unitOL (ADD False False g0 (RIReg x_reg) dst_reg) `appOL`
+                brCode `appOL`
+                toOL [ ADD False False g0 (RIReg y_reg) dst_reg
+                     , NEWBLOCK lblTrue]
+    return (Any format code)
 
 
 -- | sign extend and widen

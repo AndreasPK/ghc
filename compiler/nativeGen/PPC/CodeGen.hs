@@ -636,6 +636,12 @@ getRegister' _ (CmmMachOp mop [x, y]) -- dyadic PrimOps
       MO_Shl rep   -> shiftMulCode rep False SL x y
       MO_S_Shr rep -> srCode rep True SRA x y
       MO_U_Shr rep -> srCode rep False SR x y
+
+      MO_S_Min rep -> minmaxInt_code rep (MO_S_Le rep) x y
+      MO_U_Min rep -> minmaxInt_code rep (MO_U_Le rep) x y
+      MO_S_Max rep -> minmaxInt_code rep (MO_S_Ge rep) x y
+      MO_U_Max rep -> minmaxInt_code rep (MO_U_Ge rep) x y
+
       _         -> panic "PPC.CodeGen.getRegister: no match"
 
   where
@@ -648,6 +654,29 @@ getRegister' _ (CmmMachOp mop [x, y]) -- dyadic PrimOps
       tmp <- getNewRegNat fmt
       code <- remainderCode rep sgn tmp x y
       return (Any fmt code)
+
+    minmaxInt_code :: Width -> MachOp -> CmmExpr -> CmmExpr -> NatM Register
+    minmaxInt_code rep op x y = do
+      -- We assign one value to the destination
+      -- jumping over the "wrong" assignment if appropriate.
+      -- pseudo code:
+      -- dst = x
+      -- if (x `cond` y) then (dst = y)
+      let format = intFormat rep
+      lblTrue <- getBlockIdNat
+      (x_reg, x_code) <- getSomeReg x
+      (y_reg, y_code) <- getSomeReg y
+      brCode <- genCondJump lblTrue (CmmMachOp op [x,y]) Nothing
+      let code = \dst_reg ->
+            -- pseudo code:
+            -- dst = x
+            -- if (x `cond` y) then (dst = y)
+            x_code `appOL` y_code `appOL`
+                unitOL (MR dst_reg x_reg) `appOL`
+                brCode `appOL` toOL [MR dst_reg y_reg, NEWBLOCK lblTrue]
+
+      return (Any format code)
+
 
 
 getRegister' _ (CmmLit (CmmInt i rep))
@@ -1587,7 +1616,7 @@ genCCall'
     -> [CmmActual]        -- arguments (of mixed type)
     -> NatM InstrBlock
 
-{- 
+{-
     PowerPC Linux uses the System V Release 4 Calling Convention
     for PowerPC. It is described in the
     "System V Application Binary Interface PowerPC Processor Supplement".

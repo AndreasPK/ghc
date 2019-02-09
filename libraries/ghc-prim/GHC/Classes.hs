@@ -43,8 +43,8 @@ module GHC.Classes(
     eqChar, neChar,
     eqFloat, eqDouble,
     -- ** Monomorphic comparison operators
-    gtInt, geInt, leInt, ltInt, compareInt, compareInt#,
-    gtWord, geWord, leWord, ltWord, compareWord, compareWord#,
+    gtInt, geInt, leInt, ltInt, compareInt, compareInt#, minOfInt, maxOfInt,
+    gtWord, geWord, leWord, ltWord, compareWord, compareWord#, minOfWord, maxOfWord,
 
     -- * Functions over Bool
     (&&), (||), not,
@@ -462,6 +462,8 @@ instance Ord Int where
     (<=)    = leInt
     (>=)    = geInt
     (>)     = gtInt
+    min     = minOfInt
+    max     = maxOfInt
 
 -- See GHC.Classes#matching_overloaded_methods_in_rules
 {-# INLINE [1] gtInt #-}
@@ -473,6 +475,12 @@ gtInt, geInt, ltInt, leInt :: Int -> Int -> Bool
 (I# x) `geInt` (I# y) = isTrue# (x >=# y)
 (I# x) `ltInt` (I# y) = isTrue# (x <#  y)
 (I# x) `leInt` (I# y) = isTrue# (x <=# y)
+
+{-# INLINE [1] minOfInt #-}
+{-# INLINE [1] maxOfInt #-}
+minOfInt, maxOfInt :: Int -> Int -> Int
+minOfInt (I# x) (I# y) = I# (minInt# x y)
+maxOfInt (I# x) (I# y) = I# (maxInt# x y)
 
 compareInt :: Int -> Int -> Ordering
 (I# x#) `compareInt` (I# y#) = compareInt# x# y#
@@ -489,6 +497,8 @@ instance Ord Word where
     (<=)    = leWord
     (>=)    = geWord
     (>)     = gtWord
+    min     = minOfWord
+    max     = maxOfWord
 
 -- See GHC.Classes#matching_overloaded_methods_in_rules
 {-# INLINE [1] gtWord #-}
@@ -500,6 +510,12 @@ gtWord, geWord, ltWord, leWord :: Word -> Word -> Bool
 (W# x) `geWord` (W# y) = isTrue# (x `geWord#` y)
 (W# x) `ltWord` (W# y) = isTrue# (x `ltWord#` y)
 (W# x) `leWord` (W# y) = isTrue# (x `leWord#` y)
+
+{-# INLINE [1] minOfWord #-}
+{-# INLINE [1] maxOfWord #-}
+minOfWord, maxOfWord :: Word -> Word -> Word
+minOfWord (W# x) (W# y) = W# (minWord# x y)
+maxOfWord (W# x) (W# y) = W# (maxWord# x y)
 
 compareWord :: Word -> Word -> Ordering
 (W# x#) `compareWord` (W# y#) = compareWord# x# y#

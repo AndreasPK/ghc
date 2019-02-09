@@ -148,7 +148,7 @@ pprBBlock block =
 
 -- --------------------------------------------------------------------------
 -- Info tables. Just arrays of words.
--- See codeGen/ClosureInfo, and nativeGen/PprWidth
+-- See codeGen/ClosureInfo, and nativeGen/PprMach
 
 pprWordArray :: Bool -> CLabel -> [CmmStatic] -> SDoc
 pprWordArray is_ro lbl ds
@@ -427,9 +427,25 @@ pprMachOpApp :: MachOp -> [CmmExpr] -> SDoc
 pprMachOpApp op args
   | isMulMayOfloOp op
   = text "mulIntMayOflo" <> parens (commafy (map pprExpr args))
+  | isMinOp op || isMaxOp op
+  , [x,y] <- args
+  = let val1 = pprExpr x
+        val2 = pprExpr y
+        -- (a < b ? a : b)
+    in case isMaxOp op of
+        True  -> parens (val1 <+> text ">" <+> val2 <+> text "?" <+>
+                                               val1 <+> dcolon <+> val2 )
+        False -> parens (val1 <+> text "<" <+> val2 <+> text "?" <+>
+                                               val1 <+> dcolon <+> val2 )
   where isMulMayOfloOp (MO_U_MulMayOflo _) = True
         isMulMayOfloOp (MO_S_MulMayOflo _) = True
         isMulMayOfloOp _ = False
+        isMinOp        (MO_S_Min        _) = True -- TODO: Signedness?
+        isMinOp        (MO_U_Min        _) = True
+        isMinOp        _                   = False
+        isMaxOp        (MO_S_Max        _) = True -- TODO: Signedness?
+        isMaxOp        (MO_U_Max        _) = True
+        isMaxOp        _                   = False
 
 pprMachOpApp mop args
   | Just ty <- machOpNeedsCast mop
@@ -658,6 +674,25 @@ pprMachOp_for_C mop = case mop of
         MO_SF_Conv _from to -> parens (machRep_F_CType to)
         MO_FS_Conv _from to -> parens (machRep_S_CType to)
 
+        MO_S_Min _        -> pprTrace "offending mop:"
+                                (text "MO_S_Min")
+                                (panic $ "PprC.pprMachOp_for_C: MO_S_Min"
+                                      ++ " should have been handled earlier!")
+
+        MO_U_Min _        -> pprTrace "offending mop:"
+                                (text "MO_U_Min")
+                                (panic $ "PprC.pprMachOp_for_C: MO_U_Min"
+                                      ++ " should have been handled earlier!")
+        MO_S_Max _        -> pprTrace "offending mop:"
+                                (text "MO_S_Max")
+                                (panic $ "PprC.pprMachOp_for_C: MO_S_Max"
+                                      ++ " should have been handled earlier!")
+
+        MO_U_Max _        -> pprTrace "offending mop:"
+                                (text "MO_U_Max")
+                                (panic $ "PprC.pprMachOp_for_C: MO_U_Max"
+                                      ++ " should have been handled earlier!")
+
         MO_S_MulMayOflo _ -> pprTrace "offending mop:"
                                 (text "MO_S_MulMayOflo")
                                 (panic $ "PprC.pprMachOp_for_C: MO_S_MulMayOflo"
@@ -836,8 +871,6 @@ pprCallishMachOp_for_C mop
         (MO_Prefetch_Data _ ) -> unsupported
         --- we could support prefetch via "__builtin_prefetch"
         --- Not adding it for now
-
-        MO_S_Min _       -> text "min" --TODO: Support? Other way
     where unsupported = panic ("pprCallishMachOp_for_C: " ++ show mop
                             ++ " not supported!")
 

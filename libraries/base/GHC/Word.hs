@@ -82,6 +82,8 @@ instance Ord Word8 where
     (<=) = leWord8
     (>=) = geWord8
     (>)  = gtWord8
+    min  = minWord8
+    max  = maxWord8
 
 {-# INLINE [1] gtWord8 #-}
 {-# INLINE [1] geWord8 #-}
@@ -92,6 +94,12 @@ gtWord8, geWord8, ltWord8, leWord8 :: Word8 -> Word8 -> Bool
 (W8# x) `geWord8` (W8# y) = isTrue# (x `geWord#` y)
 (W8# x) `ltWord8` (W8# y) = isTrue# (x `ltWord#` y)
 (W8# x) `leWord8` (W8# y) = isTrue# (x `leWord#` y)
+
+{-# INLINE [1] minWord8 #-}
+{-# INLINE [1] maxWord8 #-}
+minWord8, maxWord8 :: Word8 -> Word8 -> Word8 --No narrow as we don't modify the values.
+minWord8 (W8# x) (W8# y) = W8# (minWord# x y)
+maxWord8 (W8# x) (W8# y) = W8# (maxWord# x y)
 
 -- | @since 2.01
 instance Show Word8 where
@@ -266,6 +274,8 @@ instance Ord Word16 where
     (<=) = leWord16
     (>=) = geWord16
     (>)  = gtWord16
+    min  = minWord16
+    max  = maxWord16
 
 {-# INLINE [1] gtWord16 #-}
 {-# INLINE [1] geWord16 #-}
@@ -276,6 +286,12 @@ gtWord16, geWord16, ltWord16, leWord16 :: Word16 -> Word16 -> Bool
 (W16# x) `geWord16` (W16# y) = isTrue# (x `geWord#` y)
 (W16# x) `ltWord16` (W16# y) = isTrue# (x `ltWord#` y)
 (W16# x) `leWord16` (W16# y) = isTrue# (x `leWord#` y)
+
+{-# INLINE [1] minWord16 #-}
+{-# INLINE [1] maxWord16 #-}
+minWord16, maxWord16 :: Word16 -> Word16 -> Word16 --No narrow as we don't modify the values.
+minWord16 (W16# x) (W16# y) = W16# (minWord# x y)
+maxWord16 (W16# x) (W16# y) = W16# (maxWord# x y)
 
 -- | @since 2.01
 instance Show Word16 where
@@ -493,6 +509,8 @@ instance Ord Word32 where
     (<=) = leWord32
     (>=) = geWord32
     (>)  = gtWord32
+    min  = minWord32
+    max  = maxWord32
 
 {-# INLINE [1] gtWord32 #-}
 {-# INLINE [1] geWord32 #-}
@@ -503,6 +521,12 @@ gtWord32, geWord32, ltWord32, leWord32 :: Word32 -> Word32 -> Bool
 (W32# x) `geWord32` (W32# y) = isTrue# (x `geWord#` y)
 (W32# x) `ltWord32` (W32# y) = isTrue# (x `ltWord#` y)
 (W32# x) `leWord32` (W32# y) = isTrue# (x `leWord#` y)
+
+{-# INLINE [1] minWord32 #-}
+{-# INLINE [1] maxWord32 #-}
+minWord32, maxWord32 :: Word32 -> Word32 -> Word32 --No narrow as we don't modify values.
+minWord32 (W32# x) (W32# y) = W32# (minWord# x y)
+maxWord32 (W32# x) (W32# y) = W32# (maxWord# x y)
 
 -- | @since 2.01
 instance Num Word32 where
@@ -823,6 +847,8 @@ instance Ord Word64 where
     (<=) = leWord64
     (>=) = geWord64
     (>)  = gtWord64
+    min  = minWord64
+    max  = maxWord64
 
 {-# INLINE [1] gtWord64 #-}
 {-# INLINE [1] geWord64 #-}
@@ -833,6 +859,12 @@ gtWord64, geWord64, ltWord64, leWord64 :: Word64 -> Word64 -> Bool
 (W64# x) `geWord64` (W64# y) = isTrue# (x `geWord#` y)
 (W64# x) `ltWord64` (W64# y) = isTrue# (x `ltWord#` y)
 (W64# x) `leWord64` (W64# y) = isTrue# (x `leWord#` y)
+
+{-# INLINE [1] minWord64 #-}
+{-# INLINE [1] maxWord64 #-}
+minWord64, maxWord64 :: Word64 -> Word64 -> Word64
+minWord64 (W64# x) (W64# y) = W64# (minWord# x y)
+maxWord64 (W64# x) (W64# y) = W64# (maxWord# x y)
 
 -- | @since 2.01
 instance Num Word64 where

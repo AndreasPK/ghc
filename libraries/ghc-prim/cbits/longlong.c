@@ -50,13 +50,18 @@ HsInt hs_leInt64 (HsInt64 a, HsInt64 b) {return a <= b;}
 
 HsWord64 hs_remWord64  (HsWord64 a, HsWord64 b) {return a % b;}
 HsWord64 hs_quotWord64 (HsWord64 a, HsWord64 b) {return a / b;}
+HsWord64 hs_minWord64  (HsWord64 a, HsWord64 b) {return a < b ? a : b;}
+HsWord64 hs_maxWord64  (HsWord64 a, HsWord64 b) {return a > b ? a : b;}
 
 HsInt64 hs_remInt64    (HsInt64 a, HsInt64 b)   {return a % b;}
 HsInt64 hs_quotInt64   (HsInt64 a, HsInt64 b)   {return a / b;}
+HsInt64 hs_minInt64    (HsInt64 a, HsInt64 b)   {return a < b ? a : b;}
+HsInt64 hs_maxInt64    (HsInt64 a, HsInt64 b)   {return a > b ? a : b;}
 HsInt64 hs_negateInt64 (HsInt64 a)              {return -a;}
 HsInt64 hs_plusInt64   (HsInt64 a, HsInt64 b)   {return a + b;}
 HsInt64 hs_minusInt64  (HsInt64 a, HsInt64 b)   {return a - b;}
 HsInt64 hs_timesInt64  (HsInt64 a, HsInt64 b)   {return a * b;}
+
 
 /* Logical operators: */
 

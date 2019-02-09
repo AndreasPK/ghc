@@ -936,17 +936,6 @@ callishPrimOpSupported dflags op
                          || llvm      -> Left MO_F64_Fabs
                      | otherwise      -> Right $ genericFabsOp W64
 
-      IntMinOp       | (ncg && x86ish ) -> Left (MO_S_Min (wordWidth dflags))
-                     | otherwise        -> Right $ genericMinOp True (wordWidth dflags)
-      WordMinOp      | (ncg && x86ish ) -> Left (MO_U_Min (wordWidth dflags))
-                     | otherwise        -> Right $ genericMinOp False (wordWidth dflags)
-      Int16MinOp     | (ncg && x86ish ) -> Left (MO_S_Min W16)
-                     | otherwise        -> Right $ genericMinOp True W16
-      Word16MinOp    | (ncg && x86ish ) -> Left (MO_U_Min W16)
-                     | otherwise        -> Right $ genericMinOp False W16
-
-
-
       _ -> pprPanic "emitPrimOp: can't translate PrimOp " (ppr op)
  where
   ncg = case hscTarget dflags of
@@ -1245,13 +1234,6 @@ genericFabsOp w [res_r] [aa]
 
 genericFabsOp _ _ _ = panic "genericFabsOp"
 
-genericMinOp :: Bool -> Width -> GenericOp
-genericMinOp isSigned w [res_r] [arg_x, arg_y]
- = do
-    dflags <- getDynFlags
-    panic "TODO Implement branchless generic min"
-genericMinOp _ _ _ _ = error "TODO"
-
 -- These PrimOps are NOPs in Cmm
 
 nopOp :: PrimOp -> Bool
@@ -1322,6 +1304,9 @@ translateOp dflags ISllOp         = Just (mo_wordShl dflags)
 translateOp dflags ISraOp         = Just (mo_wordSShr dflags)
 translateOp dflags ISrlOp         = Just (mo_wordUShr dflags)
 
+translateOp dflags IntMinOp       = Just (MO_S_Min (wordWidth dflags))
+translateOp dflags IntMaxOp       = Just (MO_S_Max (wordWidth dflags))
+
 -- Native word unsigned ops
 
 translateOp dflags WordGeOp       = Just (mo_wordUGe dflags)
@@ -1337,6 +1322,9 @@ translateOp dflags AddrGeOp       = Just (mo_wordUGe dflags)
 translateOp dflags AddrLeOp       = Just (mo_wordULe dflags)
 translateOp dflags AddrGtOp       = Just (mo_wordUGt dflags)
 translateOp dflags AddrLtOp       = Just (mo_wordULt dflags)
+
+translateOp dflags WordMinOp      = Just (MO_U_Min (wordWidth dflags))
+translateOp dflags WordMaxOp      = Just (MO_U_Max (wordWidth dflags))
 
 -- Int8# signed ops
 
@@ -1392,6 +1380,10 @@ translateOp _      Int16LeOp       = Just (MO_S_Le W16)
 translateOp _      Int16LtOp       = Just (MO_S_Lt W16)
 translateOp _      Int16NeOp       = Just (MO_Ne W16)
 
+translateOp dflags Int16MinOp      = Just (MO_S_Min (wordWidth dflags))
+translateOp dflags Int16MaxOp      = Just (MO_S_Max (wordWidth dflags))
+
+
 -- Word16# unsigned ops
 
 translateOp dflags Word16Extend     = Just (MO_UU_Conv W16 (wordWidth dflags))
@@ -1409,6 +1401,9 @@ translateOp _      Word16GtOp       = Just (MO_U_Gt W16)
 translateOp _      Word16LeOp       = Just (MO_U_Le W16)
 translateOp _      Word16LtOp       = Just (MO_U_Lt W16)
 translateOp _      Word16NeOp       = Just (MO_Ne W16)
+
+translateOp dflags Word16MinOp      = Just (MO_U_Min W16)
+translateOp dflags Word16MaxOp      = Just (MO_U_Max W16)
 
 -- Char# ops
 

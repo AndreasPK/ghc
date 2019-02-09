@@ -833,6 +833,11 @@ getRegister' _ is32Bit (CmmMachOp mop [x, y]) = do -- dyadic MachOps
       MO_U_Shr rep -> shift_code rep SHR x y {-False-}
       MO_S_Shr rep -> shift_code rep SAR x y {-False-}
 
+      MO_S_Min rep -> minmaxInt_code rep LE  x y
+      MO_U_Min rep -> minmaxInt_code rep LEU x y
+      MO_S_Max rep -> minmaxInt_code rep GE  x y
+      MO_U_Max rep -> minmaxInt_code rep GEU x y
+
       MO_V_Insert {}   -> needLlvm
       MO_V_Extract {}  -> needLlvm
       MO_V_Add {}      -> needLlvm
@@ -996,6 +1001,26 @@ getRegister' _ is32Bit (CmmMachOp mop [x, y]) = do -- dyadic MachOps
 
            return (Fixed format result code)
 
+    -- Takes the desirable condition (eg. LT for min)
+    -- and returns the min/max code.
+    minmaxInt_code width cond x y = do
+      let format = intFormat width
+      -- We just load both into regs for simplicity.
+      -- We could try to keep one memory access as well to
+      -- reduce code size in the future.
+      (x_reg, x_code) <- getSomeReg x
+      (y_reg, y_code) <- getSomeReg y
+      let code = \dst_reg ->
+            -- pseudo code:
+            -- dst = y
+            -- if (x `cond` y) then (ret x) else (ret y)
+            x_code `appOL` y_code `appOL`
+                  ( toOL
+                      [ MOV format (OpReg y_reg) (OpReg dst_reg)
+                      --
+                      , CMP format (OpReg y_reg) (OpReg x_reg)
+                      , CMOV cond format (OpReg x_reg) dst_reg ] )
+      return (Any format code)
 
 getRegister' _ _ (CmmLoad mem pk)
   | isFloatType pk
@@ -2128,41 +2153,6 @@ genCCall dflags is32Bit (PrimTarget (MO_Ctz width)) [dst] [src] bid
     platform = targetPlatform dflags
     format = if width == W8 then II16 else intFormat width
 
-genCCall dflags _is32Bit (PrimTarget (MO_S_Min width)) [dst] [x,y] bid = do
-  let dst_r = getRegisterReg platform False (CmmLocal dst)
-  (r1, ins1) <- getSomeReg x
-  (r2, ins2) <- getSomeReg y
-
-  return $ ins1 `appOL` ins2 `appOL` toOL
-    [ CMP format (OpReg r1) (OpReg r2)
-    , MOV format (OpReg r2) (OpReg dst_r)
-    , CMOV GTT format (OpReg r1) dst_r
-    ]
-
-  where
-    platform = targetPlatform dflags
-    format
-      | width == W8 = panic "Byte sized min not supported"
-      | otherwise = intFormat width
-
-genCCall dflags _is32Bit (PrimTarget (MO_U_Min width)) [dst] [x,y] bid = do
-  let dst_r = getRegisterReg platform False (CmmLocal dst)
-  (r1, ins1) <- getSomeReg x
-  (r2, ins2) <- getSomeReg y
-
-  return $ ins1 `appOL` ins2 `appOL` toOL
-    [ CMP format (OpReg r1) (OpReg r2)
-    , MOV format (OpReg r2) (OpReg dst_r)
-    , CMOV GEU format (OpReg r1) dst_r
-    ]
-
-  where
-    platform = targetPlatform dflags
-    format
-      | width == W8 = panic "Byte sized min not supported"
-      | otherwise = intFormat width
-
-
 genCCall dflags is32Bit (PrimTarget (MO_UF_Conv width)) dest_regs args bid = do
     targetExpr <- cmmMakeDynamicReference dflags
                   CallReference lbl
@@ -2970,8 +2960,6 @@ outOfLineCmmOp bid mop res args
               MO_WriteBarrier  -> unsupported
               MO_Touch         -> unsupported
               (MO_Prefetch_Data _ ) -> unsupported
-              MO_S_Min {}      -> unsupported
-              MO_U_Min {}      -> unsupported
         unsupported = panic ("outOfLineCmmOp: " ++ show mop
                           ++ " not supported here")
 

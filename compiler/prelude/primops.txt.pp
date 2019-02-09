@@ -345,6 +345,8 @@ primop   ISrlOp   "uncheckedIShiftRL#" GenPrimOp Int# -> Int# -> Int#
 
 primop   IntMinOp   "minInt#"   Dyadic    Int# -> Int# -> Int#
    with commutable = True
+primop   IntMaxOp   "maxInt#"   Dyadic    Int# -> Int# -> Int#
+   with commutable = True
 
 ------------------------------------------------------------------------
 section "Int8#"
@@ -471,6 +473,8 @@ primop Int16NeOp "neInt16#" Compare Int16# -> Int16# -> Int#
 
 primop Int16MinOp   "minInt16#"   Dyadic    Int16# -> Int16# -> Int16#
    with commutable = True
+primop Int16MaxOp   "maxInt16#"   Dyadic    Int16# -> Int16# -> Int16#
+   with commutable = True
 
 ------------------------------------------------------------------------
 section "Word16#"
@@ -514,6 +518,8 @@ primop Word16LtOp "ltWord16#" Compare Word16# -> Word16# -> Int#
 primop Word16NeOp "neWord16#" Compare Word16# -> Word16# -> Int#
 
 primop Word16MinOp "minWord16#"   Dyadic    Word16# -> Word16# -> Word16#
+   with commutable = True
+primop Word16MaxOp "maxWord16#"   Dyadic    Word16# -> Word16# -> Word16#
    with commutable = True
 
 ------------------------------------------------------------------------
@@ -601,6 +607,8 @@ primop   WordLtOp   "ltWord#"   Compare   Word# -> Word# -> Int#
 primop   WordLeOp   "leWord#"   Compare   Word# -> Word# -> Int#
 
 primop   WordMinOp  "minWord#"  Dyadic    Word# -> Word# -> Word#
+   with commutable = True
+primop   WordMaxOp  "maxWord#"  Dyadic    Word# -> Word# -> Word#
    with commutable = True
 
 primop   PopCnt8Op   "popCnt8#"   Monadic   Word# -> Word#

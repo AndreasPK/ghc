@@ -1225,9 +1225,14 @@ genMachOp _ op [x] = case op of
     MO_S_MulMayOflo _ -> panicOp
     MO_S_Quot _       -> panicOp
     MO_S_Rem _        -> panicOp
+    MO_S_Min _        -> panicOp
+    MO_S_Max _        -> panicOp
     MO_U_MulMayOflo _ -> panicOp
     MO_U_Quot _       -> panicOp
     MO_U_Rem _        -> panicOp
+    MO_U_Min _        -> panicOp
+    MO_U_Max _        -> panicOp
+
 
     MO_Eq  _          -> panicOp
     MO_Ne  _          -> panicOp
@@ -1417,6 +1422,12 @@ genMachOp_slow opt op [x, y] = case op of
     MO_U_Quot _ -> genBinMach LM_MO_UDiv
     MO_U_Rem  _ -> genBinMach LM_MO_URem
 
+    MO_U_Min  _ -> genMinMax op
+    MO_S_Min  _ -> genMinMax op
+
+    MO_U_Max  _ -> genMinMax op
+    MO_S_Max  _ -> genMinMax op
+
     MO_F_Eq _ -> genBinComp opt LM_CMP_Feq
     MO_F_Ne _ -> genBinComp opt LM_CMP_Fne
     MO_F_Gt _ -> genBinComp opt LM_CMP_Fgt
@@ -1475,6 +1486,48 @@ genMachOp_slow opt op [x, y] = case op of
     MO_AlignmentCheck {} -> panicOp
 
     where
+        genMinMax :: MachOp -> LlvmM ExprData
+        genMinMax cmpKind = do
+
+            -- Generate branching code
+            lblTrue  <- mkBlockId <$> getUniqueM
+            lblFalse <- mkBlockId <$> getUniqueM
+            -- Here we join up again
+            lblRet   <- mkBlockId <$> getUniqueM
+
+            let cond = CmmMachOp cmpOp [x,y]
+            (branchStmts, decBranch) <- genCondBranch cond lblTrue lblFalse Nothing
+
+            -- Generate True Branch
+            (vx,sx,decx) <- exprToVar x
+            let trueStmts = unitOL (MkLabel (getUnique lblTrue)) `appOL` sx `appOL`
+                            unitOL (Branch (mkVarLabel lblRet))
+
+            -- Generate False Branch
+            (vy,sy,decy) <- exprToVar y
+            let falseStmts = unitOL (MkLabel (getUnique lblFalse)) `appOL` sy `appOL`
+                             unitOL (Branch (mkVarLabel lblRet))
+
+            -- "Return" Branch
+            vRet <- mkLocalVar (getVarType vy)
+            let phiExpr = Phi (getVarType vy)
+                              [(vx, mkVarLabel lblTrue), (vy, mkVarLabel lblFalse)]
+            let retStmts = toOL $ [ MkLabel (getUnique lblRet)
+                                  , Assignment vRet phiExpr]
+
+            return (vRet, mconcat [branchStmts, trueStmts, falseStmts, retStmts], mconcat [decBranch,decx,decy])
+          where
+            mkVarLabel :: BlockId -> LlvmVar
+            mkVarLabel lbl = (LMLocalVar (getUnique lbl) LMLabel)
+
+            cmpOp :: MachOp
+            cmpOp = case op of
+                (MO_U_Min w) -> MO_U_Le w
+                (MO_S_Min w) -> MO_S_Le w
+                (MO_U_Max w) -> MO_U_Ge w
+                (MO_S_Max w) -> MO_S_Ge w
+                _            -> pprPanic "invalid minMax op" (text $ show op)
+
         binLlvmOp ty binOp = runExprData $ do
             vx <- exprToVarW x
             vy <- exprToVarW y
