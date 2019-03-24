@@ -71,7 +71,7 @@ import Maybes
 import Util
 import Name
 import Outputable
-import BasicTypes ( isGenerated, fl_value, FractionalLit(..))
+import BasicTypes ( isGenerated, fl_value, FractionalLit(..), Origin(..))
 import FastString
 import Unique
 import UniqDFM
@@ -328,9 +328,9 @@ toPatternMatrix vars eqs = do
 
 toEqnInfo :: HasCallStack => EqMatrix -> [EquationInfo]
 toEqnInfo m =
-    let eqs = F.toList m
+    let eqs = F.toList m :: [(Seq (Entry PatInfo), MatrixRHS)]
         withPat = fmap (first (map fst . F.toList)) eqs :: [([Pat GhcTc], MatrixRHS)]
-        eqnInfos = fmap (\x -> EqnInfo (fst x) (fst . snd $ x)) withPat :: [EquationInfo]
+        eqnInfos = fmap (\(x) -> EqnInfo (fst x) Generated (fst . snd $ x)) withPat :: [EquationInfo]
     in
     eqnInfos
 
@@ -350,7 +350,7 @@ toMatrixRow :: HasCallStack => [MatchId] -> EquationInfo -> DsM (TreeEquation)
     Combine them in a single wrapper
     Adjust the RHS to incude the wrappers.
 -}
-toMatrixRow vars (EqnInfo pats rhs) = do
+toMatrixRow vars (EqnInfo pats _ rhs) = do
     --liftIO $ traceM "tidyRow"
     let patternInfos = zipWith (\occ col -> PatInfo {patOcc = occ, patCol = [col]}) vars [0..]
     --liftIO . putStrLn . showSDocUnsafe $ ppr patternInfos
@@ -740,9 +740,9 @@ getPatternConstraint (WildPat {}, info) =
 getPatternConstraint (VarPat {}, info) =
     --traceM "vp" >>
     return Nothing
-getPatternConstraint (BangPat _ (L _ p), info)
-    | WildPat {} <- p = return $ Just (CondEvaluate info)
-    | VarPat {} <- p = return $ Just (CondEvaluate info)
+getPatternConstraint (BangPat _ lp, info)
+    | WildPat {} <- lp = return $ Just (CondEvaluate info)
+    | VarPat {} <- lp = return $ Just (CondEvaluate info)
 getPatternConstraint (p@BangPat {}, info) =
     fallBack $ "Bang patterns should have been stripped of all supported patterns " ++ showSDocUnsafe (ppr p)
 getPatternConstraint (p, info) =
@@ -946,7 +946,7 @@ getGrp df (p, _e ) = patGroup df p
 patGroup :: HasCallStack => DynFlags -> Pat GhcTc -> PGrp
 patGroup _df (WildPat {} ) = VarGrp
 patGroup _df (VarPat  {} ) = VarGrp
-patGroup df  (BangPat _ (L _loc p)) = patGroup df p
+patGroup df  (BangPat _ p) = patGroup df p
 patGroup _df (ConPatOut { pat_con = L _ con})
     | PatSynCon psyn <- con
     = pprPanic "Not implemented" (ppr con <+> showAstData NoBlankSrcSpan con)
@@ -1423,7 +1423,7 @@ unpackCon (WildPat ty, PatInfo {patOcc = patOcc, patCol = patCol}) (vars, bangs)
     let wildcards --Generate wildcard patterns for all ids
             = zipWith3 (\t bang pat ->
                             if isBanged bang
-                                then unLoc . addBang $ (L (error "Not looked at") (pat t))
+                                then unLoc . addBang $ (pat t)
                                 else (pat t))
                 (map idType vars)
                 bangs
@@ -1439,7 +1439,7 @@ unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) 
         normalized_pats --Regular patterns + Wildcards for missing ones
             = zipWith3 (\t bang pat ->
                             if isBanged bang
-                                then unLoc . addBang $ (L (error "Not looked at") (pat t))
+                                then unLoc . addBang $ (pat t)
                                 else (pat t))
                         (map idType vars)
                         bangs
@@ -1452,7 +1452,7 @@ unpackCon (conPat@ConPatOut {},     PatInfo {patOcc = patOcc, patCol = patCol}) 
     where
         ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 } = conPat
-unpackCon (BangPat _ (L _ p), info) (vars, bangs) =
+unpackCon (BangPat _ p, info) (vars, bangs) =
     unpackCon (p, info) (vars, bangs)
 unpackCon (pat, info) _ =
     error $ "unpackCon failed on:" ++ showSDocUnsafe (ppr pat)
@@ -1666,6 +1666,9 @@ tidyEntry (pat, info@PatInfo { patOcc = occ}) = do
     --liftIO $ putStrLn "tidied"
     return $ (wrapper, (newPat, info))
 
+tidySrcSpan :: SrcSpan
+tidySrcSpan = (UnhelpfulSpan $ fsLit "TODO: MatchTree.hs: tidy1")
+
 tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
       -> Pat GhcTc           -- The pattern against which it is to be matched
       -> DsM (DsWrapper,     -- Extra bindings to do before the match
@@ -1681,12 +1684,12 @@ tidy1 :: HasCallStack => Id                  -- The Id being scrutinised
 --     | pprTrace "tidy" (showAstData NoBlankSrcSpan pat) False
 --     = undefined
 tidy1 v (ParPat _ pat)      = tidy1 v (unLoc pat)
-tidy1 v (SigPat _ pat)    = tidy1 v (unLoc pat)
+tidy1 v (SigPat _ pat _)    = tidy1 v (unLoc pat)
 tidy1 _ (WildPat ty)      = return (idDsWrapper, WildPat ty)
-tidy1 v (BangPat _ (L l p))
+tidy1 v (BangPat _ p)
     | pprTrace "tidy" (showAstData NoBlankSrcSpan p) False
     = undefined
-    | otherwise = tidy_bang_pat v l p
+    | otherwise = tidy_bang_pat v tidySrcSpan p
 
         -- case v of { x -> mr[] }
         -- = case v of { _ -> let x=v in mr[] }
@@ -1758,13 +1761,13 @@ tidy1 _ non_interesting_pat
 tidy_bang_pat :: Id -> SrcSpan -> Pat GhcTc -> DsM (DsWrapper, Pat GhcTc)
 
 -- Discard par/sig under a bang
-tidy_bang_pat v _ (ParPat _ (L l p))  = tidy_bang_pat v l p
-tidy_bang_pat v _ (SigPat _ (L l p) ) = tidy_bang_pat v l p
+tidy_bang_pat v l (ParPat _ p)  = tidy_bang_pat v l p
+tidy_bang_pat v l (SigPat _ p _ ) = tidy_bang_pat v l p
 
 -- Push the bang-pattern inwards, in the hope that
 -- it may disappear next time
-tidy_bang_pat v l (AsPat _ v' p)  = tidy1 v (AsPat NoExt v' (L l (BangPat NoExt p)))
-tidy_bang_pat v l (CoPat _ w p t) = tidy1 v (CoPat NoExt w (BangPat NoExt (L l p)) t)
+tidy_bang_pat v l (AsPat _ v' p)  = tidy1 v (AsPat NoExt v' (BangPat NoExt p))
+tidy_bang_pat v l (CoPat _ w p t) = tidy1 v (CoPat NoExt w (BangPat NoExt p) t)
 
 -- Discard bang around strict pattern
 tidy_bang_pat v _ p@(LitPat {})    = tidy1 v p
@@ -1799,7 +1802,7 @@ tidy_bang_pat v l p@(ConPatOut { pat_con = L _ (RealDataCon dc)
 --
 -- NB: SigPatIn, ConPatIn should not happen
 
-tidy_bang_pat _ l p = return (idDsWrapper, BangPat NoExt (L l p))
+tidy_bang_pat _ l p = return (idDsWrapper, BangPat NoExt p)
 
 -------------------
 push_bang_into_newtype_arg :: SrcSpan
@@ -1810,15 +1813,15 @@ push_bang_into_newtype_arg :: SrcSpan
 -- We are transforming   !(N p)   into   (N !p)
 push_bang_into_newtype_arg l _ty (PrefixCon (arg:args))
   = ASSERT( null args)
-    PrefixCon [L l (BangPat NoExt arg)]
+    PrefixCon [(BangPat NoExt arg)]
 push_bang_into_newtype_arg l _ty (RecCon rf)
   | HsRecFields { rec_flds = L lf fld : flds } <- rf
   , HsRecField { hsRecFieldArg = arg } <- fld
   = ASSERT( null flds)
-    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = L l (BangPat NoExt arg) })] })
+    RecCon (rf { rec_flds = [L lf (fld { hsRecFieldArg = (BangPat NoExt arg) })] })
 push_bang_into_newtype_arg l ty (RecCon rf) -- If a user writes !(T {})
   | HsRecFields { rec_flds = [] } <- rf
-  = PrefixCon [L l (BangPat NoExt (noLoc (WildPat ty)))]
+  = PrefixCon [(BangPat NoExt (noLoc (WildPat ty)))]
 push_bang_into_newtype_arg _ _ cd
   = pprPanic "push_bang_into_newtype_arg" (pprConArgs cd)
 

@@ -460,7 +460,7 @@ matchLiterals [] _ _ = panic "matchLiterals []"
 
 wrap_str_guard :: Id -> Id -> (Literal,MatchResult) -> DsM MatchResult
 -- Equality check for string literals
-wrap_str_guard var eq_str (MachStr s, mr)
+wrap_str_guard var eq_str (LitString s, mr)
   = do  { -- We now have to convert back to FastString. Perhaps there
           -- should be separate MachBytes and MachStr constructors?
           let s'  = mkFastStringByteString s

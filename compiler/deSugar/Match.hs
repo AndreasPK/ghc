@@ -169,7 +169,8 @@ See also Note [Localise pattern binders] in DsUtils
 --type GhcTc = Id
 type MatchId = Id   -- See Note [Match Ids]
 
-match :: [MatchId]        -- ^ Variables rep\'ing the exprs we\'re matching with
+match :: HasCallStack
+      => [MatchId]        -- ^ Variables rep\'ing the exprs we\'re matching with
                           -- ^ See Note [Match Ids]
       -> Type             -- ^ Type of the case expression
       -> [EquationInfo]   -- ^ Info about patterns, etc. (type synonym below)
@@ -705,7 +706,7 @@ Call @match@ with all of this information!
 -}
 
 matchWrapper :: HasCallStack
-             -> HsMatchContext Name               -- ^ For shadowing warning messages
+             => HsMatchContext Name               -- ^ For shadowing warning messages
              -> Maybe (LHsExpr GhcTc)             -- ^ Scrutinee, if we check a case expr
              -> MatchGroup GhcTc (LHsExpr GhcTc)  -- ^ Matches being desugared
              -> DsM ([Id], CoreExpr)              -- ^ Results (usually passed to 'match')
