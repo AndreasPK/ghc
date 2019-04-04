@@ -10,6 +10,7 @@ import StgSyn
 import Id
 import VarSet
 import CoreSyn    ( Tickish(Breakpoint) )
+import DataCon (StrictnessMark(..))
 import Outputable
 import Util
 
@@ -84,8 +85,9 @@ binding env body_fv (StgRec pairs) = (StgRec pairs', fvs)
 expr :: Env -> StgExpr -> (CgStgExpr, DIdSet)
 expr env = go
   where
-    go (StgApp occ as)
-      = (StgApp occ as, unionDVarSet (args env as) (mkFreeVarSet env [occ]))
+    -- TODO: Plug in analysis here?
+    go (StgApp _ext occ as)
+      = (StgApp NotMarkedStrict occ as, unionDVarSet (args env as) (mkFreeVarSet env [occ]))
     go (StgLit lit) = (StgLit lit, emptyDVarSet)
     go (StgConApp dc as tys) = (StgConApp dc as tys, args env as)
     go (StgOpApp op as ty) = (StgOpApp op as ty, args env as)

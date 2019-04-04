@@ -450,6 +450,7 @@ Library
         Simplify
         SimplStg
         StgStats
+        StgAnal
         StgCse
         StgLiftLams
         StgLiftLams.Analysis

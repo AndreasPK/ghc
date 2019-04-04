@@ -542,7 +542,7 @@ coreToStgApp _ f args ticks = do
                                     StgOpApp (StgFCallOp call (idUnique f)) args' res_ty
 
                 TickBoxOpId {}   -> pprPanic "coreToStg TickBox" $ ppr (f,args')
-                _other           -> StgApp f args'
+                _other           -> StgApp noExtSilent f args'
 
         tapp = foldr StgTick app (ticks ++ ticks')
 
@@ -578,7 +578,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
     let
         (aticks, arg'') = stripStgTicksTop tickishFloatable arg'
         stg_arg = case arg'' of
-                       StgApp v []        -> StgVarArg v
+                       StgApp _ext v []   -> StgVarArg v
                        StgConApp con [] _ -> StgVarArg (dataConWorkId con)
                        StgLit lit         -> StgLitArg lit
                        _                  -> pprPanic "coreToStgArgs" (ppr arg)

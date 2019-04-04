@@ -24,7 +24,7 @@ module StgSyn (
         GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
         GenStgAlt, AltType(..),
 
-        StgPass(..), BinderP, XRhsClosure, XLet, XLetNoEscape,
+        StgPass(..), BinderP, XRhsClosure, XLet, XLetNoEscape, XStgApp,
         NoExtSilent, noExtSilent,
         OutputablePass,
 
@@ -210,6 +210,7 @@ There is no constructor for a lone variable; it would appear as
 
 data GenStgExpr pass
   = StgApp
+        (XStgApp pass)
         Id       -- function
         [StgArg] -- arguments; may be empty
 
@@ -466,6 +467,7 @@ type family BinderP (pass :: StgPass)
 type instance BinderP 'Vanilla = Id
 type instance BinderP 'CodeGen = Id
 
+
 type family XRhsClosure (pass :: StgPass)
 type instance XRhsClosure 'Vanilla = NoExtSilent
 -- | Code gen needs to track non-global free vars
@@ -478,6 +480,12 @@ type instance XLet 'CodeGen = NoExtSilent
 type family XLetNoEscape (pass :: StgPass)
 type instance XLetNoEscape 'Vanilla = NoExtSilent
 type instance XLetNoEscape 'CodeGen = NoExtSilent
+
+-- Binders used in StgApp, we mark some of these
+-- as strict to make sure we don't make redundant evaluatins.
+type family XStgApp (pass :: StgPass)
+type instance XStgApp 'Vanilla = NoExtSilent
+type instance XStgApp 'CodeGen = StrictnessMark
 
 stgRhsArity :: StgRhs -> Int
 stgRhsArity (StgRhsClosure _ _ _ bndrs _)
@@ -514,7 +522,7 @@ topRhsHasCafRefs (StgRhsCon _ _ args)
   = any stgArgHasCafRefs args
 
 exprHasCafRefs :: GenStgExpr pass -> Bool
-exprHasCafRefs (StgApp f args)
+exprHasCafRefs (StgApp _ f args)
   = stgIdHasCafRefs f || any stgArgHasCafRefs args
 exprHasCafRefs StgLit{}
   = False
@@ -707,6 +715,7 @@ type OutputablePass pass =
   , Outputable (XLetNoEscape pass)
   , Outputable (XRhsClosure pass)
   , OutputableBndr (BinderP pass)
+  , Outputable (XStgApp pass)
   )
 
 pprGenStgTopBinding
@@ -768,8 +777,8 @@ pprStgExpr :: OutputablePass pass => GenStgExpr pass -> SDoc
 pprStgExpr (StgLit lit)     = ppr lit
 
 -- general case
-pprStgExpr (StgApp func args)
-  = hang (ppr func) 4 (sep (map (ppr) args))
+pprStgExpr (StgApp ext func args)
+  = hang (ppr ext <> ppr func) 4 (sep (map (ppr) args))
 
 pprStgExpr (StgConApp con args _)
   = hsep [ ppr con, brackets (interppSP args) ]
@@ -858,7 +867,7 @@ instance Outputable AltType where
 pprStgRhs :: OutputablePass pass => GenStgRhs pass -> SDoc
 
 -- special case
-pprStgRhs (StgRhsClosure ext cc upd_flag [{-no args-}] (StgApp func []))
+pprStgRhs (StgRhsClosure ext cc upd_flag [{-no args-}] (StgApp _ func []))
   = sdocWithDynFlags $ \dflags ->
     hsep [ ppr cc,
            if not $ gopt Opt_SuppressStgExts dflags
@@ -877,3 +886,8 @@ pprStgRhs (StgRhsClosure ext cc upd_flag args body)
 pprStgRhs (StgRhsCon cc con args)
   = hcat [ ppr cc,
            space, ppr con, text "! ", brackets (interppSP args)]
+
+pprExt :: Outputable ext => ext -> SDoc
+pprExt ext = sdocWithDynFlags $ \dflags
+  -> if not $ gopt Opt_SuppressStgExts dflags
+      then ppr ext else empty

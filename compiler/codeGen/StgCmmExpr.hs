@@ -58,12 +58,12 @@ import Data.Function ( on )
 
 cgExpr  :: CgStgExpr -> FCode ReturnKind
 
-cgExpr (StgApp fun args)     = cgIdApp fun args
+cgExpr (StgApp evaled fun args)     = cgIdApp evaled fun args
 
 -- seq# a s ==> a
 -- See Note [seq# magic] in PrelRules
 cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
-  cgIdApp a []
+  cgIdApp NotMarkedStrict a []
 
 -- dataToTag# :: a -> Int#
 -- See Note [dataToTag#] in primops.txt.pp
@@ -71,7 +71,7 @@ cgExpr (StgOpApp (StgPrimOp DataToTagOp) [StgVarArg a] _res_ty) = do
   dflags <- getDynFlags
   emitComment (mkFastString "dataToTag#")
   tmp <- newTemp (bWord dflags)
-  _ <- withSequel (AssignTo [tmp] False) (cgIdApp a [])
+  _ <- withSequel (AssignTo [tmp] False) (cgIdApp NotMarkedStrict a [])
   -- TODO: For small types look at the tag bits instead of reading info table
   emitReturn [getConstrTag dflags (cmmUntag dflags (CmmReg (CmmLocal tmp)))]
 
@@ -405,7 +405,7 @@ exist, perhaps because the occurrence information preserved by
 job we deleted the hacks.
 -}
 
-cgCase (StgApp v []) _ (PrimAlt _) alts
+cgCase (StgApp _ext v []) _ (PrimAlt _) alts
   | isVoidRep (idPrimRep v)  -- See Note [Scrutinising VoidRep]
   , [(DEFAULT, _, rhs)] <- alts
   = cgExpr rhs
@@ -426,7 +426,7 @@ then we'll get a runtime panic, because the HValue really is a
 MutVar#.  The types are compatible though, so we can just generate an
 assignment.
 -}
-cgCase (StgApp v []) bndr alt_type@(PrimAlt _) alts
+cgCase (StgApp _ext v []) bndr alt_type@(PrimAlt _) alts
   | isUnliftedType (idType v)  -- Note [Dodgy unsafeCoerce 1]
   || reps_compatible
   = -- assignment suffices for unlifted types
@@ -461,7 +461,7 @@ because bottom must be untagged, it will be entered.  The Sequel is a
 type-correct assignment, albeit bogus.  The (dead) continuation loops;
 it would be better to invoke some kind of panic function here.
 -}
-cgCase scrut@(StgApp v []) _ (PrimAlt _) _
+cgCase scrut@(StgApp _ext v []) _ (PrimAlt _) _
   = do { dflags <- getDynFlags
        ; mb_cc <- maybeSaveCostCentre True
        ; _ <- withSequel
@@ -493,7 +493,38 @@ cgCase (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _) bndr alt_type alts
   = -- Note [Handle seq#]
     -- And see Note [seq# magic] in PrelRules
     -- Use the same return convention as vanilla 'a'.
-    cgCase (StgApp a []) bndr alt_type alts
+    cgCase (StgApp NotMarkedStrict a []) bndr alt_type alts
+
+-- TODO: Write Note
+cgCase scrut@(StgApp _ {-# MarkedStrict #-} v []) bndr alt_type alts
+  = -- the evaluated case
+    do { dflags <- getDynFlags
+       ; up_hp_usg <- getVirtHp        -- Upstream heap usage
+       ; let ret_bndrs = chooseReturnBndrs bndr alt_type alts
+             alt_regs  = map (idToReg dflags) ret_bndrs :: [LocalReg]
+
+       -- Non evaluating cases always have simple scruts.
+       ; simple_scrut <- return $ True --isSimpleScrut scrut alt_type
+       ; let do_gc  | not simple_scrut = True
+                    | isSingleton alts = False
+                    | up_hp_usg > 0    = False
+                    | otherwise        = True
+               -- cf Note [Compiling case expressions]
+             gc_plan = if do_gc then GcInAlts alt_regs else NoGcInAlts
+
+      -- Evaluated Scrut
+      --  ; mb_cc <- maybeSaveCostCentre simple_scrut
+
+       ; let sequel = AssignTo alt_regs do_gc{- Note [scrut sequel] -}
+       ; ret_kind <- withSequel sequel (cgExpr scrut)
+      -- Evaluated Scrut
+      --  ; restoreCurrentCostCentre mb_cc
+
+      -- Bind ids to local regs.
+       ; _ <- bindArgsToRegs ret_bndrs
+       ; cgAlts (gc_plan,ret_kind) (NonVoid bndr) alt_type alts
+       }
+  where
 
 cgCase scrut bndr alt_type alts
   = -- the general case
@@ -501,6 +532,9 @@ cgCase scrut bndr alt_type alts
        ; up_hp_usg <- getVirtHp        -- Upstream heap usage
        ; let ret_bndrs = chooseReturnBndrs bndr alt_type alts
              alt_regs  = map (idToReg dflags) ret_bndrs
+
+       -- Todo: Non evaluating cases always have simple scruts.
+
        ; simple_scrut <- isSimpleScrut scrut alt_type
        ; let do_gc  | is_cmp_op scrut  = False  -- See Note [GC for conditionals]
                     | not simple_scrut = True
@@ -570,10 +604,10 @@ isSimpleScrut :: CgStgExpr -> AltType -> FCode Bool
 -- heap usage from alternatives into the stuff before the case
 -- NB: if you get this wrong, and claim that the expression doesn't allocate
 --     when it does, you'll deeply mess up allocation
-isSimpleScrut (StgOpApp op args _) _       = isSimpleOp op args
-isSimpleScrut (StgLit _)       _           = return True       -- case 1# of { 0# -> ..; ... }
-isSimpleScrut (StgApp _ [])    (PrimAlt _) = return True       -- case x# of { 0# -> ..; ... }
-isSimpleScrut _                _           = return False
+isSimpleScrut (StgOpApp op args _) _         = isSimpleOp op args
+isSimpleScrut (StgLit _)           _         = return True       -- case 1# of { 0# -> ..; ... }
+isSimpleScrut (StgApp _ _ [])    (PrimAlt _) = return True       -- case x# of { 0# -> ..; ... }
+isSimpleScrut _                    _         = return False
 
 isSimpleOp :: StgOp -> [StgArg] -> FCode Bool
 -- True iff the op cannot block or allocate
@@ -753,8 +787,8 @@ cgConApp con stg_args
         ; tickyReturnNewCon (length stg_args)
         ; emitReturn [idInfoToAmode idinfo] }
 
-cgIdApp :: Id -> [StgArg] -> FCode ReturnKind
-cgIdApp fun_id args = do
+cgIdApp :: StrictnessMark -> Id -> [StgArg] -> FCode ReturnKind
+cgIdApp strict fun_id args = do
     dflags         <- getDynFlags
     fun_info       <- getCgIdInfo fun_id
     self_loop_info <- getSelfLoop
@@ -771,6 +805,9 @@ cgIdApp fun_id args = do
           | isVoidTy (idType fun_id) -> emitReturn []
           | otherwise                -> emitReturn [fun]
           -- ToDo: does ReturnIt guarantee tagged?
+
+        _
+          | isWHNF -> emitReturn [fun]
 
         EnterIt -> ASSERT( null args )  -- Discarding arguments
                    emitEnter fun
@@ -794,6 +831,14 @@ cgIdApp fun_id args = do
           ; emitMultiAssign lne_regs cmm_args
           ; emit (mkBranch blk_id)
           ; return AssignedDirectly }
+
+      where
+        -- isWHNF = False
+        isWHNF | isMarkedStrict strict
+               = ASSERT( null args )
+                 True
+              --  | null args = True
+               | otherwise = False
 
 -- Note [Self-recursive tail calls]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

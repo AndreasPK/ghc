@@ -168,7 +168,7 @@ lintStgExpr :: (OutputablePass a, BinderP a ~ Id) => GenStgExpr a -> LintM ()
 
 lintStgExpr (StgLit _) = return ()
 
-lintStgExpr (StgApp fun args) = do
+lintStgExpr (StgApp _ fun args) = do
     lintStgVar fun
     mapM_ lintStgArg args
 

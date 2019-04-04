@@ -23,6 +23,7 @@ module StgLiftLams.Analysis (
 import GhcPrelude
 
 import BasicTypes
+import DataCon (StrictnessMark(..))
 import Demand
 import DynFlags
 import Id
@@ -112,6 +113,7 @@ type instance BinderP      'LiftLams = BinderInfo
 type instance XRhsClosure  'LiftLams = DIdSet
 type instance XLet         'LiftLams = Skeleton
 type instance XLetNoEscape 'LiftLams = Skeleton
+type instance XStgApp      'LiftLams = StrictnessMark
 
 freeVarsOfRhs :: (XRhsClosure pass ~ DIdSet) => GenStgRhs pass -> DIdSet
 freeVarsOfRhs (StgRhsCon _ _ args) = mkDVarSet [ id | StgVarArg id <- args ]
@@ -222,8 +224,8 @@ tagSkeletonExpr (StgConApp con args tys)
   = (NilSk, mkArgOccs args, StgConApp con args tys)
 tagSkeletonExpr (StgOpApp op args ty)
   = (NilSk, mkArgOccs args, StgOpApp op args ty)
-tagSkeletonExpr (StgApp f args)
-  = (NilSk, arg_occs, StgApp f args)
+tagSkeletonExpr (StgApp ext f args)
+  = (NilSk, arg_occs, StgApp ext f args)
   where
     arg_occs
       -- This checks for nullary applications, which we treat the same as

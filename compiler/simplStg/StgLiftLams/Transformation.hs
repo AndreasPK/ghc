@@ -123,12 +123,12 @@ liftArgs (StgVarArg occ) = do
 liftExpr :: LlStgExpr -> LiftM OutStgExpr
 liftExpr (StgLit lit) = pure (StgLit lit)
 liftExpr (StgTick t e) = StgTick t <$> liftExpr e
-liftExpr (StgApp f args) = do
+liftExpr (StgApp _ext f args) = do
   f' <- substOcc f
   args' <- traverse liftArgs args
   fvs' <- formerFreeVars f
   let top_lvl_args = map StgVarArg fvs' ++ args'
-  pure (StgApp f' top_lvl_args)
+  pure (StgApp noExtSilent f' top_lvl_args)
 liftExpr (StgConApp con args tys) = StgConApp con <$> traverse liftArgs args <*> pure tys
 liftExpr (StgOpApp op args ty) = StgOpApp op <$> traverse liftArgs args <*> pure ty
 liftExpr (StgLam _ _) = pprPanic "stgLiftLams" (text "StgLam")

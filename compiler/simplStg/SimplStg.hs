@@ -23,6 +23,7 @@ import UnariseStg       ( unarise )
 import StgCse           ( stgCse )
 import StgLiftLams      ( stgLiftLams )
 import Module           ( Module )
+import StgAnal          ( stgAna )
 
 import DynFlags
 import ErrUtils
@@ -51,12 +52,16 @@ stg2stg dflags this_mod binds
   = do  { showPass dflags "Stg2Stg"
         ; us <- mkSplitUniqSupply 'g'
 
+
+
         -- Do the main business!
         ; binds' <- runStgM us $
             foldM do_stg_pass binds (getStgToDo dflags)
 
         ; dump_when Opt_D_dump_stg "STG syntax:" binds'
 
+        -- ; let x = stgAna binds'
+        -- ; when (not . null $ x) (mapM_ (pprTraceM "Redundant" . ppr) x )
         ; return binds'
    }
 
