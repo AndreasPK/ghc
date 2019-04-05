@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -----------------------------------------------------------------------------
 --
@@ -495,37 +496,6 @@ cgCase (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _) bndr alt_type alts
     -- Use the same return convention as vanilla 'a'.
     cgCase (StgApp NotMarkedStrict a []) bndr alt_type alts
 
--- TODO: Write Note
-cgCase scrut@(StgApp _ {-# MarkedStrict #-} v []) bndr alt_type alts
-  = -- the evaluated case
-    do { dflags <- getDynFlags
-       ; up_hp_usg <- getVirtHp        -- Upstream heap usage
-       ; let ret_bndrs = chooseReturnBndrs bndr alt_type alts
-             alt_regs  = map (idToReg dflags) ret_bndrs :: [LocalReg]
-
-       -- Non evaluating cases always have simple scruts.
-       ; simple_scrut <- return $ True --isSimpleScrut scrut alt_type
-       ; let do_gc  | not simple_scrut = True
-                    | isSingleton alts = False
-                    | up_hp_usg > 0    = False
-                    | otherwise        = True
-               -- cf Note [Compiling case expressions]
-             gc_plan = if do_gc then GcInAlts alt_regs else NoGcInAlts
-
-      -- Evaluated Scrut
-      --  ; mb_cc <- maybeSaveCostCentre simple_scrut
-
-       ; let sequel = AssignTo alt_regs do_gc{- Note [scrut sequel] -}
-       ; ret_kind <- withSequel sequel (cgExpr scrut)
-      -- Evaluated Scrut
-      --  ; restoreCurrentCostCentre mb_cc
-
-      -- Bind ids to local regs.
-       ; _ <- bindArgsToRegs ret_bndrs
-       ; cgAlts (gc_plan,ret_kind) (NonVoid bndr) alt_type alts
-       }
-  where
-
 cgCase scrut bndr alt_type alts
   = -- the general case
     do { dflags <- getDynFlags
@@ -540,6 +510,7 @@ cgCase scrut bndr alt_type alts
                     | not simple_scrut = True
                     | isSingleton alts = False
                     | up_hp_usg > 0    = False
+                    | evaluatedScrut   = False
                     | otherwise        = True
                -- cf Note [Compiling case expressions]
              gc_plan = if do_gc then GcInAlts alt_regs else NoGcInAlts
@@ -555,6 +526,11 @@ cgCase scrut bndr alt_type alts
   where
     is_cmp_op (StgOpApp (StgPrimOp op) _ _) = isComparisonPrimOp op
     is_cmp_op _                             = False
+    evaluatedScrut
+      | (StgApp MarkedStrict v []) <- scrut = True
+      | otherwise = False
+
+
 
 {- Note [GC for conditionals]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -607,6 +583,7 @@ isSimpleScrut :: CgStgExpr -> AltType -> FCode Bool
 isSimpleScrut (StgOpApp op args _) _         = isSimpleOp op args
 isSimpleScrut (StgLit _)           _         = return True       -- case 1# of { 0# -> ..; ... }
 isSimpleScrut (StgApp _ _ [])    (PrimAlt _) = return True       -- case x# of { 0# -> ..; ... }
+isSimpleScrut (StgApp MarkedStrict _ [])   _ = return True       -- case !x of { ... }
 isSimpleScrut _                    _         = return False
 
 isSimpleOp :: StgOp -> [StgArg] -> FCode Bool
@@ -806,8 +783,15 @@ cgIdApp strict fun_id args = do
           | otherwise                -> emitReturn [fun]
           -- ToDo: does ReturnIt guarantee tagged?
 
+        -- A value in WHNF, but determined by StgCSR.
+        -- See Note [CSR for Stg]
         _
-          | isWHNF -> emitReturn [fun]
+          | isWHNF && isVoidTy (idType fun_id) ->
+            -- pprTrace "WHNF:" (ppr fun_id) $
+            emitReturn []
+          | isWHNF ->
+            -- pprTrace "WHNF:" (ppr fun_id) $
+            emitReturn [fun]
 
         EnterIt -> ASSERT( null args )  -- Discarding arguments
                    emitEnter fun
@@ -833,7 +817,6 @@ cgIdApp strict fun_id args = do
           ; return AssignedDirectly }
 
       where
-        -- isWHNF = False
         isWHNF | isMarkedStrict strict
                = ASSERT( null args )
                  True

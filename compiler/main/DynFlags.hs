@@ -382,6 +382,7 @@ data DumpFlag
    | Opt_D_dump_spec
    | Opt_D_dump_prep
    | Opt_D_dump_stg
+   | Opt_D_dump_stg_final
    | Opt_D_dump_call_arity
    | Opt_D_dump_exitify
    | Opt_D_dump_stranal
@@ -468,6 +469,7 @@ data GeneralFlag
    | Opt_CSE
    | Opt_StgCSE
    | Opt_StgLiftLams
+   | Opt_StgCSR
    | Opt_LiberateCase
    | Opt_SpecConstr
    | Opt_SpecConstrKeen
@@ -678,6 +680,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_StaticArgumentTransformation
    , Opt_CSE
    , Opt_StgCSE
+   , Opt_StgCSR
    , Opt_StgLiftLams
    , Opt_LiberateCase
    , Opt_SpecConstr
@@ -3331,6 +3334,8 @@ dynamic_flags_deps = [
         (setDumpFlag Opt_D_dump_prep)
   , make_ord_flag defGhcFlag "ddump-stg"
         (setDumpFlag Opt_D_dump_stg)
+  , make_ord_flag defGhcFlag "ddump-stg-final"
+        (setDumpFlag Opt_D_dump_stg_final)
   , make_ord_flag defGhcFlag "ddump-call-arity"
         (setDumpFlag Opt_D_dump_call_arity)
   , make_ord_flag defGhcFlag "ddump-exitify"
@@ -4104,6 +4109,7 @@ fFlagsDeps = [
   flagSpec "cmm-sink"                         Opt_CmmSink,
   flagSpec "cse"                              Opt_CSE,
   flagSpec "stg-cse"                          Opt_StgCSE,
+  flagSpec "stg-csr"                          Opt_StgCSR,
   flagSpec "stg-lift-lams"                    Opt_StgLiftLams,
   flagSpec "cpr-anal"                         Opt_CprAnal,
   flagSpec "defer-diagnostics"                Opt_DeferDiagnostics,

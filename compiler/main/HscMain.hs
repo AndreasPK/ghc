@@ -1471,7 +1471,10 @@ doCodeGen hsc_env this_mod data_tycons
     let dflags = hsc_dflags hsc_env
 
     let stg_binds_w_fvs = annTopBindingsFreeVars stg_binds
-    let stg_strict_case = stgAna stg_binds_w_fvs
+    let stg_strict_case = if gopt Opt_StgCSR dflags
+                            then stgAna stg_binds_w_fvs
+                            else stg_binds_w_fvs
+    dumpIfSet_dyn dflags Opt_D_dump_stg_final "STG for code gen:" (pprGenStgTopBindings stg_strict_case)
     let cmm_stream :: Stream IO CmmGroup ()
         cmm_stream = {-# SCC "StgCmm" #-}
             StgCmm.codeGen dflags this_mod data_tycons
