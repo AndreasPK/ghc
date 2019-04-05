@@ -286,6 +286,49 @@ Hence: two basic plans for
 
         ...code for alts...
         ...no heap check...
+
+{- Note [Handle gc for evaluated scrutinees]
+
+   ------ Plan C: special case when ---------
+
+  (i)  e is already evaluated
+
+  Then heap allocation in the case branch
+  is replaced by an upstream check.
+  Very common example: Casing on strict fields.
+
+        ...heap check...
+        ...assign bindings...
+
+        ...code for alts...
+        ...no heap check...
+
+  -- Reasoning for Plan C:
+
+   When using GcInAlts the return point for heap checks and evaluating
+   the scrutinee is shared. This does mean we might execute the actual
+   branching code twice but it's rare enough to not matter.
+
+   The huge advantage of this pattern is that we do not require multiple
+   info tables for returning from gc as they can be shared between all
+   cases.
+
+   However when the scrutinee is already evaluated there is no evaluation
+   call. Instead we would end up with one info table per alternative.
+
+   To avoid this we unconditionally do gc outside of the alts with all
+   the pros and cons described in Note [Compiling case expressions].
+
+   For containers:Data/Sequence/Internal/Sorting.o the difference is
+   about 10% in terms of code size.
+
+   For nofib it's about -0.5% reduction in Module size with this approach
+   while the benefit without it is almost meaningless at a reported -0.1%.
+
+   TODO: Investigate what is required to instead create a shared return
+   point for all the GC calls in the alts.
+
+-}
 -}
 
 
