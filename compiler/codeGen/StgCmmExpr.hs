@@ -325,6 +325,10 @@ Hence: two basic plans for
    For nofib it's about -0.5% reduction in Module size with this approach
    while the benefit without it is almost meaningless at a reported -0.1%.
 
+   There is still the issue with putting heap checks into loops,
+   but we are not really worse of than we would be when checking
+   if a scrutinee is evaluated.
+
    TODO: Investigate what is required to instead create a shared return
    point for all the GC calls in the alts.
 
@@ -830,10 +834,10 @@ cgIdApp strict fun_id args = do
         -- See Note [CSR for Stg]
         _
           | isWHNF && isVoidTy (idType fun_id) ->
-            -- pprTrace "WHNF:" (ppr fun_id) $
+            pprTrace "WHNF:" (ppr fun_id) $
             emitReturn []
           | isWHNF ->
-            -- pprTrace "WHNF:" (ppr fun_id) $
+            pprTrace "WHNF:" (ppr fun_id <+> ppr args) $
             emitReturn [fun]
 
         EnterIt -> ASSERT( null args )  -- Discarding arguments
@@ -860,7 +864,10 @@ cgIdApp strict fun_id args = do
           ; return AssignedDirectly }
 
       where
-        isWHNF | isMarkedStrict strict
+        isWHNF | not (null args)
+               = False
+              --  = pprPanic "Strict value applied to args:" (ppr fun_id <+> text "args:" <+> ppr args)
+               | isMarkedStrict strict
                = ASSERT( null args )
                  True
               --  | null args = True

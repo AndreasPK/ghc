@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, RecordWildCards #-}
+{-# LANGUAGE CPP, RecordWildCards, ScopedTypeVariables #-}
 
 -----------------------------------------------------------------------------
 --
@@ -79,6 +79,7 @@ import CLabel
 import Id
 import IdInfo
 import DataCon
+import Maybes
 import Name
 import Type
 import TyCoRep
@@ -90,8 +91,31 @@ import Outputable
 import DynFlags
 import Util
 
+-- Required to tag imported constructors.
+import CoreSyn (isEvaldUnfolding)
+import Demand
+
 import Data.Coerce (coerce)
 import qualified Data.ByteString.Char8 as BS8
+
+-- Note [Tagging imported bindings]
+--
+-- We used to just omit tagging imported bindings - see #16559.
+-- This is bad for the same reasons tagging is good.
+-- In particular we should care for two reasons:
+--
+-- * If we have strict fields and don't tag these it works against
+--   the valuable invariant that strict fields will always be tagged.
+-- * For the same reason we care about tagging to begin with -
+--   avoiding entering evaluated closures.
+
+-- In order to tag these imports we need two things:
+-- * A guarantee that a binding is evaluated.
+-- * The tag to use.
+--
+-- We get the tag to use from the result of CPR analysis.
+-- We get the evaluatedness from the unfolding info.
+
 
 -----------------------------------------------------------------------------
 --                Data types and synonyms
@@ -221,10 +245,32 @@ data LambdaFormInfo
                         --        because then we know the entry code will do
                         --        For a function, the entry code is the fast entry point
 
+  | LFEvaldCon DynTag   -- ^ A evaluated value with it's tag.
+                        -- The result of importing things like fully applied constructors.
+                        -- Important! The tag can be used as is.
+                        -- It matches the conTag, is 1 for large families and so on.
+
   | LFUnlifted          -- A value of unboxed type;
                         -- always a value, needs evaluation
 
   | LFLetNoEscape       -- See LetNoEscape module for precise description
+
+-- Debug only
+instance Outputable LambdaFormInfo where
+    ppr (LFReEntrant top oneshot rep fvs argdesc) =
+        text "LFReEntrant" <> brackets (text "TODO")
+    ppr (LFThunk top hasfv updateable sfi m_function) =
+        text "LFThunk" <> brackets (text "TODO")
+    ppr (LFCon con) = text "LFCon" <> brackets (ppr con)
+    ppr (LFEvaldCon tag) = text "LFEvaldCon:"<> brackets (ppr tag)
+    ppr (LFUnknown m_func) =
+        text "LFUnknown" <>
+            if m_func
+                then brackets (text "mf")
+                else empty
+    ppr (LFUnlifted) = text "LFUnlifted"
+    ppr (LFLetNoEscape) = text "LF-LNE"
+
 
 
 -------------------------
@@ -320,21 +366,82 @@ mkApLFInfo id upd_flag arity
         (might_be_a_function (idType id))
 
 -------------
-mkLFImported :: Id -> LambdaFormInfo
-mkLFImported id
-  | Just con <- isDataConWorkId_maybe id
-  , isNullaryRepDataCon con
-  = LFCon con   -- An imported nullary constructor
-                -- We assume that the constructor is evaluated so that
+mkLFImported :: DynFlags -> Id -> LambdaFormInfo
+mkLFImported dflags id
+  | Just con <- (isDataConWorkId_maybe id)
+  , not (isNullaryRepDataCon con)
+  , alreadyEvaluated
+
+  , pprTrace "mkLFImported" (
+        ppr id $$
+        text "strictness" <+> ppr (idStrictness id) $$
+        text "unfolding" <+> ppr (idUnfolding id) $$
+        text "idDetails" <+> pprIdDetails (idDetails id) $$
+        text "isFunTy" <+> ppr (isFunTy $ idType id) $$
+        text "arity" <+> ppr arity $$
+        text "idTag" <+> ppr (idTag) $$
+        text "isDataConWorkId_maybe" <+> ppr (isDataConWorkId_maybe id)
+        ) False
+  = undefined
+  | Just con <- (isDataConWorkId_maybe id)
+  , isNullaryRepDataCon con || (alreadyEvaluated && not isFun)
+  = let msg = if not (isNullaryRepDataCon con) then "mkLF:newCon:" else "mkLF:nullCon:"
+    in
+       pprTrace msg ( ppr id <+> ppr con {- <+> ppr (idUnfolding id) -}) $
+       LFCon con   -- An imported constructor
+                -- We check if the constructor is evaluated so that
                 -- the id really does point directly to the constructor
 
+
+
+  -- Thunk
   | arity > 0
   = LFReEntrant TopLevel noOneShotInfo arity True (panic "arg_descr")
+
+  -- TODO: What about functions :/ currently tyConFamilySize panics on them
+  | alreadyEvaluated
+  , not (isFunTy $ unwrapType ty)
+  , Just conFamSize <- (getIdConFamSize id)
+  , Just tag <- idTag
+  = ASSERT2(tag /= 0, text "Error:Tag for evaluated binding" <+> ppr id <+> text "is zero.")
+    -- if isFunTy ty then
+
+    let tag' = if isSmallFamily dflags conFamSize then tag else 1
+    in
+        pprTrace "mkLF:cprTagged:" ( ppr id <+> ppr tag') $
+        LFEvaldCon tag'
 
   | otherwise
   = mkLFArgument id -- Not sure of exact arity
   where
+    -- TODO: unwrapType - does it deal properly with type families
+    ty = unwrapType $ idType id
+    isFun = isFunTy ty
+    idDataCon
+        -- For WW-split constructors.
+        | Just con <- (isDataConWorkId_maybe id)
+        = Just con
+        | otherwise = Nothing
+
+    -- Care! Might return a tag for (ConLike) functions.
+    idTag :: Maybe ConTag
+        -- Get constructor tag via CPR analysis.
+        | (_, cprRes) <- splitStrictSig strictInfo
+        , not (isBotRes cprRes)
+        = case returnsCPR_maybe cprRes of
+                Just tag -> -- pprTrace "cprTag" (ppr tag) $
+                            Just tag
+                Nothing -> Nothing -- Happens for eg functions.
+        | otherwise = Nothing
+
     arity = idFunRepArity id
+      -- Nullary exported constructors are always evaluated.
+      -- Evaluated unfoldings are ... evaluated who would have known.
+    alreadyEvaluated = isEvaldUnfolding unfInfo
+      where
+    unfInfo = idUnfolding id
+    strictInfo = idStrictness id
+
 
 -------------
 mkLFStringLit :: LambdaFormInfo
@@ -381,6 +488,8 @@ lfDynTag :: DynFlags -> LambdaFormInfo -> DynTag
 -- to this LambdaForm
 lfDynTag dflags (LFCon con)                 = tagForCon dflags con
 lfDynTag dflags (LFReEntrant _ _ arity _ _) = tagForArity dflags arity
+-- TODO: Large constructor families
+lfDynTag dflags (LFEvaldCon tag)       = tag
 lfDynTag _      _other                      = 0
 
 
@@ -464,6 +573,7 @@ nodeMustPointToIt _ (LFCon _) = True
         -- 27/11/92.
 
 nodeMustPointToIt _ (LFUnknown _)   = True
+nodeMustPointToIt _ (LFEvaldCon _)   = True
 nodeMustPointToIt _ LFUnlifted      = False
 nodeMustPointToIt _ LFLetNoEscape   = False
 
@@ -616,6 +726,10 @@ getCallMethod _ _name _ (LFUnknown True) _n_arg _v_args _cg_locs _self_loop_info
 getCallMethod _ name _ (LFUnknown False) n_args _v_args _cg_loc _self_loop_info
   = ASSERT2( n_args == 0, ppr name <+> ppr n_args )
     EnterIt -- Not a function
+
+getCallMethod _ name _ (LFEvaldCon _) _n_arg _v_args _cg_locs _self_loop_info
+  = WARN(True, text "Calling UnknownWHNF" <> ppr name)
+    SlowCall -- might be anything.
 
 getCallMethod _ _name _ LFLetNoEscape _n_args _v_args (LneLoc blk_id lne_regs)
               _self_loop_info
@@ -998,3 +1112,13 @@ staticClosureNeedsLink :: Bool -> CmmInfoTable -> Bool
 staticClosureNeedsLink has_srt CmmInfoTable{ cit_rep = smrep }
   | isConRep smrep         = not (isStaticNoCafCon smrep)
   | otherwise              = has_srt
+
+------------------------------------------------------------------------
+--        Utility to help us figure out constructor family size.
+------------------------------------------------------------------------
+
+-- | Go from Id -> Type -> TyCon -> [DataCon] -> DataCon family size.
+-- Will return Nothing on functions
+getIdConFamSize :: Id -> Maybe Int
+getIdConFamSize id =
+    (tyConFamilySize . fst) <$> (splitTyConApp_maybe $ idType id)

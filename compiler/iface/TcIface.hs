@@ -1524,6 +1524,10 @@ tcUnfolding _toplvl name dfun_ty _ (IfDFunUnfold bs ops)
     doc = text "Class ops for dfun" <+> ppr name
     (_, _, cls, _) = tcSplitDFunTy dfun_ty
 
+tcUnfolding _toplvl name dfun_ty info (IFEvaldUnfolding tag)
+  = return $ evaldUnfolding
+  where
+
 {-
 For unfoldings we try to do the job lazily, so that we never type check
 an unfolding that isn't going to be looked at.

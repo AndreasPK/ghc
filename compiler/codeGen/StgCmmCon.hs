@@ -64,7 +64,12 @@ cgTopRhsCon :: DynFlags
             -> (CgIdInfo, FCode ())
 cgTopRhsCon dflags id con args =
     let id_info = litIdInfo dflags id (mkConLFInfo con) (CmmLabel closure_label)
-    in (id_info, gen_code)
+    in  
+        -- pprTrace "cgTopRhsCon" 
+        --   ( ppr id <+> parens (ppr con <+> ppr args) $$
+        --       text "caffy:" <+> ppr caffy 
+        --   )
+        (id_info, gen_code)
   where
    name          = idName id
    caffy         = idCafInfo id -- any stgArgHasCafRefs args
@@ -98,8 +103,15 @@ cgTopRhsCon dflags id con args =
              -- needs to poke around inside it.
             info_tbl = mkDataConInfoTable dflags con True ptr_wds nonptr_wds
 
+            pprPl (Padding l _) = text "padding:" <> ppr l <> semi <> space
+            pprPl (FieldOff arg _) = text "fieldOff-arg:" <> ppr arg <> semi <> space
+            
 
-        ; payload <- mapM mk_payload nv_args_w_offsets
+        ; payload <- 
+            mapM mk_payload $ 
+              -- pprTrace "nv_args_w_offsets" 
+              --     (hcat $ map pprPl nv_args_w_offsets) 
+                  nv_args_w_offsets
                 -- NB1: nv_args_w_offsets is sorted into ptrs then non-ptrs
                 -- NB2: all the amodes should be Lits!
                 --      TODO (osa): Why?

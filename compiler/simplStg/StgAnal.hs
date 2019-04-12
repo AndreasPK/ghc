@@ -101,6 +101,8 @@ import NameEnv
 import Control.Monad( (>=>) )
 import VarSet
 
+import TyCon (tyConDataCons_maybe)
+import Type (tyConAppTyCon)
 import Hoopl.Collections
 import PrimOp
 
@@ -162,23 +164,36 @@ anaCase env (StgCase scrut bndr _ty alts) =
 anaCase _ _ = error "Not a case"
 
 anaAlt :: IdSet -> CgStgAlt -> CgStgAlt
-anaAlt env (con, binds, rhs)
-    | DataAlt dcon <- con
+anaAlt env (con@(DataAlt dcon), binds, rhs)
+    | (not . null) strictBinds
     -- Extract strictness information for dcon.
-    = let   strictSigs = dataConRepStrictness dcon
-            strictBinds = filterWith isMarkedStrict binds strictSigs
-            env' = extendVarSetList env strictBinds
-      in (con, binds, anaExpr env' rhs)
+    = pprTrace "strictDataConBinds" (
+            ppr con <+> ppr (strictBinds)
+            ) $
+            (con, binds, anaExpr (env') rhs)
     | otherwise = (con, binds, anaExpr env rhs)
+  where
+    env' = extendVarSetList env (strictBinds)
+    isSmallConFam id =
+        ((<= 4). length . tyConDataCons_maybe . tyConAppTyCon . idType) id
+    -- zip binds types
+    -- tyConDataCons_maybe = mapMaybe tyConDataCons_maybe tyCons
+
+    -- smallFamily = dataConRepArgTys
+    strictSigs = dataConRepStrictness dcon
+    strictBinds = map snd $ filter (\(s,v) -> isMarkedStrict s && isSmallConFam v) $ zip strictSigs binds
+anaAlt env (con, binds, rhs) = (con, binds, anaExpr env rhs)
 
 -- TODO: Theoretically we could have code of the form:
 -- let x = Con in case x of ... e ...
 -- However I haven't seen this occure in all of nofib, so omitting checking
 -- for this case at this time.
+anaLet :: IdSet -> CgStgExpr -> CgStgExpr
 anaLet env (StgLet ext bind body)
     = StgLet ext (anaBind env bind) (anaExpr env body)
 anaLet _ _ = panic "Not a Let"
 
+anaLetNoEscape :: IdSet -> CgStgExpr -> CgStgExpr
 anaLetNoEscape env (StgLetNoEscape ext bind body)
     = StgLetNoEscape ext (anaBind env bind) (anaExpr env body)
 anaLetNoEscape _ _

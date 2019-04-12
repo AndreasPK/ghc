@@ -50,6 +50,7 @@ import Outputable
 import FastString
 import DynFlags
 
+import Data.List
 import Control.Monad
 
 ------------------------------------------------------------------------
@@ -70,9 +71,30 @@ cgTopRhsClosure :: DynFlags
 
 cgTopRhsClosure dflags rec id ccs upd_flag args body =
   let closure_label = mkLocalClosureLabel (idName id) (idCafInfo id)
-      cg_id_info    = litIdInfo dflags id lf_info (CmmLabel closure_label)
       lf_info       = mkClosureLFInfo dflags id TopLevel [] upd_flag args
-  in (cg_id_info, gen_code dflags lf_info closure_label)
+      cg_id_info    = litIdInfo dflags id lf_info (CmmLabel closure_label)
+  in  
+      -- (if "lparen" `isSubsequenceOf` showSDocUnsafe (ppr id <> ppr args <> ppr body)
+      --   then pprTrace "cgTopRhsClosure" (
+      --     text "id" <+> ppr id $$
+      --     text "ccs" <+> ppr ccs $$
+      --     text "upd_flag" <+> ppr upd_flag $$
+      --     text "args" <+> ppr args $$
+      --     text "body" <+> ppr body
+      --     )
+      --   else GhcPrelude.id)
+
+      -- pprTrace "cgTopRhsClosure" (
+      --     text "id" <+> ppr id $$
+      --     text "ccs" <+> ppr ccs $$
+      --     text "upd_flag" <+> ppr upd_flag $$
+      --     text "args" <+> ppr args $$
+      --     text "body" <+> ppr body
+      --     )
+      
+  
+  
+      (cg_id_info, gen_code dflags lf_info closure_label)
   where
   -- special case for a indirection (f = g).  We create an IND_STATIC
   -- closure pointing directly to the indirectee.  This is exactly
@@ -125,6 +147,7 @@ cgTopRhsClosure dflags rec id ccs upd_flag args body =
 cgBind :: CgStgBinding -> FCode ()
 cgBind (StgNonRec name rhs)
   = do  { (info, fcode) <- cgRhs name rhs
+        -- ; pprTraceM "cgBind" (ppr name <+> ppr info)
         ; addBindC info
         ; init <- fcode
         ; emit init }

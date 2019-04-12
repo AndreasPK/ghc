@@ -362,6 +362,11 @@ data IfaceUnfolding
                  IfaceExpr
 
   | IfDFunUnfold [IfaceBndr] [IfaceExpr]
+  | IFEvaldUnfolding ConTag -- ^ Evaluated unfolding. 
+                                -- Things we can use directly without entering them.
+                                --    0:  Unknown Tag
+                                --    1+: Known Tag
+
 
 
 -- We only serialise the IdDetails of top-level Ids, and even then
@@ -1319,6 +1324,9 @@ instance Outputable IfaceUnfolding where
                                         pprParendIfaceExpr e]
   ppr (IfDFunUnfold bs es) = hang (text "DFun:" <+> sep (map ppr bs) <> dot)
                                 2 (sep (map pprParendIfaceExpr es))
+  ppr (IFEvaldUnfolding tag) = text "\"evaluated" <> sTag <> text "\""
+    where
+      sTag = if tag /= 0 then colon <> ppr tag else empty
 
 {-
 ************************************************************************
@@ -1566,6 +1574,8 @@ freeNamesIfUnfold (IfCoreUnfold _ e)     = freeNamesIfExpr e
 freeNamesIfUnfold (IfCompulsory e)       = freeNamesIfExpr e
 freeNamesIfUnfold (IfInlineRule _ _ _ e) = freeNamesIfExpr e
 freeNamesIfUnfold (IfDFunUnfold bs es)   = freeNamesIfBndrs bs &&& fnList freeNamesIfExpr es
+freeNamesIfUnfold (IFEvaldUnfolding _)   = emptyNameSet
+
 
 freeNamesIfExpr :: IfaceExpr -> NameSet
 freeNamesIfExpr (IfaceExt v)          = unitNameSet v
@@ -2104,6 +2114,9 @@ instance Binary IfaceUnfolding where
     put_ bh (IfCompulsory e) = do
         putByte bh 3
         put_ bh e
+    put_ bh (IFEvaldUnfolding t) = do
+        putByte bh 4
+        put_ bh t
     get bh = do
         h <- getByte bh
         case h of
@@ -2118,8 +2131,11 @@ instance Binary IfaceUnfolding where
             2 -> do as <- get bh
                     bs <- get bh
                     return (IfDFunUnfold as bs)
-            _ -> do e <- get bh
+            3 -> do e <- get bh
                     return (IfCompulsory e)
+            _ -> do tag <- get bh
+                    return (IFEvaldUnfolding tag)
+            
 
 
 instance Binary IfaceExpr where

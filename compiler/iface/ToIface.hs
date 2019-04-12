@@ -454,6 +454,7 @@ toIfUnfolding lb (CoreUnfolding { uf_tmpl = rhs
                                 , uf_src = src
                                 , uf_guidance = guidance })
   = Just $ HsUnfold lb $
+    -- TODO: Also preserve evaluatedness here.
     case src of
         InlineStable
           -> case guidance of
@@ -471,10 +472,11 @@ toIfUnfolding lb (CoreUnfolding { uf_tmpl = rhs
 
 toIfUnfolding lb (DFunUnfolding { df_bndrs = bndrs, df_args = args })
   = Just (HsUnfold lb (IfDFunUnfold (map toIfaceBndr bndrs) (map toIfaceExpr args)))
+      -- See Note [DFun unfoldings]
       -- No need to serialise the data constructor;
       -- we can recover it from the type of the dfun
 
-toIfUnfolding _ (OtherCon {}) = Nothing
+toIfUnfolding lb (OtherCon {}) = Just $! HsUnfold lb $ IFEvaldUnfolding 0
   -- The binding site of an Id doesn't have OtherCon, except perhaps
   -- where we have called zapUnfolding; and that evald'ness info is
   -- not needed by importing modules

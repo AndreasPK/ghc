@@ -120,6 +120,7 @@ variable. -}
 cgTopBinding :: DynFlags -> CgStgTopBinding -> FCode ()
 cgTopBinding dflags (StgTopLifted (StgNonRec id rhs))
   = do  { let (info, fcode) = cgTopRhs dflags NonRecursive id rhs
+        -- ; pprTraceM "cgTopBinding1" (ppr id)
         ; fcode
         ; addBindC info
         }
@@ -129,6 +130,7 @@ cgTopBinding dflags (StgTopLifted (StgRec pairs))
         ; let pairs' = zip bndrs rhss
               r = unzipWith (cgTopRhs dflags Recursive) pairs'
               (infos, fcodes) = unzip r
+        -- ; pprTraceM "cgTopBinding2" (ppr $ fmap fst pairs')
         ; addBindsC infos
         ; sequence_ fcodes
         }
@@ -136,6 +138,7 @@ cgTopBinding dflags (StgTopLifted (StgRec pairs))
 cgTopBinding dflags (StgTopStringLit id str)
   = do  { let label = mkBytesLabel (idName id)
         ; let (lit, decl) = mkByteStringCLit label str
+        -- ; pprTraceM "cgTopBinding3" (ppr id)
         ; emitDecl decl
         ; addBindC (litIdInfo dflags id mkLFStringLit lit)
         }

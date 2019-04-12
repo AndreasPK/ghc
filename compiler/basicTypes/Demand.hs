@@ -1070,8 +1070,8 @@ The semantics of this depends on whether we are looking at a DmdType, i.e. the
 demand put on by an expression _under a specific incoming demand_ on its
 environment, or at a StrictSig describing a demand transformer.
 
-For a
- * DmdType, the termination information is true given the demand it was
+For
+ * a DmdType, the termination information is true given the demand it was
    generated with, while for
  * a StrictSig it holds after applying enough arguments.
 
