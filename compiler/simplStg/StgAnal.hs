@@ -4,7 +4,7 @@
 
 {-# LANGUAGE TypeFamilies, RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, TupleSections #-}
 
 {-|
 
@@ -83,7 +83,7 @@
     goes away.
 -}
 
-module StgAnal (stgAna) where
+module StgAnal (stgAna, tagTop) where
 
 import GhcPrelude
 
@@ -105,9 +105,183 @@ import TyCon (tyConDataCons_maybe)
 import Type (tyConAppTyCon)
 import Hoopl.Collections
 import PrimOp
+import UniqSupply
+
+import Name
+import OccName
+import SrcLoc
+import FastString
+
+import Control.Monad
+import Data.Maybe
+import qualified Data.List as L
 
 emptyEnv :: IdSet
 emptyEnv = emptyVarSet
+
+tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
+tagTop = mapM tagTopBind
+
+tagTopBind :: StgTopBinding -> UniqSM StgTopBinding
+tagTopBind bind@(StgTopStringLit {}) = return $ bind
+tagTopBind (StgTopLifted bind) =
+    StgTopLifted <$> tagBind emptyEnv bind
+
+tagBind :: IdSet -> StgBinding -> UniqSM StgBinding
+tagBind env (StgNonRec v rhs) =
+    StgNonRec v <$> tagRhs env rhs
+tagBind env (StgRec binds) = do
+    binds' <- mapM (\(v,rhs) -> (v,) <$> (tagRhs env rhs)) binds
+    return $ StgRec binds'
+
+tagRhs :: IdSet -> StgRhs -> UniqSM StgRhs
+tagRhs env (StgRhsCon ccs con args)
+  | not (null possiblyUntagged)
+--   , False
+  = pprTrace "Untagged args:" (ppr possiblyUntagged)
+    mkEval possiblyUntagged (StgRhsCon ccs con args)
+
+  | otherwise
+  = return $ (StgRhsCon ccs con args)
+  where
+    conReps = dataConRepStrictness con
+    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+    possiblyUntagged = filter (\v -> not (elemVarSet v env)) $ [v | StgVarArg v <- strictArgs]
+
+tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
+    = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
+
+-- We keep a set of already evaluated ids.
+tagExpr :: IdSet -> StgExpr -> UniqSM StgExpr
+tagExpr env (e@StgCase {})          = tagCase env e
+tagExpr env (e@StgLet {})           = tagLet env e
+tagExpr env (e@StgLetNoEscape {})   = tagLetNoEscape env e
+tagExpr env (StgTick t e)           = StgTick t <$> tagExpr env e
+
+tagExpr _env e@(StgApp _ _f _args)      = return $ e
+tagExpr _env e@(StgLit _lit)            = return $ e
+tagExpr _env e@(StgConApp _con _args _tys) = return $ e
+tagExpr _env e@(StgOpApp _op _args _ty) = return $ e
+tagExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
+
+
+tagCase :: IdSet -> StgExpr -> UniqSM StgExpr
+tagCase env (StgCase scrut bndr _ty alts) =
+    -- pprTrace "tagCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
+    --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
+    (StgCase scrut bndr _ty) <$> alts'
+  where
+    alts' = mapM (tagAlt env') alts
+    env' = extendVarSet env bndr
+
+tagCase _ _ = error "Not a case"
+
+tagAlt :: IdSet -> StgAlt -> UniqSM StgAlt
+tagAlt env (con@(DataAlt dcon), binds, rhs)
+    | (not . null) strictBinds
+    -- Extract strictness information for dcon.
+    = pprTrace "strictDataConBinds" (
+            ppr con <+> ppr (strictBinds)
+            ) $
+            (con, binds,) <$>
+                tagExpr (env') rhs
+    | otherwise = (con, binds,) <$>
+                    tagExpr env rhs
+  where
+    env' = extendVarSetList env (strictBinds)
+    strictSigs = dataConRepStrictness dcon
+    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip strictSigs binds
+tagAlt env (con, binds, rhs) = (con, binds,) <$> (tagExpr env rhs)
+
+-- TODO: Theoretically we could have code of the form:
+-- let x = Con in case x of ... e ...
+-- However I haven't seen this occure in all of nofib, so omitting checking
+-- for this case at this time.
+tagLet :: IdSet -> StgExpr -> UniqSM StgExpr
+tagLet env (StgLet ext bind body)
+    = liftM2 (StgLet ext) (tagBind env bind) (tagExpr env body)
+tagLet _ _ = panic "Not a Let"
+
+tagLetNoEscape :: IdSet -> StgExpr -> UniqSM StgExpr
+tagLetNoEscape env (StgLetNoEscape ext bind body)
+    = liftM2 (StgLetNoEscape ext) (tagBind env bind) (tagExpr env body)
+tagLetNoEscape _ _
+    = panic "Not a LetNoEscape"
+
+
+
+
+
+mkLocalArgId :: Id -> UniqSM (Id)
+mkLocalArgId id = do
+    u <- getUniqueM
+    -- TODO: Also reflect this in the name?
+    return $ setIdUnique (localiseId id) u
+
+mkSeq :: Id -> Id -> StgExpr -> StgExpr
+mkSeq id bndr expr =
+    -- TODO: Is PolyAlt the right one?
+    pprTraceIt "mkSeq" $
+    StgCase (StgApp noExtSilent id []) bndr PolyAlt [(DEFAULT, [], expr)]
+
+
+
+mkEval :: [Id] -> StgRhs -> UniqSM StgRhs
+mkEval needsEval (StgRhsCon ccs con args)
+  = do
+    argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) possiblyUntagged :: UniqSM [(InId, OutId)]
+    pprTraceM "mkEval" (ppr (argMap)) --, StgRhsCon ccs con args) )
+
+    let taggedArgs
+            = map   (\v -> case v of
+                        StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
+                        lit -> lit)
+                    args
+
+    uCon <- getUniqueM
+    let conId =
+            mkLocalId
+                (mkInternalName uCon (mkVarOcc "st_") (mkGeneralSrcSpan $ fsLit "myGen"))
+                (idType . dataConWrapId $ con)
+
+    -- let conBody =
+    --         StgLet noExtSilent
+    --             (StgNonRec conId (StgRhsCon ccs con taggedArgs))
+    --             (StgApp noExtSilent conId [])
+
+    let conBody = StgConApp con taggedArgs [] --TODO: Types
+
+    let body = foldr (\(v,bndr) expr -> mkSeq v bndr expr) conBody argMap
+
+    -- TODO: Single entry correct?
+    let result =  (StgRhsClosure noExtSilent ccs ReEntrant [] body)
+
+    return $ pprTrace "mkEvalResult:" (ppr result) result
+
+
+  where
+    possiblyUntagged = [v | StgVarArg v <- args, elem v needsEval]
+
+
+mkEval _ (StgRhsClosure _ext _ccs _flag _args _body)
+    = panic "mkEval:Impossible"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 stgAna :: [CgStgTopBinding] -> [CgStgTopBinding]
 stgAna = map anaTopBind
@@ -131,16 +305,16 @@ anaRhs env (StgRhsClosure _ext _ccs _flag _args body)
 
 -- We keep a set of already evaluated ids.
 anaExpr :: IdSet -> CgStgExpr -> CgStgExpr
-anaExpr env (e@StgCase {}) = anaCase env e
-anaExpr env (e@StgLet {}) = anaLet env e
-anaExpr env (e@StgLetNoEscape {}) = anaLetNoEscape env e
-anaExpr env (StgTick t e) = StgTick t $ anaExpr env e
+anaExpr env (e@StgCase {})          = anaCase env e
+anaExpr env (e@StgLet {})           = anaLet env e
+anaExpr env (e@StgLetNoEscape {})   = anaLetNoEscape env e
+anaExpr env (StgTick t e)           = StgTick t $ anaExpr env e
 
-anaExpr _env e@(StgApp _ _f _args) = e
-anaExpr _env e@(StgLit _lit) = e
-anaExpr _env e@(StgConApp _con _args _tys) = e
-anaExpr _env e@(StgOpApp _op _args _ty) = e
-anaExpr _env e@(StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
+anaExpr _env e@(StgApp _ _f _args)          = e
+anaExpr _env e@(StgLit _lit)                = e
+anaExpr _env e@(StgConApp _con _args _tys)  = e
+anaExpr _env e@(StgOpApp _op _args _ty)     = e
+anaExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
 
 
 anaCase :: IdSet -> CgStgExpr -> CgStgExpr
@@ -149,16 +323,16 @@ anaCase env (StgCase scrut bndr _ty alts) =
     --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
     (StgCase scrut' bndr _ty alts')
   where
-    alts' = map (anaAlt env') alts
-    -- Tag already evaluated bindings
     scrut'
         | StgApp _ v [] <- scrut
         , elemVarSet v env
+        , False
         =
-            -- pprTrace "Marking:" (ppr v) $
+            pprTrace "Marking:" (ppr v) $
             StgApp MarkedStrict v []
-        | otherwise = scrut
-
+        | otherwise
+            = scrut
+    alts' = map (anaAlt env') alts
     env' = extendVarSet env bndr
 
 anaCase _ _ = error "Not a case"
@@ -174,14 +348,13 @@ anaAlt env (con@(DataAlt dcon), binds, rhs)
     | otherwise = (con, binds, anaExpr env rhs)
   where
     env' = extendVarSetList env (strictBinds)
-    isSmallConFam id =
-        ((<= 4). length . tyConDataCons_maybe . tyConAppTyCon . idType) id
+
     -- zip binds types
     -- tyConDataCons_maybe = mapMaybe tyConDataCons_maybe tyCons
 
     -- smallFamily = dataConRepArgTys
     strictSigs = dataConRepStrictness dcon
-    strictBinds = map snd $ filter (\(s,v) -> isMarkedStrict s && isSmallConFam v) $ zip strictSigs binds
+    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip strictSigs binds
 anaAlt env (con, binds, rhs) = (con, binds, anaExpr env rhs)
 
 -- TODO: Theoretically we could have code of the form:
@@ -199,6 +372,4 @@ anaLetNoEscape env (StgLetNoEscape ext bind body)
 anaLetNoEscape _ _
     = panic "Not a LetNoEscape"
 
--- | Keep elements from a if f returns true for the matching element in bs
-filterWith :: (b -> Bool) -> [a] -> [b] -> [a]
-filterWith f xs ys = map fst . filter (f . snd) $ zip xs ys
+

@@ -125,7 +125,7 @@ import CoreToStg        ( coreToStg )
 import qualified StgCmm ( codeGen )
 import StgSyn
 import StgFVs           ( annTopBindingsFreeVars )
-import StgAnal          ( stgAna )
+import StgAnal          ( stgAna, tagTop )
 import CostCentre
 import ProfInit
 import TyCon
@@ -1470,7 +1470,10 @@ doCodeGen hsc_env this_mod data_tycons
               cost_centre_info stg_binds hpc_info = do
     let dflags = hsc_dflags hsc_env
 
-    let stg_binds_w_fvs = annTopBindingsFreeVars stg_binds
+    us <- mkSplitUniqSupply 'r'
+    let tagged = initUs_ us $ tagTop stg_binds
+
+    let stg_binds_w_fvs = annTopBindingsFreeVars tagged
     let stg_strict_case = if gopt Opt_StgCSR dflags
                             then stgAna stg_binds_w_fvs
                             else stg_binds_w_fvs

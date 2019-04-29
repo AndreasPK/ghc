@@ -368,26 +368,27 @@ mkApLFInfo id upd_flag arity
 -------------
 mkLFImported :: DynFlags -> Id -> LambdaFormInfo
 mkLFImported dflags id
-  | Just con <- (isDataConWorkId_maybe id)
-  , not (isNullaryRepDataCon con)
-  , alreadyEvaluated
+  -- | True
+  -- -- , Just con <- (isDataConWorkId_maybe id)
+  -- -- , not (isNullaryRepDataCon con)
+  -- -- , alreadyEvaluated
 
-  , pprTrace "mkLFImported" (
-        ppr id $$
-        text "strictness" <+> ppr (idStrictness id) $$
-        text "unfolding" <+> ppr (idUnfolding id) $$
-        text "idDetails" <+> pprIdDetails (idDetails id) $$
-        text "isFunTy" <+> ppr (isFunTy $ idType id) $$
-        text "arity" <+> ppr arity $$
-        text "idTag" <+> ppr (idTag) $$
-        text "isDataConWorkId_maybe" <+> ppr (isDataConWorkId_maybe id)
-        ) False
-  = undefined
+  -- , pprTrace "mkLFImported" (
+  --       ppr id $$
+  --       text "strictness" <+> ppr (idStrictness id) $$
+  --       text "unfolding" <+> ppr (idUnfolding id) $$
+  --       text "idDetails" <+> pprIdDetails (idDetails id) $$
+  --       text "isFunTy" <+> ppr (isFunTy $ idType id) $$
+  --       text "arity" <+> ppr arity $$
+  --       text "idTag" <+> ppr (idTag) $$
+  --       text "isDataConWorkId_maybe" <+> ppr (isDataConWorkId_maybe id)
+  --       ) False
+  -- = undefined
   | Just con <- (isDataConWorkId_maybe id)
-  , isNullaryRepDataCon con || (alreadyEvaluated && not isFun)
+  , isNullaryRepDataCon con || (not isFun && alreadyEvaluated)
   = let msg = if not (isNullaryRepDataCon con) then "mkLF:newCon:" else "mkLF:nullCon:"
     in
-       pprTrace msg ( ppr id <+> ppr con {- <+> ppr (idUnfolding id) -}) $
+       -- pprTrace msg ( ppr id <+> ppr con {- <+> ppr (idUnfolding id) -}) $
        LFCon con   -- An imported constructor
                 -- We check if the constructor is evaluated so that
                 -- the id really does point directly to the constructor
@@ -399,17 +400,17 @@ mkLFImported dflags id
   = LFReEntrant TopLevel noOneShotInfo arity True (panic "arg_descr")
 
   -- TODO: What about functions :/ currently tyConFamilySize panics on them
-  | alreadyEvaluated
-  , not (isFunTy $ unwrapType ty)
-  , Just conFamSize <- (getIdConFamSize id)
-  , Just tag <- idTag
-  = ASSERT2(tag /= 0, text "Error:Tag for evaluated binding" <+> ppr id <+> text "is zero.")
-    -- if isFunTy ty then
+  -- | alreadyEvaluated
+  -- , not isFun
+  -- , Just conFamSize <- (getIdConFamSize id)
+  -- , Just tag <- idTag
+  -- = ASSERT2(tag /= 0, text "Error:Tag for evaluated binding" <+> ppr id <+> text "is zero.")
+  --   -- if isFunTy ty then
 
-    let tag' = if isSmallFamily dflags conFamSize then tag else 1
-    in
-        pprTrace "mkLF:cprTagged:" ( ppr id <+> ppr tag') $
-        LFEvaldCon tag'
+  --   let tag' = if isSmallFamily dflags conFamSize then tag else 1
+  --   in
+  --       pprTrace "mkLF:cprTagged:" ( ppr id <+> ppr tag') $
+  --       LFEvaldCon tag'
 
   | otherwise
   = mkLFArgument id -- Not sure of exact arity
@@ -438,7 +439,6 @@ mkLFImported dflags id
       -- Nullary exported constructors are always evaluated.
       -- Evaluated unfoldings are ... evaluated who would have known.
     alreadyEvaluated = isEvaldUnfolding unfInfo
-      where
     unfInfo = idUnfolding id
     strictInfo = idStrictness id
 

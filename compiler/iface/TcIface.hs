@@ -636,9 +636,9 @@ tc_iface_decl :: Maybe Class  -- ^ For associated type/data family declarations
 tc_iface_decl _ ignore_prags (IfaceId {ifName = name, ifType = iface_type,
                                        ifIdDetails = details, ifIdInfo = info})
   = do  { ty <- tcIfaceType iface_type
-        ; details <- tcIdDetails ty details
-        ; info <- tcIdInfo ignore_prags TopLevel name ty info
-        ; return (AnId (mkGlobalId details name ty info)) }
+        ; tcInfo <- tcIdInfo ignore_prags TopLevel name ty info
+        ; details <- tcIdDetails ty details tcInfo
+        ; return (AnId (mkGlobalId details name ty tcInfo)) }
 
 tc_iface_decl _ _ (IfaceData {ifName = tc_name,
                           ifCType = cType,
@@ -1437,14 +1437,14 @@ tcIfaceDataAlt con inst_tys arg_strs rhs
 ************************************************************************
 -}
 
-tcIdDetails :: Type -> IfaceIdDetails -> IfL IdDetails
-tcIdDetails _  IfVanillaId = return VanillaId
-tcIdDetails ty IfDFunId
+tcIdDetails :: Type -> IfaceIdDetails -> IdInfo -> IfL IdDetails
+tcIdDetails _  IfVanillaId _  = return VanillaId
+tcIdDetails ty IfDFunId    _
   = return (DFunId (isNewTyCon (classTyCon cls)))
   where
     (_, _, cls, _) = tcSplitDFunTy ty
 
-tcIdDetails _ (IfRecSelId tc naughty)
+tcIdDetails _ (IfRecSelId tc naughty) _
   = do { tc' <- either (fmap RecSelData . tcIfaceTyCon)
                        (fmap (RecSelPatSyn . tyThingPatSyn) . tcIfaceDecl False)
                        tc

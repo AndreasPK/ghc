@@ -22,7 +22,7 @@
 --
 -----------------------------------------------------------------------------
 
-{-
+{--
 Note [Differences between libraries/pretty and compiler/utils/Pretty.hs]
 
 For historical reasons, there are two different copies of `Pretty` in the GHC
