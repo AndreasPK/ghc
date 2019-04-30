@@ -101,11 +101,13 @@ import NameEnv
 import Control.Monad( (>=>) )
 import VarSet
 
-import TyCon (tyConDataCons_maybe)
-import Type (tyConAppTyCon)
+import TyCon (tyConDataCons_maybe, PrimRep(..))
+import Type (tyConAppTyCon, isUnliftedType)
 import Hoopl.Collections
 import PrimOp
 import UniqSupply
+import RepType
+import StgUtil
 
 import Name
 import OccName
@@ -134,11 +136,35 @@ tagBind env (StgRec binds) = do
     binds' <- mapM (\(v,rhs) -> (v,) <$> (tagRhs env rhs)) binds
     return $ StgRec binds'
 
+-- Note [Bottoming bindings in strict fields]
+--
+-- This is a fun one. GHC puts bottoming bindings into
+-- strict fields (without evaluating them).
+
+-- This is dicy but valid in the absence of bugs.
+-- In particular it habens with "absent argument" errors.
+-- These are placed there by the worker/wrapper pass if we determine
+-- that a field will not be used.
+-- This means we will also never case on the fields so it we can simply treat
+-- it as evaluated even if it's not.
+
+-- TODO:
+-- How do we check for this condition? We don't (currently).
+-- Instead we simply trust the codeGen to tag all local bindings properly and
+-- pray that the worker and the absent error thunk stay within the same module.
+--
+
 tagRhs :: IdSet -> StgRhs -> UniqSM StgRhs
 tagRhs env (StgRhsCon ccs con args)
   | not (null possiblyUntagged)
 --   , False
-  = pprTrace "Untagged args:" (ppr possiblyUntagged)
+  =
+    -- pprTrace "Untagged args:"
+--             (   ppr possiblyUntagged $$
+--                 text "allArgs" <+> ppr args $$
+--                 text "strictness" <+> ppr conReps $$
+--                 text "Constructor:" <+> ppr con
+--             )
     mkEval possiblyUntagged (StgRhsCon ccs con args)
 
   | otherwise
@@ -146,7 +172,14 @@ tagRhs env (StgRhsCon ccs con args)
   where
     conReps = dataConRepStrictness con
     strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
-    possiblyUntagged = filter (\v -> not (elemVarSet v env)) $ [v | StgVarArg v <- strictArgs]
+
+    possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
+                            , LiftedRep == typePrimRep1 (stgArgType arg) -- argPrimRep
+                            , needsEval v
+                        ]
+    needsEval v =
+        not (isGlobalId v) && -- We trust codeGen to tag module internal references.
+        not (elemVarSet v env) -- We don't have to eval things that were cased on
 
 tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
     = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
@@ -166,13 +199,16 @@ tagExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized 
 
 
 tagCase :: IdSet -> StgExpr -> UniqSM StgExpr
-tagCase env (StgCase scrut bndr _ty alts) =
+tagCase env (StgCase scrut bndr ty alts) =
     -- pprTrace "tagCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
     --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
-    (StgCase scrut bndr _ty) <$> alts'
+    (StgCase scrut bndr ty) <$> alts'
   where
     alts' = mapM (tagAlt env') alts
-    env' = extendVarSet env bndr
+    env'
+      -- After unaris (where we are) unboxed tuples binders are never in scope
+      | stgCaseBndrInScope ty True = extendVarSet env bndr
+      | otherwise = env
 
 tagCase _ _ = error "Not a case"
 
@@ -180,9 +216,10 @@ tagAlt :: IdSet -> StgAlt -> UniqSM StgAlt
 tagAlt env (con@(DataAlt dcon), binds, rhs)
     | (not . null) strictBinds
     -- Extract strictness information for dcon.
-    = pprTrace "strictDataConBinds" (
-            ppr con <+> ppr (strictBinds)
-            ) $
+    =
+    --   pprTrace "strictDataConBinds" (
+    --         ppr con <+> ppr (strictBinds)
+    --         ) $
             (con, binds,) <$>
                 tagExpr (env') rhs
     | otherwise = (con, binds,) <$>
@@ -221,16 +258,21 @@ mkLocalArgId id = do
 mkSeq :: Id -> Id -> StgExpr -> StgExpr
 mkSeq id bndr expr =
     -- TODO: Is PolyAlt the right one?
-    pprTraceIt "mkSeq" $
-    StgCase (StgApp noExtSilent id []) bndr PolyAlt [(DEFAULT, [], expr)]
-
+    -- pprTraceIt "mkSeq" $
+    let altTy = mkStgAltType bndr [(DEFAULT, [], panic "Not used")]
+    in
+    StgCase (StgApp noExtSilent id []) bndr altTy [(DEFAULT, [], expr)]
 
 
 mkEval :: [Id] -> StgRhs -> UniqSM StgRhs
 mkEval needsEval (StgRhsCon ccs con args)
   = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) possiblyUntagged :: UniqSM [(InId, OutId)]
-    pprTraceM "mkEval" (ppr (argMap)) --, StgRhsCon ccs con args) )
+    -- pprTraceM "mkEval" (
+    --     ppr (argMap) $$
+    --     text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
+
+    --     ) --, StgRhsCon ccs con args) )
 
     let taggedArgs
             = map   (\v -> case v of
@@ -256,7 +298,8 @@ mkEval needsEval (StgRhsCon ccs con args)
     -- TODO: Single entry correct?
     let result =  (StgRhsClosure noExtSilent ccs ReEntrant [] body)
 
-    return $ pprTrace "mkEvalResult:" (ppr result) result
+    return $ -- pprTrace "mkEvalResult:" (ppr result)
+            result
 
 
   where
@@ -318,22 +361,24 @@ anaExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized 
 
 
 anaCase :: IdSet -> CgStgExpr -> CgStgExpr
-anaCase env (StgCase scrut bndr _ty alts) =
+anaCase env (StgCase scrut bndr ty alts) =
     -- pprTrace "anaCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
     --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
-    (StgCase scrut' bndr _ty alts')
+    (StgCase scrut' bndr ty alts')
   where
     scrut'
         | StgApp _ v [] <- scrut
         , elemVarSet v env
-        , False
         =
             pprTrace "Marking:" (ppr v) $
             StgApp MarkedStrict v []
         | otherwise
             = scrut
     alts' = map (anaAlt env') alts
-    env' = extendVarSet env bndr
+    env'
+      -- After unaris (where we are) unboxed tuples binders are never in scope
+      | stgCaseBndrInScope ty True = extendVarSet env bndr
+      | otherwise = env
 
 anaCase _ _ = error "Not a case"
 
@@ -341,9 +386,10 @@ anaAlt :: IdSet -> CgStgAlt -> CgStgAlt
 anaAlt env (con@(DataAlt dcon), binds, rhs)
     | (not . null) strictBinds
     -- Extract strictness information for dcon.
-    = pprTrace "strictDataConBinds" (
-            ppr con <+> ppr (strictBinds)
-            ) $
+    =
+        -- pprTrace "strictDataConBinds" (
+        --     ppr con <+> ppr (strictBinds)
+        --     ) $
             (con, binds, anaExpr (env') rhs)
     | otherwise = (con, binds, anaExpr env rhs)
   where

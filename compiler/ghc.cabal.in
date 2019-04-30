@@ -466,6 +466,7 @@ Library
         StgLint
         StgSyn
         StgFVs
+        StgUtil
         CallArity
         DmdAnal
         Exitify
