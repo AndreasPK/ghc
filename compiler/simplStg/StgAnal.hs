@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeFamilies, RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE GADTs, TupleSections #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 {-|
 
@@ -92,42 +93,74 @@ import Data.Bifunctor
 import Id
 import StgSyn
 import Outputable
-import VarEnv
+-- import VarEnv
 import CoreSyn (AltCon(..))
-import Data.List (mapAccumL)
+-- import Data.List (mapAccumL)
 import Data.Maybe (fromMaybe)
-import CoreMap
-import NameEnv
-import Control.Monad( (>=>) )
+
 import VarSet
+-- import UniqMap
 
 import TyCon (tyConDataCons_maybe, PrimRep(..))
-import Type (tyConAppTyCon, isUnliftedType)
-import Hoopl.Collections
-import PrimOp
+import Type (tyConAppTyCon, isUnliftedType, Type)
+-- import Hoopl.Collections
+-- import PrimOp
 import UniqSupply
 import RepType
 import StgUtil
 
 import Name
-import OccName
+import PrelNames
+-- import OccName
 import SrcLoc
 import FastString
 
 import Control.Monad
-import Data.Maybe
+-- import Data.Maybe
 import qualified Data.List as L
 
 emptyEnv :: IdSet
 emptyEnv = emptyVarSet
 
 tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
-tagTop = mapM tagTopBind
+-- tagTop binds = return binds
+tagTop binds = mapM (tagTopBind env) binds
+    where
+        env = mkVarSet $ evaldTopBinds binds
 
-tagTopBind :: StgTopBinding -> UniqSM StgTopBinding
-tagTopBind bind@(StgTopStringLit {}) = return $ bind
-tagTopBind (StgTopLifted bind) =
-    StgTopLifted <$> tagBind emptyEnv bind
+-- TODO: This mess here:
+-- All explicit constructors should likely be marked evaluated
+-- Also the naming and stuff.
+-- Is the id a top level absence error.
+evaldTopBinds :: [StgTopBinding] -> [Id]
+evaldTopBinds binds =
+    let result = concatMap (bindIsAbsentError) binds
+    in if null result then []
+    else pprTrace "Evaled (absent) top binds:" (ppr result) result
+
+
+  where
+    bindIsAbsentError :: StgTopBinding -> [Id]
+    bindIsAbsentError (StgTopStringLit _v _) = [] -- TODO
+    bindIsAbsentError (StgTopLifted bind)   =
+        absentBind bind
+
+    absentBind (StgNonRec v rhs)
+      = absenceRhs v rhs
+    absentBind (StgRec binds)
+      = concatMap (uncurry absenceRhs) binds
+
+    absenceRhs :: Id -> StgRhs -> [Id]
+    absenceRhs v (StgRhsClosure _ _ _ _ body)
+      | StgApp _ func _ <- body
+      , idUnique func == absentErrorIdKey
+      = [v]
+    absenceRhs _ _ = []
+
+tagTopBind :: IdSet -> StgTopBinding -> UniqSM StgTopBinding
+tagTopBind _env bind@(StgTopStringLit {}) = return $ bind
+tagTopBind env       (StgTopLifted bind)  =
+    StgTopLifted <$> tagBind env bind
 
 tagBind :: IdSet -> StgBinding -> UniqSM StgBinding
 tagBind env (StgNonRec v rhs) =
@@ -165,20 +198,19 @@ tagRhs env (StgRhsCon ccs con args)
 --                 text "strictness" <+> ppr conReps $$
 --                 text "Constructor:" <+> ppr con
 --             )
-    mkEval possiblyUntagged (StgRhsCon ccs con args)
+    mkTopConEval possiblyUntagged (StgRhsCon ccs con args)
 
   | otherwise
   = return $ (StgRhsCon ccs con args)
   where
-    conReps = dataConRepStrictness con
-    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+    strictArgs = getStrictConArgs con args
 
     possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
                             , LiftedRep == typePrimRep1 (stgArgType arg) -- argPrimRep
                             , needsEval v
                         ]
     needsEval v =
-        not (isGlobalId v) && -- We trust codeGen to tag module internal references.
+        -- not (isGlobalId v) && -- We trust codeGen to tag module internal references.
         not (elemVarSet v env) -- We don't have to eval things that were cased on
 
 tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
@@ -190,12 +222,38 @@ tagExpr env (e@StgCase {})          = tagCase env e
 tagExpr env (e@StgLet {})           = tagLet env e
 tagExpr env (e@StgLetNoEscape {})   = tagLetNoEscape env e
 tagExpr env (StgTick t e)           = StgTick t <$> tagExpr env e
+tagExpr env e@(StgConApp _con _args _tys) = tagConApp env e
 
 tagExpr _env e@(StgApp _ _f _args)      = return $ e
 tagExpr _env e@(StgLit _lit)            = return $ e
-tagExpr _env e@(StgConApp _con _args _tys) = return $ e
 tagExpr _env e@(StgOpApp _op _args _ty) = return $ e
 tagExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
+
+tagConApp :: IdSet -> StgExpr -> UniqSM StgExpr
+tagConApp env e@(StgConApp con args tys)
+    | null possiblyUntagged = return e
+    | otherwise = do
+        mkSeqs possiblyUntagged con args tys
+  where
+    strictArgs = getStrictConArgs con args
+    possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
+                            , LiftedRep == typePrimRep1 (stgArgType arg) -- argPrimRep
+                            , needsEval v
+                        ]
+    needsEval v =
+        -- not (isGlobalId v) && -- We trust codeGen to tag module internal references.
+        not (elemVarSet v env) -- We don't have to eval things that were cased on
+tagConApp _ _ = panic "Impossible"
+
+-- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
+-- We use this to determine which of these require evaluation
+getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
+getStrictConArgs con args =
+    strictArgs
+  where
+    conReps = dataConRepStrictness con
+    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+
 
 
 tagCase :: IdSet -> StgExpr -> UniqSM StgExpr
@@ -220,10 +278,8 @@ tagAlt env (con@(DataAlt dcon), binds, rhs)
     --   pprTrace "strictDataConBinds" (
     --         ppr con <+> ppr (strictBinds)
     --         ) $
-            (con, binds,) <$>
-                tagExpr (env') rhs
-    | otherwise = (con, binds,) <$>
-                    tagExpr env rhs
+            (con, binds,) <$> tagExpr (env') rhs
+    | otherwise = (con, binds,) <$> tagExpr env rhs
   where
     env' = extendVarSetList env (strictBinds)
     strictSigs = dataConRepStrictness dcon
@@ -263,51 +319,34 @@ mkSeq id bndr expr =
     in
     StgCase (StgApp noExtSilent id []) bndr altTy [(DEFAULT, [], expr)]
 
-
-mkEval :: [Id] -> StgRhs -> UniqSM StgRhs
-mkEval needsEval (StgRhsCon ccs con args)
-  = do
-    argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) possiblyUntagged :: UniqSM [(InId, OutId)]
-    -- pprTraceM "mkEval" (
-    --     ppr (argMap) $$
-    --     text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
-
-    --     ) --, StgRhsCon ccs con args) )
-
+-- Create a ConApp which is guaranteed to evaluate the given ids.
+mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> UniqSM StgExpr
+mkSeqs untaggedIds con args tys = do
+    argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: UniqSM [(InId, OutId)]
+    pprTraceM "Forcing strict args:" (ppr argMap)
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
                         lit -> lit)
                     args
 
-    uCon <- getUniqueM
-    let conId =
-            mkLocalId
-                (mkInternalName uCon (mkVarOcc "st_") (mkGeneralSrcSpan $ fsLit "myGen"))
-                (idType . dataConWrapId $ con)
-
-    -- let conBody =
-    --         StgLet noExtSilent
-    --             (StgNonRec conId (StgRhsCon ccs con taggedArgs))
-    --             (StgApp noExtSilent conId [])
-
-    let conBody = StgConApp con taggedArgs [] --TODO: Types
-
+    let conBody = StgConApp con taggedArgs tys
     let body = foldr (\(v,bndr) expr -> mkSeq v bndr expr) conBody argMap
+    return body
 
-    -- TODO: Single entry correct?
-    let result =  (StgRhsClosure noExtSilent ccs ReEntrant [] body)
+mkTopConEval :: [Id] -> StgRhs -> UniqSM StgRhs
+mkTopConEval _          StgRhsClosure {} = panic "Impossible"
+mkTopConEval needsEval (StgRhsCon ccs con args)
+  = do
+    pprTraceM "mkTopConEval" ( empty
+        -- $$ text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
+        -- $$ text "argIdInfos - useage" <+> ppr (map idStrictness possiblyUntagged)
+        )
 
-    return $ -- pprTrace "mkEvalResult:" (ppr result)
-            result
-
-
-  where
-    possiblyUntagged = [v | StgVarArg v <- args, elem v needsEval]
-
-
-mkEval _ (StgRhsClosure _ext _ccs _flag _args _body)
-    = panic "mkEval:Impossible"
+    -- We don't need to pass the [Type] as top level binds are never unlifted
+    -- tuples and it's the only case where they are used.
+    body <- mkSeqs needsEval con args []
+    return $ (StgRhsClosure noExtSilent ccs ReEntrant [] body)
 
 
 

@@ -385,7 +385,7 @@ mkLFImported dflags id
   --       ) False
   -- = undefined
   | Just con <- (isDataConWorkId_maybe id)
-  , isNullaryRepDataCon con || (not isFun && alreadyEvaluated)
+  , isNullaryRepDataCon con -- || (not isFun && alreadyEvaluated)
   = let msg = if not (isNullaryRepDataCon con) then "mkLF:newCon:" else "mkLF:nullCon:"
     in
        -- pprTrace msg ( ppr id <+> ppr con {- <+> ppr (idUnfolding id) -}) $

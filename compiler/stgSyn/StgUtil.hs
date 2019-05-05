@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, ScopedTypeVariables, TypeFamilies #-}
 
 module StgUtil
     ( mkStgAltType
@@ -21,6 +21,9 @@ import StgSyn
 
 import Util
 import Outputable
+
+-- Checks if id is a top level error application.
+-- isErrorAp_maybe :: Id ->
 
 mkStgAltType :: Id -> [(AltCon, [a], b)] -> AltType
 mkStgAltType bndr alts
@@ -61,3 +64,5 @@ mkStgAltType bndr alts
                 PolyAlt
         where
                 (data_alts, _deflt) = findDefault alts
+
+
