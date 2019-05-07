@@ -811,6 +811,64 @@ cgConApp con stg_args
         ; tickyReturnNewCon (length stg_args)
         ; emitReturn [idInfoToAmode idinfo] }
 
+emitTagTrap :: Id -> CmmExpr -> FCode ()
+emitTagTrap fun_id fun = do
+  { dflags <- getDynFlags
+  ; adjustHpBackwards
+  -- ; sequel <- getSequel
+  ; updfr_off <- getUpdFrameOff
+  -- The result will be scrutinised in the sequel.  This is where
+  -- we generate a tag-test to avoid entering the closure if
+  -- possible.
+  --
+  -- The generated code will be something like this:
+  --
+  --    R1 = fun  -- copyout
+  --    if (fun & 7 != 0) goto Lret else goto Lcall
+  --  Lcall:
+  --    call [fun] returns to Lret
+  --  Lret:
+  --    fun' = R1  -- copyin
+  --    ...
+  --
+  -- Note in particular that the label Lret is used as a
+  -- destination by both the tag-test and the call.  This is
+  -- because Lret will necessarily be a proc-point, and we want to
+  -- ensure that we generate only one proc-point for this
+  -- sequence.
+  --
+  -- Furthermore, we tell the caller that we generated a native
+  -- return continuation by returning (ReturnedTo Lret off), so
+  -- that the continuation can be reused by the heap-check failure
+  -- code in the enclosing case expression.
+  --
+  ; lret <- newBlockId
+  -- ; let (off, _, copyin) = copyInOflow dflags NativeReturn (Young lret) res_regs []
+  ; lcall <- newBlockId
+  -- ; updfr_off <- getUpdFrameOff
+  -- ; let area = Young lret
+  -- ; let (outArgs, regs, copyout) = copyOutOflow dflags NativeNodeCall Call area
+  --                                   [fun] updfr_off []
+  --   -- refer to fun via nodeReg after the copyout, to avoid having
+  --   -- both live simultaneously; this sometimes enables fun to be
+  --   -- inlined in the RHS of the R1 assignment.
+  -- ; let entry = entryCode dflags (closureInfoPtr dflags (CmmReg nodeReg))
+  --       the_call = toCall entry (Just lret) updfr_off off outArgs regs
+  -- ; let trapStore =
+  ; tscope <- getTickScope
+  ; pprTraceM "emitTagCheck" (ppr fun_id)
+  ; emit $
+      -- copyout <*>
+      -- Branch to lret if tagged otherwise lcall
+      mkCbranch (cmmIsTagged dflags fun)
+                lret lcall Nothing <*>
+      -- The actual debug code block
+      outOfLine lcall (mkStore (CmmLit $ CmmInt 0 W64) (CmmLit $ CmmInt 0 W64) <*> mkBranch lret,tscope) <*>
+      mkLabel lret tscope
+      -- copyin
+      -- ; return (ReturnedTo lret off)
+  }
+
 cgIdApp :: StrictnessMark -> Id -> [StgArg] -> FCode ReturnKind
 cgIdApp strict fun_id args = do
     dflags         <- getDynFlags
@@ -818,7 +876,7 @@ cgIdApp strict fun_id args = do
     self_loop_info <- getSelfLoop
     let fun_arg     = StgVarArg fun_id
         fun_name    = idName    fun_id
-        fun         = idInfoToAmode fun_info
+        fun         = idInfoToAmode fun_info :: CmmExpr
         lf_info     = cg_lf         fun_info
         n_args      = length args
         v_args      = length $ filter (isVoidTy . stgArgType) args
@@ -834,10 +892,13 @@ cgIdApp strict fun_id args = do
         -- See Note [CSR for Stg]
         _
           | isWHNF && isVoidTy (idType fun_id) ->
-            pprTrace "WHNF:" (ppr fun_id) $
+            pprTrace "WHNFv:" (ppr fun_id) $
             emitReturn []
-          | isWHNF ->
-            pprTrace "WHNF:" (ppr fun_id <+> ppr args) $
+          | isWHNF -> do
+            -- Check if it's really taged
+            emitTagTrap fun_id fun
+
+            pprTraceM "WHNF:" (ppr fun_id <+> ppr args)
             emitReturn [fun]
 
         EnterIt -> ASSERT( null args )  -- Discarding arguments
