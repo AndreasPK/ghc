@@ -896,7 +896,7 @@ cgIdApp strict fun_id args = do
             emitReturn []
           | isWHNF -> do
             -- Check if it's really taged
-            emitTagTrap fun_id fun
+            -- emitTagTrap fun_id fun
 
             pprTraceM "WHNF:" (ppr fun_id <+> ppr args)
             emitReturn [fun]

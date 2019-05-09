@@ -489,7 +489,7 @@ lfDynTag :: DynFlags -> LambdaFormInfo -> DynTag
 lfDynTag dflags (LFCon con)                 = tagForCon dflags con
 lfDynTag dflags (LFReEntrant _ _ arity _ _) = tagForArity dflags arity
 -- TODO: Large constructor families
-lfDynTag dflags (LFEvaldCon tag)       = tag
+-- lfDynTag dflags (LFEvaldCon tag)       = tag
 lfDynTag _      _other                      = 0
 
 

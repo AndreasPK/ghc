@@ -29,7 +29,7 @@
 -- (c) The GRASP/AQUA Project, Glasgow University, 1993-2000
 --
 -------------------------------------------------------------------------------
-
+--
 module HscMain
     (
     -- * Making an HscEnv

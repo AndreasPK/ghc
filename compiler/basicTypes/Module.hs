@@ -10,7 +10,7 @@ the keys.
 -}
 
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses, BangPatterns #-}
 
 module Module
     (
@@ -85,7 +85,7 @@ module Module
         wiredInUnitIds,
 
         -- * The Module type
-        Module(Module),
+        Module,
         moduleUnitId, moduleName,
         pprModule,
         mkModule,
@@ -466,7 +466,7 @@ stableModuleCmp (Module p1 n1) (Module p2 n2)
      (n1 `stableModuleNameCmp` n2)
 
 mkModule :: UnitId -> ModuleName -> Module
-mkModule = Module
+mkModule !id !name = Module id name
 
 pprModule :: Module -> SDoc
 pprModule mod@(Module p n)  = getPprStyle doc

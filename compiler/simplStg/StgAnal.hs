@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeFamilies, RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE GADTs, TupleSections #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 
 {-|
 
@@ -22,8 +22,13 @@
     So we win both in terms of code size as well as in actual work (instructions)
     executed.
 
-    Currently this is done in a single top down pass over STG functions.
-    We keep a set of evaluated bindings and tag Applications with their
+    Currently this is done in multiple top down pass over STG functions.
+    The first pass looks at top level bindings and determines if they are
+    tagged.
+    The second and third pass traverses the whole program and adds cases when allocating
+    constructors if they have strict fields which might be untagged otherwise.
+
+    They keep a set of evaluated bindings and tag Applications with their
     evaluatedness status.
 
     We add to our set of evaluated bindings the following:
@@ -82,6 +87,40 @@
     In the end this is of little consequence. If anything it's easier to
     optimize the above into using a case binder and the whole problem
     goes away.
+
+-----------------------------------------------------------
+    Note [Tagged Things]
+-----------------------------------------------------------
+
+    For some things we can guarantee they will have been tagged
+    and we don't need to enter them.
+
+    1)  Let bound StgRhsCons.
+
+        They encode in the most direct way an allocated constructor.
+
+        However we have to be careful since some of those will be
+        turned into Closures in order to ensure all strict fields
+        are tagged, in which case we HAVE to enter them.
+
+    2)  Closures which are applications to absentError.
+
+        absentError applications encode the fact that an value
+        will NOT be entered even if it's put into an strict field.
+
+        So we make sure we avoid entering these as well by pretending
+        they are tagged.
+
+    3)  (Imported) Nullary Constructors.
+
+        Since they have no arguments they can't technically be unevaluated.
+
+    4)  (Imported) Thunks of arity > 0
+
+        Thunks of arity > 0 are functions and as such will be tagged
+        with their arity. This means entering these would also be pointless
+        and afaik a no-op.
+
 -}
 
 module StgAnal (stgAna, tagTop) where
@@ -106,6 +145,7 @@ import Type (tyConAppTyCon, isUnliftedType, Type)
 -- import Hoopl.Collections
 -- import PrimOp
 import UniqSupply
+import StgCmmClosure (idPrimRep)
 import RepType
 import StgUtil
 
@@ -119,9 +159,52 @@ import Control.Monad
 -- import Data.Maybe
 import qualified Data.List as L
 
+newtype RhsForm = RhsForm Bool
+
+finalRhs = RhsForm True
+intermediateRhs = RhsForm False
+
+------------------------------------------------------------
+--  Utility functions
+------------------------------------------------------------
+
+-- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
+-- We use this to determine which of these require evaluation
+getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
+getStrictConArgs con args =
+    strictArgs
+  where
+    conReps = dataConRepStrictness con
+    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+
+-- | When given a list of ids this con binds, returns the list of ids coming
+-- from strict fields.
+getStrictConFields :: DataCon -> [Id] -> [Id]
+getStrictConFields con binds =
+    strictBinds
+  where
+    conReps = dataConRepStrictness con
+    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps binds
+
 emptyEnv :: IdSet
 emptyEnv = emptyVarSet
 
+
+------------------------------------------------------------
+------------------------------------------------------------
+
+
+
+
+
+
+
+
+------------------------------------------------------------
+--  The actual analysis.
+------------------------------------------------------------
+
+{-# NOINLINE tagTop #-}
 tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
 -- tagTop binds = return binds
 tagTop binds = mapM (tagTopBind env) binds
@@ -129,33 +212,52 @@ tagTop binds = mapM (tagTopBind env) binds
         env = mkVarSet $ evaldTopBinds binds
 
 -- TODO: This mess here:
--- All explicit constructors should likely be marked evaluated
--- Also the naming and stuff.
--- Is the id a top level absence error.
+-- All explicit constructors should likely be marked evaluated.
+
+-- Is the top level absence error.
 evaldTopBinds :: [StgTopBinding] -> [Id]
 evaldTopBinds binds =
-    let result = concatMap (bindIsAbsentError) binds
+    let result = concatMap (evaldTopBind) binds
     in if null result then []
     else pprTrace "Evaled (absent) top binds:" (ppr result) result
 
 
   where
-    bindIsAbsentError :: StgTopBinding -> [Id]
-    bindIsAbsentError (StgTopStringLit _v _) = [] -- TODO
-    bindIsAbsentError (StgTopLifted bind)   =
-        absentBind bind
+    evaldTopBind :: StgTopBinding -> [Id]
+    evaldTopBind (StgTopStringLit _v _) = [] -- TODO
+    evaldTopBind (StgTopLifted bind)    =
+        taggedByBind False bind
 
-    absentBind (StgNonRec v rhs)
-      = absenceRhs v rhs
-    absentBind (StgRec binds)
-      = concatMap (uncurry absenceRhs) binds
+-- Check if for a binding binding @v@ we can expect references to be tagged.
+-- IsFinal tells us if a later pass might change the form of the binding.
+-- This happens for example if we turn a RhsCon into a function in order
+-- to make sure that strict fields are tagged.
+taggedByBind :: Bool -> GenStgBinding p -> [BinderP p]
+taggedByBind isFinal bnd
+    | (StgNonRec v rhs) <- bnd
+    = if evaldRhs rhs then [v] else []
+    | (StgRec binds) <- bnd
+    = map fst $ filter (evaldRhs . snd) binds
+  where
+    evaldRhs :: GenStgRhs p -> Bool
+    evaldRhs (StgRhsClosure _ _ _ _ body)
+        | StgApp _ func _ <- body
+        , idUnique func == absentErrorIdKey
+        = True
+    evaldRhs (StgRhsCon _ccs con args)
+        -- Final let bound constructors always get a proper tag.
+        | isFinal
+        = pprTrace "taggedBind - FinalCon" (ppr con)
+          True
+        -- If the constructor has no strict fields
+        -- we never turn it into a closure
+        | null (getStrictConArgs con args)
+        = pprTrace "taggedBind - nonstrictCon" (ppr con)
+          True
+    evaldRhs _ = False
 
-    absenceRhs :: Id -> StgRhs -> [Id]
-    absenceRhs v (StgRhsClosure _ _ _ _ body)
-      | StgApp _ func _ <- body
-      , idUnique func == absentErrorIdKey
-      = [v]
-    absenceRhs _ _ = []
+-- The tagFoo functions enforce the invariant that all
+-- members of strict fields have been tagged.
 
 tagTopBind :: IdSet -> StgTopBinding -> UniqSM StgTopBinding
 tagTopBind _env bind@(StgTopStringLit {}) = return $ bind
@@ -163,9 +265,11 @@ tagTopBind env       (StgTopLifted bind)  =
     StgTopLifted <$> tagBind env bind
 
 tagBind :: IdSet -> StgBinding -> UniqSM StgBinding
-tagBind env (StgNonRec v rhs) =
+tagBind env (StgNonRec v rhs) = do
+    -- pprTraceM "tagBind" (ppr v)
     StgNonRec v <$> tagRhs env rhs
 tagBind env (StgRec binds) = do
+    -- pprTraceM "tagBinds" (ppr $ map fst binds)
     binds' <- mapM (\(v,rhs) -> (v,) <$> (tagRhs env rhs)) binds
     return $ StgRec binds'
 
@@ -178,7 +282,7 @@ tagBind env (StgRec binds) = do
 -- In particular it habens with "absent argument" errors.
 -- These are placed there by the worker/wrapper pass if we determine
 -- that a field will not be used.
--- This means we will also never case on the fields so it we can simply treat
+-- This means we will also never case on the fields so we can simply treat
 -- it as evaluated even if it's not.
 
 -- TODO:
@@ -187,11 +291,19 @@ tagBind env (StgRec binds) = do
 -- pray that the worker and the absent error thunk stay within the same module.
 --
 
+-- | This turns certain StgRhsCon intp StgRhsClosure if we can't
+-- ensure that strict fields would get a tagged pointer.
+-- Turning a Con into a Closure is terrible! Really terrible!
+-- So we go to some lengths to avoid it.
 tagRhs :: IdSet -> StgRhs -> UniqSM StgRhs
+tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
+    = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
 tagRhs env (StgRhsCon ccs con args)
-  | not (null possiblyUntagged)
---   , False
-  =
+  | null possiblyUntagged
+  = return $ (StgRhsCon ccs con args)
+  -- Make sure everything we put into strict fields is also tagged.
+  | otherwise
+  = pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
     -- pprTrace "Untagged args:"
 --             (   ppr possiblyUntagged $$
 --                 text "allArgs" <+> ppr args $$
@@ -204,17 +316,33 @@ tagRhs env (StgRhsCon ccs con args)
   = return $ (StgRhsCon ccs con args)
   where
     strictArgs = getStrictConArgs con args
-
     possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
-                            , LiftedRep == typePrimRep1 (stgArgType arg) -- argPrimRep
-                            , needsEval v
+                            , not (isTagged env v)
                         ]
-    needsEval v =
-        -- not (isGlobalId v) && -- We trust codeGen to tag module internal references.
-        not (elemVarSet v env) -- We don't have to eval things that were cased on
 
-tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
-    = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
+-- | A pesimistic predicate on weither or not an Id is tagged.
+--   If isTagged == True then it's guaranteed to be tagged.
+isTagged :: IdSet -> Id -> Bool
+isTagged env id =
+    not (liftedId id) || -- (pprTrace "IdRep:" (ppr (id, idPrimRep id)) (idPrimRep id)) /= LiftedRep ||
+    -- We know it's already tagged. (Cased on, absentId, ...)
+    (elemVarSet id env) ||
+    -- Nullary data cons are always represented by a tagged pointer.
+    (isNullaryCon id) ||
+    -- Thunks with Arity > 0 are also always tagged
+    (idFunRepArity id > 0)
+
+  where
+    -- True guarantees a lifted rep, but False could be any rep.
+    liftedId id
+        | [rep] <- typePrimRep (idType id)
+        = rep == LiftedRep
+        | otherwise = False
+    isNullaryCon id
+        | Just con <- (isDataConWorkId_maybe id)
+        = isNullaryRepDataCon con
+        | otherwise = False
+
 
 -- We keep a set of already evaluated ids.
 tagExpr :: IdSet -> StgExpr -> UniqSM StgExpr
@@ -237,32 +365,19 @@ tagConApp env e@(StgConApp con args tys)
   where
     strictArgs = getStrictConArgs con args
     possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
-                            , LiftedRep == typePrimRep1 (stgArgType arg) -- argPrimRep
-                            , needsEval v
+                            , not (isTagged env v)
                         ]
-    needsEval v =
-        -- not (isGlobalId v) && -- We trust codeGen to tag module internal references.
-        not (elemVarSet v env) -- We don't have to eval things that were cased on
 tagConApp _ _ = panic "Impossible"
-
--- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
--- We use this to determine which of these require evaluation
-getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
-getStrictConArgs con args =
-    strictArgs
-  where
-    conReps = dataConRepStrictness con
-    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
-
 
 
 tagCase :: IdSet -> StgExpr -> UniqSM StgExpr
-tagCase env (StgCase scrut bndr ty alts) =
+tagCase env (StgCase scrut bndr ty alts) = do
     -- pprTrace "tagCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
     --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
-    (StgCase scrut bndr ty) <$> alts'
+    scrut' <- tagExpr env scrut
+    alts' <- mapM (tagAlt env') alts
+    return (StgCase scrut' bndr ty alts')
   where
-    alts' = mapM (tagAlt env') alts
     env'
       -- After unaris (where we are) unboxed tuples binders are never in scope
       | stgCaseBndrInScope ty True = extendVarSet env bndr
@@ -279,11 +394,9 @@ tagAlt env (con@(DataAlt dcon), binds, rhs)
     --         ppr con <+> ppr (strictBinds)
     --         ) $
             (con, binds,) <$> tagExpr (env') rhs
-    | otherwise = (con, binds,) <$> tagExpr env rhs
   where
     env' = extendVarSetList env (strictBinds)
-    strictSigs = dataConRepStrictness dcon
-    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip strictSigs binds
+    strictBinds = getStrictConFields dcon binds
 tagAlt env (con, binds, rhs) = (con, binds,) <$> (tagExpr env rhs)
 
 -- TODO: Theoretically we could have code of the form:
@@ -291,8 +404,13 @@ tagAlt env (con, binds, rhs) = (con, binds,) <$> (tagExpr env rhs)
 -- However I haven't seen this occure in all of nofib, so omitting checking
 -- for this case at this time.
 tagLet :: IdSet -> StgExpr -> UniqSM StgExpr
-tagLet env (StgLet ext bind body)
-    = liftM2 (StgLet ext) (tagBind env bind) (tagExpr env body)
+tagLet env (StgLet ext bind body) = do
+    bind' <- tagBind env bind
+    let tagged = taggedByBind True bind'
+    let env' = extendVarSetList env tagged
+    body' <- tagExpr env' body
+    return $ StgLet ext bind' body'
+
 tagLet _ _ = panic "Not a Let"
 
 tagLetNoEscape :: IdSet -> StgExpr -> UniqSM StgExpr
@@ -308,7 +426,7 @@ tagLetNoEscape _ _
 mkLocalArgId :: Id -> UniqSM (Id)
 mkLocalArgId id = do
     u <- getUniqueM
-    -- TODO: Also reflect this in the name?
+    -- TODO: Also reflect this in the idName?
     return $ setIdUnique (localiseId id) u
 
 mkSeq :: Id -> Id -> StgExpr -> StgExpr
@@ -323,7 +441,8 @@ mkSeq id bndr expr =
 mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> UniqSM StgExpr
 mkSeqs untaggedIds con args tys = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: UniqSM [(InId, OutId)]
-    pprTraceM "Forcing strict args:" (ppr argMap)
+    -- pprTraceM "Forcing strict args:" (ppr argMap)
+    mapM (pprTraceM "Forcing strict args:" . ppr) argMap
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
@@ -364,7 +483,7 @@ mkTopConEval needsEval (StgRhsCon ccs con args)
 
 
 
-
+{-# NOINLINE stgAna #-}
 stgAna :: [CgStgTopBinding] -> [CgStgTopBinding]
 stgAna = map anaTopBind
 
@@ -407,12 +526,12 @@ anaCase env (StgCase scrut bndr ty alts) =
   where
     scrut'
         | StgApp _ v [] <- scrut
-        , elemVarSet v env
+        , isTagged env v
         =
             pprTrace "Marking:" (ppr v) $
             StgApp MarkedStrict v []
         | otherwise
-            = scrut
+            = anaExpr env scrut
     alts' = map (anaAlt env') alts
     env'
       -- After unaris (where we are) unboxed tuples binders are never in scope
@@ -448,7 +567,9 @@ anaAlt env (con, binds, rhs) = (con, binds, anaExpr env rhs)
 -- for this case at this time.
 anaLet :: IdSet -> CgStgExpr -> CgStgExpr
 anaLet env (StgLet ext bind body)
-    = StgLet ext (anaBind env bind) (anaExpr env body)
+    = let tagged = taggedByBind True bind
+          env'   = extendVarSetList env tagged
+      in  StgLet ext (anaBind env bind) (anaExpr env' body)
 anaLet _ _ = panic "Not a Let"
 
 anaLetNoEscape :: IdSet -> CgStgExpr -> CgStgExpr

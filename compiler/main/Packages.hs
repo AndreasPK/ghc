@@ -1103,7 +1103,8 @@ findWiredInPackages dflags prec_map pkgs vis_map = do
 -- what appears in PrelNames.
 
 upd_wired_in_mod :: WiredPackagesMap -> Module -> Module
-upd_wired_in_mod wiredInMap (Module uid m) = Module (upd_wired_in_uid wiredInMap uid) m
+upd_wired_in_mod wiredInMap mod =
+  mkModule (upd_wired_in_uid wiredInMap $ moduleUnitId mod) (moduleName mod)
 
 upd_wired_in_uid :: WiredPackagesMap -> UnitId -> UnitId
 upd_wired_in_uid wiredInMap (DefiniteUnitId def_uid) =
@@ -1470,8 +1471,8 @@ mkPackageState dflags dbs preload0 = do
             _  -> unit'
       addIfMorePreferable m unit = addToUDFM_C preferLater m (fsPackageName unit) unit
       -- This is the set of maximally preferable packages. In fact, it is a set of
-      -- most preferable *units* keyed by package name, which act as stand-ins in 
-      -- for "a package in a database". We use units here because we don't have 
+      -- most preferable *units* keyed by package name, which act as stand-ins in
+      -- for "a package in a database". We use units here because we don't have
       -- "a package in a database" as a type currently.
       mostPreferablePackageReps = if gopt Opt_HideAllPackages dflags
                     then emptyUDFM
@@ -1481,7 +1482,7 @@ mkPackageState dflags dbs preload0 = do
       -- with the most preferable unit for package. Being equi-preferable means that
       -- they must be in the same database, with the same version, and the same pacakge name.
       --
-      -- We must take care to consider all these units and not just the most 
+      -- We must take care to consider all these units and not just the most
       -- preferable one, otherwise we can end up with problems like #16228.
       mostPreferable u =
         case lookupUDFM mostPreferablePackageReps (fsPackageName u) of
@@ -1700,9 +1701,9 @@ mkModuleToPkgConfAll dflags pkg_db vis_map =
      let (pk', m', origin') =
           case exposedReexport of
            Nothing -> (pk, m, fromExposedModules e)
-           Just (Module pk' m') ->
-            let pkg' = pkg_lookup pk'
-            in (pk', m', fromReexportedModules e pkg')
+           Just mod ->
+            let pkg' = pkg_lookup $ moduleUnitId mod
+            in (pk', moduleName mod, fromReexportedModules e pkg')
      return (m, mkModMap pk' m' origin')
 
     esmap :: UniqFM (Map Module ModuleOrigin)

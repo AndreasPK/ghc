@@ -7,7 +7,8 @@ Loading interface files
 -}
 
 {-# LANGUAGE CPP, BangPatterns, RecordWildCards, NondecreasingIndentation #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# OPTIONS_GHC -fno-warn-orphans -O -fno-worker-wrapper #-}
+
 module LoadIface (
         -- Importing one thing
         tcLookupImported_maybe, importDecl,
@@ -146,11 +147,13 @@ importDecl name
 
         -- Now look it up again; this time we should find it
         { eps <- getEps
-        ; case lookupTypeEnv (eps_PTE eps) name of
+        ; let !pte = (eps_PTE eps)
+        ; case lookupTypeEnv pte name of
             Just thing -> return $ Succeeded thing
-            Nothing    -> let doc = whenPprDebug (found_things_msg eps $$ empty)
+            Nothing    -> let !doc = whenPprDebug (found_things_msg eps $$ empty)
                                     $$ not_found_msg
-                          in return $ Failed doc
+                          in -- panic "Failed lookup" (ppr name) -- doc --
+                             return $ Failed doc
     }}}
   where
     nd_doc = text "Need decl for" <+> ppr name

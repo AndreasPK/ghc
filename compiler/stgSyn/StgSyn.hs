@@ -52,6 +52,7 @@ module StgSyn (
         stgArgType,
         stripStgTicksTop,
         stgCaseBndrInScope,
+        stgBindIds,
 
         pprStgBinding, pprGenStgTopBindings, pprStgTopBindings
     ) where
@@ -109,6 +110,11 @@ data GenStgTopBinding pass
 data GenStgBinding pass
   = StgNonRec (BinderP pass) (GenStgRhs pass)
   | StgRec    [(BinderP pass, GenStgRhs pass)]
+
+stgBindIds :: GenStgBinding pass -> [BinderP pass]
+stgBindIds (StgNonRec b _) = [b]
+stgBindIds (StgRec bs    ) = map fst bs
+
 
 {-
 ************************************************************************
