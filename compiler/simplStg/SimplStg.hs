@@ -22,8 +22,8 @@ import StgStats         ( showStgStats )
 import UnariseStg       ( unarise )
 import StgCse           ( stgCse )
 import StgLiftLams      ( stgLiftLams )
+import StgAnal          ( tagTop )
 import Module           ( Module )
-import StgAnal          ( stgAna )
 
 import DynFlags
 import ErrUtils
@@ -60,8 +60,6 @@ stg2stg dflags this_mod binds
 
         ; dump_when Opt_D_dump_stg "STG syntax:" binds'
 
-        -- ; let x = stgAna binds'
-        -- ; when (not . null $ x) (mapM_ (pprTraceM "Redundant" . ppr) x )
         ; return binds'
    }
 
@@ -85,6 +83,11 @@ stg2stg dflags this_mod binds
           StgCSE -> do
             let binds' = {-# SCC "StgCse" #-} stgCse binds
             end_pass "StgCse" binds'
+
+          StgTagFields -> do
+            us <- getUniqueSupplyM
+            let binds' = {-# SCC "StgTagFields" #-} initUs_ us $ tagTop binds
+            end_pass "StgTagFields" binds'
 
           StgLiftLams -> do
             us <- getUniqueSupplyM
@@ -116,6 +119,9 @@ stg2stg dflags this_mod binds
 data StgToDo
   = StgCSE
   -- ^ Common subexpression elimination
+  | StgTagFields
+  -- ^ Ensure all strict fields only contain tagged pointers
+  -- by adding case expressions if required.
   | StgLiftLams
   -- ^ Lambda lifting closure variables, trading stack/register allocation for
   -- heap allocation
@@ -135,6 +141,7 @@ getStgToDo dflags =
     -- See Note [StgCse after unarisation] in StgCse
     , optional Opt_StgCSE StgCSE
     , optional Opt_StgLiftLams StgLiftLams
+    , StgTagFields
     , optional Opt_StgStats StgStats
     ] where
       optional opt = runWhen (gopt opt dflags)

@@ -306,6 +306,7 @@ Library
         StgCmmTicky
         StgCmmUtils
         StgCmmExtCode
+        StgMap
         SMRep
         CoreArity
         CoreFVs

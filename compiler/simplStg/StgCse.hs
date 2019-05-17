@@ -322,7 +322,7 @@ stgCseExpr env (StgCase scrut bndr ty alts)
 -- To be removed by a variable use when found in the CSE environment
 stgCseExpr env (StgConApp dataCon args tys)
     | Just bndr' <- envLookup dataCon args' env
-    = StgApp noExtSilent bndr' []
+    = StgApp MayEnter bndr' []
     | otherwise
     = StgConApp dataCon args' tys
   where args' = substArgs env args

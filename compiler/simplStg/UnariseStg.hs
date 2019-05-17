@@ -400,7 +400,7 @@ elimCase rho args bndr (MultiValAlt _) alts
           -- this won't be used but we need a binder anyway
        let rho1 = extendRho rho bndr (MultiVal args)
            scrut' = case tag_arg of
-                      StgVarArg v     -> StgApp noExtSilent v []
+                      StgVarArg v     -> StgApp MayEnter v []
                       StgLitArg l     -> StgLit l
 
        alts' <- unariseSumAlts rho1 real_args alts
@@ -442,7 +442,7 @@ unariseAlts rho (MultiValAlt _) bndr alts
   | isUnboxedSumBndr bndr
   = do (rho_sum_bndrs, scrt_bndrs@(tag_bndr : real_bndrs)) <- unariseConArgBinder rho bndr
        alts' <- unariseSumAlts rho_sum_bndrs (map StgVarArg real_bndrs) alts
-       let inner_case = StgCase (StgApp noExtSilent tag_bndr []) tag_bndr tagAltTy alts'
+       let inner_case = StgCase (StgApp MayEnter tag_bndr []) tag_bndr tagAltTy alts'
        return [ (DataAlt (tupleDataCon Unboxed (length scrt_bndrs)),
                  scrt_bndrs,
                  inner_case) ]

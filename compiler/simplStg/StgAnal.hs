@@ -123,7 +123,7 @@
 
 -}
 
-module StgAnal (stgAna, tagTop) where
+module StgAnal (tagTop) where
 
 import GhcPrelude
 
@@ -142,7 +142,7 @@ import VarSet
 
 import TyCon (tyConDataCons_maybe, PrimRep(..))
 import Type (tyConAppTyCon, isUnliftedType, Type)
--- import Hoopl.Collections
+import Hoopl.Collections
 -- import PrimOp
 import UniqSupply
 import StgCmmClosure (idPrimRep)
@@ -159,42 +159,76 @@ import Control.Monad
 -- import Data.Maybe
 import qualified Data.List as L
 
-newtype RhsForm = RhsForm Bool
+import UniqFM
 
-finalRhs = RhsForm True
-intermediateRhs = RhsForm False
+import StgTraceTags.Analyze
 
 ------------------------------------------------------------
---  Utility functions
+--  Environment tellin us about the state of tagging of ids.
 ------------------------------------------------------------
 
--- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
--- We use this to determine which of these require evaluation
-getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
-getStrictConArgs con args =
-    strictArgs
+-- We turn some RhsCons into RhsClosure, this informs us if the type of
+-- the RHS might still change.
+data RhsForm = FinalRhs | IntermediateRhs deriving Eq
+
+data TagInfo = Tagged
+                -- ^ Tagged values are guaranteed to be tagged by codegen.
+             | MaybeTagged [Id]
+                -- ^ Might be tagged depending on other bindings taggedness
+             | Untagged
+                -- ^ Can reasonably be assumed to be untagged.
+             deriving Eq
+
+instance Outputable TagInfo where
+    ppr Tagged = char '!'
+    ppr Untagged = char '~'
+    ppr (MaybeTagged deps) = char 'v' <> parens (ppr deps)
+
+type AnaEnv = UniqFM TagInfo
+
+emptyEnv :: AnaEnv
+emptyEnv = emptyUFM
+
+-- | A pesimistic predicate on weither or not an Id is tagged.
+--   If isTagged == True then it's guaranteed to be tagged.
+isTagged :: AnaEnv -> Id -> Bool
+isTagged env id =
+    not (liftedId id) || -- (pprTrace "IdRep:" (ppr (id, idPrimRep id)) (idPrimRep id)) /= LiftedRep ||
+    -- We know it's already tagged. (Cased on, absentId, ...)
+    (lookupUFM env id == Just Tagged) ||
+    -- Nullary data cons are always represented by a tagged pointer.
+    (isNullaryCon id) ||
+    -- Thunks with Arity > 0 are also always tagged
+    (idFunRepArity id > 0)
+
   where
-    conReps = dataConRepStrictness con
-    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+    -- True guarantees a lifted rep, but False could be any rep.
+    liftedId id
+        | [rep] <- typePrimRep (idType id)
+        = rep == LiftedRep
+        | otherwise = False
+    isNullaryCon id
+        | Just con <- (isDataConWorkId_maybe id)
+        = isNullaryRepDataCon con
+        | otherwise = False
 
--- | When given a list of ids this con binds, returns the list of ids coming
--- from strict fields.
-getStrictConFields :: DataCon -> [Id] -> [Id]
-getStrictConFields con binds =
-    strictBinds
-  where
-    conReps = dataConRepStrictness con
-    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps binds
+-- | Id is definitely not tagged
+isUntagged :: AnaEnv -> Id -> Bool
+isUntagged env id =
+    (lookupUFM env id == Just Untagged)
 
-emptyEnv :: IdSet
-emptyEnv = emptyVarSet
+tag :: AnaEnv -> Id -> AnaEnv
+tag env id = addToUFM env id Tagged
+
+untag :: AnaEnv -> Id -> AnaEnv
+untag env id = addToUFM env id Untagged
+
+tagMany :: AnaEnv -> [Id] -> AnaEnv
+tagMany env ids = addListToUFM env (zip ids $ repeat Tagged)
 
 
 ------------------------------------------------------------
 ------------------------------------------------------------
-
-
-
 
 
 
@@ -204,73 +238,197 @@ emptyEnv = emptyVarSet
 --  The actual analysis.
 ------------------------------------------------------------
 
+{-  Note [Top level and recursive binds]
+
+    Consider the following code:
+
+        data Foo = Foo Int Int
+
+        foo = Foo 1 2
+        bar = (foo, 1)
+
+    Here bar depends on foo, but they are NOT in a recursive group.
+    For local binds this would result in code of the form:
+
+    let foo = ...; in
+        let bar = ... in
+            e
+
+    However for top level bindings there is no indication that bar
+    contains a reference to foo, so we traverse all top level bindings.
+    During this traversal we collect info about ids which will be tagged
+    by codegen in a global environment which is then used as initial environment
+    for going over the body of all top level bindings.
+
+    We use the same approach also for recursive binds. With the major difference
+    that we only have to do a pass over the recursive group.
+-}
+
 {-# NOINLINE tagTop #-}
 tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
 -- tagTop binds = return binds
-tagTop binds = mapM (tagTopBind env) binds
+
+tagTop binds = do
+    -- Proven but too simplistic approach:
+    rbinds <- (mapM (tagTopBind env) binds)
+
+    -- Experimental stuff:
+    us <- getUniqueSupplyM
+    return $ findTags us rbinds
+
+
     where
-        env = mkVarSet $ evaldTopBinds binds
+        -- See Note [Top level and recursive binds]
+        env = topEnv binds
 
--- TODO: This mess here:
--- All explicit constructors should likely be marked evaluated.
-
--- Is the top level absence error.
-evaldTopBinds :: [StgTopBinding] -> [Id]
-evaldTopBinds binds =
-    let result = concatMap (evaldTopBind) binds
-    in if null result then []
-    else pprTrace "Evaled (absent) top binds:" (ppr result) result
-
-
+-- Is the top level binding evaluated, or can be treated as such.
+topEnv :: [StgTopBinding] -> AnaEnv
+topEnv binds =
+    -- pprTraceIt "Evaled (or absent) top binds:" $
+    resolveMaybeTagged emptyEnv $ concatMap (evaldTopBind) binds
   where
-    evaldTopBind :: StgTopBinding -> [Id]
-    evaldTopBind (StgTopStringLit _v _) = [] -- TODO
+
+    evaldTopBind :: StgTopBinding -> [(Id, TagInfo)]
+    evaldTopBind (StgTopStringLit _v _) = [] -- Unlifted - not tagged.
     evaldTopBind (StgTopLifted bind)    =
-        taggedByBind False bind
+        taggedByBind emptyEnv False bind
+
+rhsTagInfo :: AnaEnv -> StgRhs -> TagInfo
+rhsTagInfo env rhs = evaldRhs rhs
+  where
+    evaldRhs (StgRhsClosure _ _ _ args body)
+        -- *Not tagged* but guaranteed to never be entered by
+        -- the strictness analyzer.
+        | StgApp _ func _ <- body
+        , idUnique func == absentErrorIdKey
+        = Tagged
+        -- Function tagged with arity.
+        | not (null args)
+        = Tagged
+        -- Thunk - untagged
+        | otherwise = Untagged
+    evaldRhs (StgRhsCon _ccs con args)
+        -- If the constructor has no strict fields,
+        -- or the args are already tagged then it we known
+        -- it won't become a thunk and will be tagged.
+        | null untaggedIds
+        = -- pprTrace "taggedBind - nonstrictCon" (ppr con)
+          Tagged
+
+        -- If all args are tagged a RhsCon will always be tagged.
+        | otherwise
+        = MaybeTagged untaggedIds
+      where
+        strictArgs = (getStrictConArgs con args) :: [StgArg]
+        untaggedIds = [v | StgVarArg v <- strictArgs
+                         , not (isTagged env v)]
+
+-- | Out of a recursive binding we get the info if a bind is:
+-- * Tagged
+-- * Untagged
+-- * MaybeTagged deps - This means the binding is tagged if all deps are tagged.
+
+-- We check all TagInfos, update the environment based on them
+-- and check if we can decide the taggedness of any MaybeTagged bindings based on that.
+
+-- This is at worst n². But this is only an issue if we have:
+-- * Many ConRhss
+-- * with strict fields
+-- * which depend on each other.
+-- So in practice not an issue.
+
+resolveMaybeTagged :: AnaEnv -> [(Id,TagInfo)] -> (AnaEnv)
+resolveMaybeTagged env infos =
+    decidedTagged env infos [] False
+  where
+    decidedTagged :: AnaEnv -> [(Id,TagInfo)] -> [(Id,TagInfo)] -> Bool -> AnaEnv
+    -- Iterate as long as we make progress
+    decidedTagged env [] maybes True = decidedTagged env maybes [] False
+    -- If we made no progress then there is nothing left that could turn
+    -- untagged into tagged bindings, so we mark them untagged.
+    decidedTagged env [] maybes False = foldl' untag env $ map fst maybes
+    decidedTagged env (orig@(v, MaybeTagged deps):todo) maybes progress
+        | any (isUntagged env) deps = decidedTagged (untag env v) todo maybes True
+        | all (isTagged env) deps   = decidedTagged (tag env v)   todo maybes True
+        | otherwise                 = decidedTagged env           todo (orig:maybes)
+                                                                        progress
+    decidedTagged env ((v, Tagged):todo) maybes progress
+                                    = decidedTagged (tag env v)   todo maybes True
+    decidedTagged env ((v, Untagged):todo) maybes progress
+                                    = decidedTagged (untag env v) todo maybes True
+    decidedTagged env [] [] _ = env
+
 
 -- Check if for a binding binding @v@ we can expect references to be tagged.
 -- IsFinal tells us if a later pass might change the form of the binding.
 -- This happens for example if we turn a RhsCon into a function in order
 -- to make sure that strict fields are tagged.
-taggedByBind :: Bool -> GenStgBinding p -> [BinderP p]
-taggedByBind isFinal bnd
+
+taggedByBind :: AnaEnv -> Bool -> StgBinding -> [(Id, TagInfo)]
+-- TODO: This should be done iteratively.
+-- Consider these binds, with ! marking strict fields:
+-- val = Int 1
+-- foo = Con1 !x
+-- bar = Con2 !foo
+-- In the current single pass scheme we don't recognize foo/bar as tagged
+-- since that depends on the knowledge that val/foo will be tagged.
+taggedByBind env isFinal bnd
     | (StgNonRec v rhs) <- bnd
-    = if evaldRhs rhs then [v] else []
+    = [(v, evaldRhs rhs)]
     | (StgRec binds) <- bnd
-    = map fst $ filter (evaldRhs . snd) binds
+    = map (second evaldRhs) binds
   where
-    evaldRhs :: GenStgRhs p -> Bool
+    evaldRhs :: StgRhs -> TagInfo
     evaldRhs (StgRhsClosure _ _ _ _ body)
         | StgApp _ func _ <- body
         , idUnique func == absentErrorIdKey
-        = True
+        = Tagged
     evaldRhs (StgRhsCon _ccs con args)
         -- Final let bound constructors always get a proper tag.
         | isFinal
-        = pprTrace "taggedBind - FinalCon" (ppr con)
-          True
-        -- If the constructor has no strict fields
-        -- we never turn it into a closure
-        | null (getStrictConArgs con args)
-        = pprTrace "taggedBind - nonstrictCon" (ppr con)
-          True
-    evaldRhs _ = False
+        = -- pprTrace "taggedBind - FinalCon" (ppr con)
+          Tagged
+
+        -- If the constructor has no strict fields,
+        -- or the args are already tagged then it we known
+        -- it won't become a thunk and will be tagged.
+        | null untaggedIds
+        = -- pprTrace "taggedBind - nonstrictCon" (ppr con)
+          Tagged
+
+        -- If all args are tagged a RhsCon will always be tagged.
+        | not (isFinal)
+        = MaybeTagged untaggedIds
+      where
+        strictArgs = (getStrictConArgs con args) :: [StgArg]
+        untaggedIds = [v | StgVarArg v <- strictArgs
+                         , not (isTagged env v)]
+    evaldRhs _ = Untagged
 
 -- The tagFoo functions enforce the invariant that all
 -- members of strict fields have been tagged.
 
-tagTopBind :: IdSet -> StgTopBinding -> UniqSM StgTopBinding
+tagTopBind :: AnaEnv -> StgTopBinding -> UniqSM StgTopBinding
 tagTopBind _env bind@(StgTopStringLit {}) = return $ bind
 tagTopBind env       (StgTopLifted bind)  =
     StgTopLifted <$> tagBind env bind
 
-tagBind :: IdSet -> StgBinding -> UniqSM StgBinding
+-- TODO: Shadowing is allows so eventually we also have to remove untagged
+--       binds introduced from the map to be save.
+
+-- | Converts RhsCon into RhsClosure if it's required to uphold the tagging
+-- invariant.
+tagBind :: AnaEnv -> StgBinding -> UniqSM StgBinding
 tagBind env (StgNonRec v rhs) = do
     -- pprTraceM "tagBind" (ppr v)
     StgNonRec v <$> tagRhs env rhs
-tagBind env (StgRec binds) = do
-    -- pprTraceM "tagBinds" (ppr $ map fst binds)
-    binds' <- mapM (\(v,rhs) -> (v,) <$> (tagRhs env rhs)) binds
+tagBind env (StgRec binds) = tagRecBinds env binds
+
+tagRecBinds :: AnaEnv -> [(Id, StgRhs)] -> UniqSM StgBinding
+tagRecBinds env binds = do
+    let tagInfos = map (\(v,rhs) -> (v,rhsTagInfo env rhs)) binds
+    let env' = resolveMaybeTagged env tagInfos
+    binds' <- mapM (\(v,rhs) -> (v,) <$> (tagRhs env' rhs)) binds
     return $ StgRec binds'
 
 -- Note [Bottoming bindings in strict fields]
@@ -295,7 +453,9 @@ tagBind env (StgRec binds) = do
 -- ensure that strict fields would get a tagged pointer.
 -- Turning a Con into a Closure is terrible! Really terrible!
 -- So we go to some lengths to avoid it.
-tagRhs :: IdSet -> StgRhs -> UniqSM StgRhs
+
+-- TODO: If there
+tagRhs :: AnaEnv -> StgRhs -> UniqSM StgRhs
 tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
     = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
 tagRhs env (StgRhsCon ccs con args)
@@ -303,7 +463,7 @@ tagRhs env (StgRhsCon ccs con args)
   = return $ (StgRhsCon ccs con args)
   -- Make sure everything we put into strict fields is also tagged.
   | otherwise
-  = pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
+  = -- pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
     -- pprTrace "Untagged args:"
 --             (   ppr possiblyUntagged $$
 --                 text "allArgs" <+> ppr args $$
@@ -316,36 +476,13 @@ tagRhs env (StgRhsCon ccs con args)
   = return $ (StgRhsCon ccs con args)
   where
     strictArgs = getStrictConArgs con args
-    possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
+    possiblyUntagged =  [ v | (StgVarArg v) <- strictArgs
                             , not (isTagged env v)
                         ]
 
--- | A pesimistic predicate on weither or not an Id is tagged.
---   If isTagged == True then it's guaranteed to be tagged.
-isTagged :: IdSet -> Id -> Bool
-isTagged env id =
-    not (liftedId id) || -- (pprTrace "IdRep:" (ppr (id, idPrimRep id)) (idPrimRep id)) /= LiftedRep ||
-    -- We know it's already tagged. (Cased on, absentId, ...)
-    (elemVarSet id env) ||
-    -- Nullary data cons are always represented by a tagged pointer.
-    (isNullaryCon id) ||
-    -- Thunks with Arity > 0 are also always tagged
-    (idFunRepArity id > 0)
-
-  where
-    -- True guarantees a lifted rep, but False could be any rep.
-    liftedId id
-        | [rep] <- typePrimRep (idType id)
-        = rep == LiftedRep
-        | otherwise = False
-    isNullaryCon id
-        | Just con <- (isDataConWorkId_maybe id)
-        = isNullaryRepDataCon con
-        | otherwise = False
-
 
 -- We keep a set of already evaluated ids.
-tagExpr :: IdSet -> StgExpr -> UniqSM StgExpr
+tagExpr :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagExpr env (e@StgCase {})          = tagCase env e
 tagExpr env (e@StgLet {})           = tagLet env e
 tagExpr env (e@StgLetNoEscape {})   = tagLetNoEscape env e
@@ -357,35 +494,43 @@ tagExpr _env e@(StgLit _lit)            = return $ e
 tagExpr _env e@(StgOpApp _op _args _ty) = return $ e
 tagExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
 
-tagConApp :: IdSet -> StgExpr -> UniqSM StgExpr
+tagConApp :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagConApp env e@(StgConApp con args tys)
     | null possiblyUntagged = return e
     | otherwise = do
         mkSeqs possiblyUntagged con args tys
   where
     strictArgs = getStrictConArgs con args
-    possiblyUntagged =  [ v | arg@(StgVarArg v) <- strictArgs
+    possiblyUntagged =  [ v | (StgVarArg v) <- strictArgs
                             , not (isTagged env v)
                         ]
 tagConApp _ _ = panic "Impossible"
 
 
-tagCase :: IdSet -> StgExpr -> UniqSM StgExpr
+tagCase :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagCase env (StgCase scrut bndr ty alts) = do
     -- pprTrace "tagCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
     --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
-    scrut' <- tagExpr env scrut
+    scrut' <- tagScrut
     alts' <- mapM (tagAlt env') alts
     return (StgCase scrut' bndr ty alts')
   where
+    tagScrut
+        | StgApp _ v [] <- scrut
+        , isTagged env v
+        =
+            -- pprTrace "Marking:" (ppr v) $
+            return $ StgApp NoEnter v []
+        | otherwise
+            = tagExpr env scrut
     env'
       -- After unaris (where we are) unboxed tuples binders are never in scope
-      | stgCaseBndrInScope ty True = extendVarSet env bndr
+      | stgCaseBndrInScope ty True = tag env bndr
       | otherwise = env
 
 tagCase _ _ = error "Not a case"
 
-tagAlt :: IdSet -> StgAlt -> UniqSM StgAlt
+tagAlt :: AnaEnv -> StgAlt -> UniqSM StgAlt
 tagAlt env (con@(DataAlt dcon), binds, rhs)
     | (not . null) strictBinds
     -- Extract strictness information for dcon.
@@ -395,7 +540,7 @@ tagAlt env (con@(DataAlt dcon), binds, rhs)
     --         ) $
             (con, binds,) <$> tagExpr (env') rhs
   where
-    env' = extendVarSetList env (strictBinds)
+    env' = tagMany env (strictBinds)
     strictBinds = getStrictConFields dcon binds
 tagAlt env (con, binds, rhs) = (con, binds,) <$> (tagExpr env rhs)
 
@@ -403,17 +548,21 @@ tagAlt env (con, binds, rhs) = (con, binds,) <$> (tagExpr env rhs)
 -- let x = Con in case x of ... e ...
 -- However I haven't seen this occure in all of nofib, so omitting checking
 -- for this case at this time.
-tagLet :: IdSet -> StgExpr -> UniqSM StgExpr
+tagLet :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagLet env (StgLet ext bind body) = do
     bind' <- tagBind env bind
-    let tagged = taggedByBind True bind'
-    let env' = extendVarSetList env tagged
+    let tagged = map fst .
+                 filter (\(_v,info) -> info == Tagged) $
+                 taggedByBind env True bind'
+    let env' = tagMany env tagged
     body' <- tagExpr env' body
     return $ StgLet ext bind' body'
 
 tagLet _ _ = panic "Not a Let"
 
-tagLetNoEscape :: IdSet -> StgExpr -> UniqSM StgExpr
+-- Let no escapes are glorified gotos,
+-- we don't have to worry about their taggedness.
+tagLetNoEscape :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagLetNoEscape env (StgLetNoEscape ext bind body)
     = liftM2 (StgLetNoEscape ext) (tagBind env bind) (tagExpr env body)
 tagLetNoEscape _ _
@@ -435,14 +584,13 @@ mkSeq id bndr expr =
     -- pprTraceIt "mkSeq" $
     let altTy = mkStgAltType bndr [(DEFAULT, [], panic "Not used")]
     in
-    StgCase (StgApp noExtSilent id []) bndr altTy [(DEFAULT, [], expr)]
+    StgCase (StgApp MayEnter id []) bndr altTy [(DEFAULT, [], expr)]
 
 -- Create a ConApp which is guaranteed to evaluate the given ids.
 mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> UniqSM StgExpr
 mkSeqs untaggedIds con args tys = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: UniqSM [(InId, OutId)]
-    -- pprTraceM "Forcing strict args:" (ppr argMap)
-    mapM (pprTraceM "Forcing strict args:" . ppr) argMap
+    -- mapM_ (pprTraceM "Forcing strict args:" . ppr) argMap
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
@@ -457,10 +605,10 @@ mkTopConEval :: [Id] -> StgRhs -> UniqSM StgRhs
 mkTopConEval _          StgRhsClosure {} = panic "Impossible"
 mkTopConEval needsEval (StgRhsCon ccs con args)
   = do
-    pprTraceM "mkTopConEval" ( empty
-        -- $$ text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
-        -- $$ text "argIdInfos - useage" <+> ppr (map idStrictness possiblyUntagged)
-        )
+    -- pprTraceM "mkTopConEval" ( empty
+    --     -- $$ text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
+    --     -- $$ text "argIdInfos - useage" <+> ppr (map idStrictness possiblyUntagged)
+    --     )
 
     -- We don't need to pass the [Type] as top level binds are never unlifted
     -- tuples and it's the only case where they are used.
@@ -476,106 +624,5 @@ mkTopConEval needsEval (StgRhsCon ccs con args)
 
 
 
-
-
-
-
-
-
-
-{-# NOINLINE stgAna #-}
-stgAna :: [CgStgTopBinding] -> [CgStgTopBinding]
-stgAna = map anaTopBind
-
-anaTopBind :: CgStgTopBinding -> CgStgTopBinding
-anaTopBind lit@StgTopStringLit {} = lit
-anaTopBind (StgTopLifted bind) =
-    StgTopLifted $ anaBind emptyEnv bind
-
-anaBind :: IdSet -> CgStgBinding -> CgStgBinding
-anaBind env (StgNonRec v rhs) =
-    StgNonRec v $ anaRhs env rhs
-anaBind env (StgRec binds) =
-    StgRec $ map (second (anaRhs env)) binds
-
-anaRhs :: IdSet -> CgStgRhs -> CgStgRhs
-anaRhs _env e@(StgRhsCon {}) = e -- TODO: Strict fields
-anaRhs env (StgRhsClosure _ext _ccs _flag _args body)
-    = StgRhsClosure _ext _ccs _flag _args $
-        anaExpr env body
-
--- We keep a set of already evaluated ids.
-anaExpr :: IdSet -> CgStgExpr -> CgStgExpr
-anaExpr env (e@StgCase {})          = anaCase env e
-anaExpr env (e@StgLet {})           = anaLet env e
-anaExpr env (e@StgLetNoEscape {})   = anaLetNoEscape env e
-anaExpr env (StgTick t e)           = StgTick t $ anaExpr env e
-
-anaExpr _env e@(StgApp _ _f _args)          = e
-anaExpr _env e@(StgLit _lit)                = e
-anaExpr _env e@(StgConApp _con _args _tys)  = e
-anaExpr _env e@(StgOpApp _op _args _ty)     = e
-anaExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
-
-
-anaCase :: IdSet -> CgStgExpr -> CgStgExpr
-anaCase env (StgCase scrut bndr ty alts) =
-    -- pprTrace "anaCase:" (text "scrut" <+> ppr scrut $$ text "env'" <+> ppr env' $$
-    --     text "env" <+> ppr env $$ text "redundant" <+> ppr redundantEvaled) $
-    (StgCase scrut' bndr ty alts')
-  where
-    scrut'
-        | StgApp _ v [] <- scrut
-        , isTagged env v
-        =
-            pprTrace "Marking:" (ppr v) $
-            StgApp MarkedStrict v []
-        | otherwise
-            = anaExpr env scrut
-    alts' = map (anaAlt env') alts
-    env'
-      -- After unaris (where we are) unboxed tuples binders are never in scope
-      | stgCaseBndrInScope ty True = extendVarSet env bndr
-      | otherwise = env
-
-anaCase _ _ = error "Not a case"
-
-anaAlt :: IdSet -> CgStgAlt -> CgStgAlt
-anaAlt env (con@(DataAlt dcon), binds, rhs)
-    | (not . null) strictBinds
-    -- Extract strictness information for dcon.
-    =
-        -- pprTrace "strictDataConBinds" (
-        --     ppr con <+> ppr (strictBinds)
-        --     ) $
-            (con, binds, anaExpr (env') rhs)
-    | otherwise = (con, binds, anaExpr env rhs)
-  where
-    env' = extendVarSetList env (strictBinds)
-
-    -- zip binds types
-    -- tyConDataCons_maybe = mapMaybe tyConDataCons_maybe tyCons
-
-    -- smallFamily = dataConRepArgTys
-    strictSigs = dataConRepStrictness dcon
-    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip strictSigs binds
-anaAlt env (con, binds, rhs) = (con, binds, anaExpr env rhs)
-
--- TODO: Theoretically we could have code of the form:
--- let x = Con in case x of ... e ...
--- However I haven't seen this occure in all of nofib, so omitting checking
--- for this case at this time.
-anaLet :: IdSet -> CgStgExpr -> CgStgExpr
-anaLet env (StgLet ext bind body)
-    = let tagged = taggedByBind True bind
-          env'   = extendVarSetList env tagged
-      in  StgLet ext (anaBind env bind) (anaExpr env' body)
-anaLet _ _ = panic "Not a Let"
-
-anaLetNoEscape :: IdSet -> CgStgExpr -> CgStgExpr
-anaLetNoEscape env (StgLetNoEscape ext bind body)
-    = StgLetNoEscape ext (anaBind env bind) (anaExpr env body)
-anaLetNoEscape _ _
-    = panic "Not a LetNoEscape"
 
 

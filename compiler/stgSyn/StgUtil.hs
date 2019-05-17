@@ -2,6 +2,8 @@
 
 module StgUtil
     ( mkStgAltType
+    , getStrictConArgs
+    , getStrictConFields
     ) where
 
 #include "HsVersions.h"
@@ -66,3 +68,20 @@ mkStgAltType bndr alts
                 (data_alts, _deflt) = findDefault alts
 
 
+-- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
+-- We use this to determine which of these require evaluation
+getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
+getStrictConArgs con args =
+    strictArgs
+  where
+    conReps = dataConRepStrictness con
+    strictArgs = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps args
+
+-- | When given a list of ids this con binds, returns the list of ids coming
+-- from strict fields.
+getStrictConFields :: DataCon -> [Id] -> [Id]
+getStrictConFields con binds =
+    strictBinds
+  where
+    conReps = dataConRepStrictness con
+    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps binds

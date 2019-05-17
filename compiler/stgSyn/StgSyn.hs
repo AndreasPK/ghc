@@ -25,7 +25,7 @@ module StgSyn (
         GenStgAlt, AltType(..),
 
         StgPass(..), BinderP, XRhsClosure, XLet, XLetNoEscape, XStgApp,
-        NoExtSilent, noExtSilent,
+        NoExtSilent, noExtSilent, AppEnters(..),
         OutputablePass,
 
         UpdateFlag(..), isUpdatable,
@@ -52,7 +52,7 @@ module StgSyn (
         stgArgType,
         stripStgTicksTop,
         stgCaseBndrInScope,
-        stgBindIds,
+        stgBindIds, stgUntickExpr,
 
         pprStgBinding, pprGenStgTopBindings, pprStgTopBindings
     ) where
@@ -460,6 +460,17 @@ data NoExtSilent = NoExtSilent
 instance Outputable NoExtSilent where
   ppr _ = empty
 
+-- | Determines if this StgApp expression enters the "function"
+data AppEnters = NoEnter  -- ^ For tagged and evaluated lifted values
+               | AlwaysEnter -- ^ Always enter without looking at tag - currently not used.
+               | MayEnter -- ^ Otherwise
+
+
+instance Outputable AppEnters where
+  ppr NoEnter = char '!'
+  ppr MayEnter = empty
+  ppr AlwaysEnter = char '~'
+
 -- | Used when constructing a term with an unused extension point that should
 -- not appear in pretty-printed output at all.
 noExtSilent :: NoExtSilent
@@ -490,8 +501,8 @@ type instance XLetNoEscape 'CodeGen = NoExtSilent
 -- Binders used in StgApp, we mark some of these
 -- as strict to make sure we don't make redundant evaluatins.
 type family XStgApp (pass :: StgPass)
-type instance XStgApp 'Vanilla = NoExtSilent
-type instance XStgApp 'CodeGen = StrictnessMark
+type instance XStgApp 'Vanilla = AppEnters
+type instance XStgApp 'CodeGen = AppEnters
 
 stgRhsArity :: StgRhs -> Int
 stgRhsArity (StgRhsClosure _ _ _ bndrs _)
@@ -546,6 +557,10 @@ exprHasCafRefs (StgLetNoEscape _ bind body)
   = bindHasCafRefs bind || exprHasCafRefs body
 exprHasCafRefs (StgTick _ expr)
   = exprHasCafRefs expr
+
+stgUntickExpr :: GenStgExpr pass -> GenStgExpr pass
+stgUntickExpr (StgTick t e ) = stgUntickExpr e
+stgUntickExpr e = e
 
 bindHasCafRefs :: GenStgBinding pass -> Bool
 bindHasCafRefs (StgNonRec _ rhs)

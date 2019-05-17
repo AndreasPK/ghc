@@ -64,7 +64,7 @@ cgExpr (StgApp evaled fun args)     = cgIdApp evaled fun args
 -- seq# a s ==> a
 -- See Note [seq# magic] in PrelRules
 cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
-  cgIdApp NotMarkedStrict a []
+  cgIdApp MayEnter a []
 
 -- dataToTag# :: a -> Int#
 -- See Note [dataToTag#] in primops.txt.pp
@@ -72,7 +72,7 @@ cgExpr (StgOpApp (StgPrimOp DataToTagOp) [StgVarArg a] _res_ty) = do
   dflags <- getDynFlags
   emitComment (mkFastString "dataToTag#")
   tmp <- newTemp (bWord dflags)
-  _ <- withSequel (AssignTo [tmp] False) (cgIdApp NotMarkedStrict a [])
+  _ <- withSequel (AssignTo [tmp] False) (cgIdApp MayEnter a [])
   -- TODO: For small types look at the tag bits instead of reading info table
   emitReturn [getConstrTag dflags (cmmUntag dflags (CmmReg (CmmLocal tmp)))]
 
@@ -541,7 +541,7 @@ cgCase (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _) bndr alt_type alts
   = -- Note [Handle seq#]
     -- And see Note [seq# magic] in PrelRules
     -- Use the same return convention as vanilla 'a'.
-    cgCase (StgApp NotMarkedStrict a []) bndr alt_type alts
+    cgCase (StgApp MayEnter a []) bndr alt_type alts
 
 cgCase scrut bndr alt_type alts
   = -- the general case
@@ -574,7 +574,7 @@ cgCase scrut bndr alt_type alts
     is_cmp_op (StgOpApp (StgPrimOp op) _ _) = isComparisonPrimOp op
     is_cmp_op _                             = False
     evaluatedScrut
-      | (StgApp MarkedStrict v []) <- scrut = True
+      | (StgApp NoEnter v []) <- scrut = True
       | otherwise = False
 
 
@@ -630,7 +630,7 @@ isSimpleScrut :: CgStgExpr -> AltType -> FCode Bool
 isSimpleScrut (StgOpApp op args _) _         = isSimpleOp op args
 isSimpleScrut (StgLit _)           _         = return True       -- case 1# of { 0# -> ..; ... }
 isSimpleScrut (StgApp _ _ [])    (PrimAlt _) = return True       -- case x# of { 0# -> ..; ... }
-isSimpleScrut (StgApp MarkedStrict _ [])   _ = return True       -- case !x of { ... }
+isSimpleScrut (StgApp NoEnter _ [])   _ = return True       -- case !x of { ... }
 isSimpleScrut _                    _         = return False
 
 isSimpleOp :: StgOp -> [StgArg] -> FCode Bool
@@ -869,7 +869,7 @@ emitTagTrap fun_id fun = do
       -- ; return (ReturnedTo lret off)
   }
 
-cgIdApp :: StrictnessMark -> Id -> [StgArg] -> FCode ReturnKind
+cgIdApp :: AppEnters -> Id -> [StgArg] -> FCode ReturnKind
 cgIdApp strict fun_id args = do
     dflags         <- getDynFlags
     fun_info       <- getCgIdInfo fun_id
@@ -928,7 +928,7 @@ cgIdApp strict fun_id args = do
         isWHNF | not (null args)
                = False
               --  = pprPanic "Strict value applied to args:" (ppr fun_id <+> text "args:" <+> ppr args)
-               | isMarkedStrict strict
+               | NoEnter <- strict
                = ASSERT( null args )
                  True
               --  | null args = True

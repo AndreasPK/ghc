@@ -125,7 +125,6 @@ import CoreToStg        ( coreToStg )
 import qualified StgCmm ( codeGen )
 import StgSyn
 import StgFVs           ( annTopBindingsFreeVars )
-import StgAnal          ( stgAna, tagTop )
 import CostCentre
 import ProfInit
 import TyCon
@@ -1470,19 +1469,14 @@ doCodeGen hsc_env this_mod data_tycons
               cost_centre_info stg_binds hpc_info = do
     let dflags = hsc_dflags hsc_env
 
-    us <- mkSplitUniqSupply 'r'
-    let tagged = initUs_ us $ tagTop stg_binds
+    let stg_binds_w_fvs = annTopBindingsFreeVars stg_binds
 
-    let stg_binds_w_fvs = annTopBindingsFreeVars tagged
-    let stg_strict_case = if gopt Opt_StgCSR dflags
-                            then stgAna stg_binds_w_fvs
-                            else stg_binds_w_fvs
-    dumpIfSet_dyn dflags Opt_D_dump_stg_final "STG for code gen:" (pprGenStgTopBindings stg_strict_case)
+    dumpIfSet_dyn dflags Opt_D_dump_stg_final "STG for code gen:" (pprGenStgTopBindings stg_binds_w_fvs)
     let cmm_stream :: Stream IO CmmGroup ()
         cmm_stream = {-# SCC "StgCmm" #-}
             StgCmm.codeGen dflags this_mod data_tycons
-                        --    cost_centre_info stg_binds_w_fvs hpc_info
-                           cost_centre_info stg_strict_case hpc_info
+                           cost_centre_info stg_binds_w_fvs hpc_info
+
 
         -- codegen consumes a stream of CmmGroup, and produces a new
         -- stream of CmmGroup (not necessarily synchronised: one

@@ -128,7 +128,7 @@ liftExpr (StgApp _ext f args) = do
   args' <- traverse liftArgs args
   fvs' <- formerFreeVars f
   let top_lvl_args = map StgVarArg fvs' ++ args'
-  pure (StgApp noExtSilent f' top_lvl_args)
+  pure (StgApp MayEnter f' top_lvl_args)
 liftExpr (StgConApp con args tys) = StgConApp con <$> traverse liftArgs args <*> pure tys
 liftExpr (StgOpApp op args ty) = StgOpApp op <$> traverse liftArgs args <*> pure ty
 liftExpr (StgLam _ _) = pprPanic "stgLiftLams" (text "StgLam")

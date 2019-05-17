@@ -503,7 +503,7 @@ coreToStgApp _ f args ticks = do
                                     StgOpApp (StgFCallOp call (idUnique f)) args' res_ty
 
                 TickBoxOpId {}   -> pprPanic "coreToStg TickBox" $ ppr (f,args')
-                _other           -> StgApp noExtSilent f args'
+                _other           -> StgApp MayEnter f args'
 
         tapp = foldr StgTick app (ticks ++ ticks')
 
