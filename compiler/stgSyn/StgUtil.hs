@@ -70,7 +70,7 @@ mkStgAltType bndr alts
 
 -- | Given a DataCon and list of args passed to it, return the ids we expect to be strict.
 -- We use this to determine which of these require evaluation
-getStrictConArgs :: DataCon -> [StgArg] -> [StgArg]
+getStrictConArgs :: DataCon -> [a] -> [a]
 getStrictConArgs con args =
     strictArgs
   where
@@ -80,8 +80,10 @@ getStrictConArgs con args =
 -- | When given a list of ids this con binds, returns the list of ids coming
 -- from strict fields.
 getStrictConFields :: DataCon -> [Id] -> [Id]
-getStrictConFields con binds =
-    strictBinds
-  where
-    conReps = dataConRepStrictness con
-    strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps binds
+getStrictConFields = getStrictConArgs
+-- getStrictConFields con binds =
+--     strictBinds
+--   where
+--     conReps = dataConRepStrictness con
+--     strictBinds = map snd $ filter (\(s,_v) -> isMarkedStrict s) $ zip conReps binds
+

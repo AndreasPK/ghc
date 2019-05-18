@@ -89,7 +89,7 @@
     goes away.
 
 -----------------------------------------------------------
-    Note [Tagged Things]
+    Note [STagged Things]
 -----------------------------------------------------------
 
     For some things we can guarantee they will have been tagged
@@ -171,20 +171,20 @@ import StgTraceTags.Analyze
 -- the RHS might still change.
 data RhsForm = FinalRhs | IntermediateRhs deriving Eq
 
-data TagInfo = Tagged
-                -- ^ Tagged values are guaranteed to be tagged by codegen.
-             | MaybeTagged [Id]
+data SimpleTagInfo = STagged
+                -- ^ STagged values are guaranteed to be tagged by codegen.
+             | SMaybeTagged [Id]
                 -- ^ Might be tagged depending on other bindings taggedness
-             | Untagged
+             | SUntagged
                 -- ^ Can reasonably be assumed to be untagged.
              deriving Eq
 
-instance Outputable TagInfo where
-    ppr Tagged = char '!'
-    ppr Untagged = char '~'
-    ppr (MaybeTagged deps) = char 'v' <> parens (ppr deps)
+instance Outputable SimpleTagInfo where
+    ppr STagged = char '!'
+    ppr SUntagged = char '~'
+    ppr (SMaybeTagged deps) = char 'v' <> parens (ppr deps)
 
-type AnaEnv = UniqFM TagInfo
+type AnaEnv = UniqFM SimpleTagInfo
 
 emptyEnv :: AnaEnv
 emptyEnv = emptyUFM
@@ -195,7 +195,7 @@ isTagged :: AnaEnv -> Id -> Bool
 isTagged env id =
     not (liftedId id) || -- (pprTrace "IdRep:" (ppr (id, idPrimRep id)) (idPrimRep id)) /= LiftedRep ||
     -- We know it's already tagged. (Cased on, absentId, ...)
-    (lookupUFM env id == Just Tagged) ||
+    (lookupUFM env id == Just STagged) ||
     -- Nullary data cons are always represented by a tagged pointer.
     (isNullaryCon id) ||
     -- Thunks with Arity > 0 are also always tagged
@@ -215,16 +215,16 @@ isTagged env id =
 -- | Id is definitely not tagged
 isUntagged :: AnaEnv -> Id -> Bool
 isUntagged env id =
-    (lookupUFM env id == Just Untagged)
+    (lookupUFM env id == Just SUntagged)
 
 tag :: AnaEnv -> Id -> AnaEnv
-tag env id = addToUFM env id Tagged
+tag env id = addToUFM env id STagged
 
 untag :: AnaEnv -> Id -> AnaEnv
-untag env id = addToUFM env id Untagged
+untag env id = addToUFM env id SUntagged
 
 tagMany :: AnaEnv -> [Id] -> AnaEnv
-tagMany env ids = addListToUFM env (zip ids $ repeat Tagged)
+tagMany env ids = addListToUFM env (zip ids $ repeat STagged)
 
 
 ------------------------------------------------------------
@@ -269,17 +269,35 @@ tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
 -- tagTop binds = return binds
 
 tagTop binds = do
-    -- Proven but too simplistic approach:
-    rbinds <- (mapM (tagTopBind env) binds)
-
     -- Experimental stuff:
     us <- getUniqueSupplyM
-    return $ findTags us rbinds
+    let (_binds, idMap) = findTags us binds
+
+    -- pprTraceM "map" $ ppr idMap
+
+    let env' = fromIdMap env idMap
+    -- let env' = env
+    -- Proven but too simplistic approach:
+    rbinds <- (mapM (tagTopBind env') binds)
+
+    return $ rbinds
+
 
 
     where
         -- See Note [Top level and recursive binds]
+        -- env = topEnv binds
         env = topEnv binds
+
+        fromIdMap :: AnaEnv -> UniqFM FlowNode -> AnaEnv
+        fromIdMap env =
+            foldUFM maybeTagNode env
+            where
+                maybeTagNode node env
+                    | hasOuterTag (node_result node)
+                    , Right id <- node_id node
+                    = pprTrace "Tagging:" (ppr id) $ tag env id
+                    | otherwise = env
 
 -- Is the top level binding evaluated, or can be treated as such.
 topEnv :: [StgTopBinding] -> AnaEnv
@@ -288,12 +306,12 @@ topEnv binds =
     resolveMaybeTagged emptyEnv $ concatMap (evaldTopBind) binds
   where
 
-    evaldTopBind :: StgTopBinding -> [(Id, TagInfo)]
+    evaldTopBind :: StgTopBinding -> [(Id, SimpleTagInfo)]
     evaldTopBind (StgTopStringLit _v _) = [] -- Unlifted - not tagged.
     evaldTopBind (StgTopLifted bind)    =
         taggedByBind emptyEnv False bind
 
-rhsTagInfo :: AnaEnv -> StgRhs -> TagInfo
+rhsTagInfo :: AnaEnv -> StgRhs -> SimpleTagInfo
 rhsTagInfo env rhs = evaldRhs rhs
   where
     evaldRhs (StgRhsClosure _ _ _ args body)
@@ -301,35 +319,35 @@ rhsTagInfo env rhs = evaldRhs rhs
         -- the strictness analyzer.
         | StgApp _ func _ <- body
         , idUnique func == absentErrorIdKey
-        = Tagged
+        = STagged
         -- Function tagged with arity.
         | not (null args)
-        = Tagged
+        = STagged
         -- Thunk - untagged
-        | otherwise = Untagged
+        | otherwise = SUntagged
     evaldRhs (StgRhsCon _ccs con args)
         -- If the constructor has no strict fields,
         -- or the args are already tagged then it we known
         -- it won't become a thunk and will be tagged.
         | null untaggedIds
         = -- pprTrace "taggedBind - nonstrictCon" (ppr con)
-          Tagged
+          STagged
 
         -- If all args are tagged a RhsCon will always be tagged.
         | otherwise
-        = MaybeTagged untaggedIds
+        = SMaybeTagged untaggedIds
       where
         strictArgs = (getStrictConArgs con args) :: [StgArg]
         untaggedIds = [v | StgVarArg v <- strictArgs
                          , not (isTagged env v)]
 
 -- | Out of a recursive binding we get the info if a bind is:
--- * Tagged
--- * Untagged
--- * MaybeTagged deps - This means the binding is tagged if all deps are tagged.
+-- * STagged
+-- * SUntagged
+-- * SMaybeTagged deps - This means the binding is tagged if all deps are tagged.
 
--- We check all TagInfos, update the environment based on them
--- and check if we can decide the taggedness of any MaybeTagged bindings based on that.
+-- We check all SimpleTagInfos, update the environment based on them
+-- and check if we can decide the taggedness of any SMaybeTagged bindings based on that.
 
 -- This is at worst n². But this is only an issue if we have:
 -- * Many ConRhss
@@ -337,24 +355,24 @@ rhsTagInfo env rhs = evaldRhs rhs
 -- * which depend on each other.
 -- So in practice not an issue.
 
-resolveMaybeTagged :: AnaEnv -> [(Id,TagInfo)] -> (AnaEnv)
+resolveMaybeTagged :: AnaEnv -> [(Id,SimpleTagInfo)] -> (AnaEnv)
 resolveMaybeTagged env infos =
     decidedTagged env infos [] False
   where
-    decidedTagged :: AnaEnv -> [(Id,TagInfo)] -> [(Id,TagInfo)] -> Bool -> AnaEnv
+    decidedTagged :: AnaEnv -> [(Id,SimpleTagInfo)] -> [(Id,SimpleTagInfo)] -> Bool -> AnaEnv
     -- Iterate as long as we make progress
     decidedTagged env [] maybes True = decidedTagged env maybes [] False
     -- If we made no progress then there is nothing left that could turn
     -- untagged into tagged bindings, so we mark them untagged.
     decidedTagged env [] maybes False = foldl' untag env $ map fst maybes
-    decidedTagged env (orig@(v, MaybeTagged deps):todo) maybes progress
+    decidedTagged env (orig@(v, SMaybeTagged deps):todo) maybes progress
         | any (isUntagged env) deps = decidedTagged (untag env v) todo maybes True
         | all (isTagged env) deps   = decidedTagged (tag env v)   todo maybes True
         | otherwise                 = decidedTagged env           todo (orig:maybes)
                                                                         progress
-    decidedTagged env ((v, Tagged):todo) maybes progress
+    decidedTagged env ((v, STagged):todo) maybes progress
                                     = decidedTagged (tag env v)   todo maybes True
-    decidedTagged env ((v, Untagged):todo) maybes progress
+    decidedTagged env ((v, SUntagged):todo) maybes progress
                                     = decidedTagged (untag env v) todo maybes True
     decidedTagged env [] [] _ = env
 
@@ -364,7 +382,7 @@ resolveMaybeTagged env infos =
 -- This happens for example if we turn a RhsCon into a function in order
 -- to make sure that strict fields are tagged.
 
-taggedByBind :: AnaEnv -> Bool -> StgBinding -> [(Id, TagInfo)]
+taggedByBind :: AnaEnv -> Bool -> StgBinding -> [(Id, SimpleTagInfo)]
 -- TODO: This should be done iteratively.
 -- Consider these binds, with ! marking strict fields:
 -- val = Int 1
@@ -378,32 +396,32 @@ taggedByBind env isFinal bnd
     | (StgRec binds) <- bnd
     = map (second evaldRhs) binds
   where
-    evaldRhs :: StgRhs -> TagInfo
+    evaldRhs :: StgRhs -> SimpleTagInfo
     evaldRhs (StgRhsClosure _ _ _ _ body)
         | StgApp _ func _ <- body
         , idUnique func == absentErrorIdKey
-        = Tagged
+        = STagged
     evaldRhs (StgRhsCon _ccs con args)
         -- Final let bound constructors always get a proper tag.
         | isFinal
         = -- pprTrace "taggedBind - FinalCon" (ppr con)
-          Tagged
+          STagged
 
         -- If the constructor has no strict fields,
         -- or the args are already tagged then it we known
         -- it won't become a thunk and will be tagged.
         | null untaggedIds
         = -- pprTrace "taggedBind - nonstrictCon" (ppr con)
-          Tagged
+          STagged
 
         -- If all args are tagged a RhsCon will always be tagged.
         | not (isFinal)
-        = MaybeTagged untaggedIds
+        = SMaybeTagged untaggedIds
       where
         strictArgs = (getStrictConArgs con args) :: [StgArg]
         untaggedIds = [v | StgVarArg v <- strictArgs
                          , not (isTagged env v)]
-    evaldRhs _ = Untagged
+    evaldRhs _ = SUntagged
 
 -- The tagFoo functions enforce the invariant that all
 -- members of strict fields have been tagged.
@@ -464,7 +482,7 @@ tagRhs env (StgRhsCon ccs con args)
   -- Make sure everything we put into strict fields is also tagged.
   | otherwise
   = -- pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
-    -- pprTrace "Untagged args:"
+    -- pprTrace "SUntagged args:"
 --             (   ppr possiblyUntagged $$
 --                 text "allArgs" <+> ppr args $$
 --                 text "strictness" <+> ppr conReps $$
@@ -552,7 +570,7 @@ tagLet :: AnaEnv -> StgExpr -> UniqSM StgExpr
 tagLet env (StgLet ext bind body) = do
     bind' <- tagBind env bind
     let tagged = map fst .
-                 filter (\(_v,info) -> info == Tagged) $
+                 filter (\(_v,info) -> info == STagged) $
                  taggedByBind env True bind'
     let env' = tagMany env tagged
     body' <- tagExpr env' body
