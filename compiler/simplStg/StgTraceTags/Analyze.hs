@@ -63,57 +63,70 @@ class Lattice a where
     lub :: a -> a -> a
     top :: a
 
--- Currently not suitable to model knowledge that something is definitely not tagged!
--- Since the glb of Untagged, Tagged == Untagged.
-data TagInfo
-    = NoTagInfo     -- ^ No information
-    | UndetTag      -- ^ Not yet determined
-    | Untagged      -- ^ WILL NOT be tagged
-    | UnknownTag    -- ^ Could be either
-    | Tagged        -- ^ WILL be tagged
-    | TopTagInfo    -- ^ We know we don't know anything
+
+-- | Enterinfo for a binding IF IT USED AS AN UNAPPLIED ATOM.
+--   In particular for
+--     case food<NoEnter> ingredients of ...
+--   we WILL need to evaluate food either way.
+-- However if an id is determined to be NeverEnter we can say
+-- that we can put it directly in strict fields without violating
+-- the tagging invariant as well as casing on it as data without entering
+-- eg the code:
+-- case burger<NoEnter> of
+--     CheeseBurger -> e1
+--     Regular -> e2
+-- does not require us to emite code to enter burger to branch on it's value.
+data EnterInfo
+    = BotEnterInfo      -- ^ No information
+    | UndetEnterInfo    -- ^ Not yet determined, happens for rhsCon if we don't
+                        --   know if the strict fields are already tagged.
+    | NeedsEnter        -- ^ WILL need to be entered
+    | MaybeEnter        -- ^ Could be either
+    | NeverEnter        -- ^ Does NOT need to be entered.
+    | TopEnterInfo      -- ^ We know we can't tell
     deriving (Eq,Show)
 
-instance Outputable TagInfo where
-    ppr NoTagInfo   = text "_|_"
-    ppr UndetTag    = char '?'
-    ppr Untagged    = char 'u'
-    ppr UnknownTag  = char 'm'
-    ppr Tagged      = char 't'
-    ppr TopTagInfo  = char 'T'
+instance Outputable EnterInfo where
+    ppr BotEnterInfo   = text "_|_"
+    ppr UndetEnterInfo    = char '?'
+    ppr NeedsEnter    = char 'u'
+    ppr MaybeEnter  = char 'm'
+    ppr NeverEnter      = char 't'
+    ppr TopEnterInfo  = char 'T'
 
 {- |
-             TopTagInfo
-              /   |   \
-       Untagged Tagged UnknownTag
-              \   |   /
-               UndetTag
+             TopEnterInfo
+             /    |     \
+   NeedsEnter NeverEnter MaybeEnter
+             \    |     /
+            UndetEnterInfo
                   |
-              NoTagInfo
+            BotEnterInfo
 
 
-    NoTagInfo
+    BotEnterInfo
 -}
-instance Lattice TagInfo where
-    bot = NoTagInfo
-    top = TopTagInfo
+instance Lattice EnterInfo where
+    bot = BotEnterInfo
+    top = TopEnterInfo
 
-    glb NoTagInfo x = NoTagInfo
-    glb x NoTagInfo = NoTagInfo
-    glb UndetTag x = UndetTag
-    glb x UndetTag = UndetTag
-    glb x y = if x == y then x else TopTagInfo
-
-    lub NoTagInfo x = x
-    lub x NoTagInfo = x
-    lub UndetTag x = x
-    lub x UndetTag = x
-    lub TopTagInfo x = TopTagInfo
-    lub x TopTagInfo = TopTagInfo
-
+    glb BotEnterInfo _ = BotEnterInfo
+    glb _ BotEnterInfo = BotEnterInfo
+    glb UndetEnterInfo _ = UndetEnterInfo
+    glb _ UndetEnterInfo = UndetEnterInfo
     -- This should not happen, we should only ever INCREASE information
     -- or we risk non-termination
-    lub x y = if x == y then x else panic "Regressing Taginfo" -- UndetTag
+    glb x y = if x == y then x else panic "Regressing taginfo"
+
+    lub BotEnterInfo x = x
+    lub x BotEnterInfo = x
+    lub UndetEnterInfo x = x
+    lub x UndetEnterInfo = x
+    lub TopEnterInfo _ = TopEnterInfo
+    lub _ TopEnterInfo = TopEnterInfo
+
+
+    lub x y = if x == y then x else TopEnterInfo
 
 
 -- Pointwise instances, but with a twist:
@@ -139,7 +152,7 @@ instance (Lattice a1, Lattice a2) => Lattice (a1,a2) where
 
 data SumInfo
     = NoSumInfo -- ^ Default
-    | SumInfo DataCon [TagLattice] -- ^ A constructor application
+    | SumInfo !DataCon [EnterLattice] -- ^ A constructor application
     | TopSumInfo -- ^ Result could be different constructors
     deriving (Eq)
 
@@ -170,6 +183,26 @@ instance Lattice SumInfo where
         = SumInfo con1 (lub lat1 lat2)
         | otherwise = TopSumInfo
 
+data ProdInfo = BotProdInfo | FieldProdInfo [EnterLattice] | TopProdInfo deriving Eq
+
+instance Lattice ProdInfo where
+    bot = BotProdInfo
+    top = TopProdInfo
+
+    glb = panic "Not used"
+
+    lub BotProdInfo x = x
+    lub x BotProdInfo = x
+    lub (FieldProdInfo fields1) (FieldProdInfo fields2)
+        = FieldProdInfo (zipWith lub fields1 fields2)
+    lub TopProdInfo _ = TopProdInfo
+    lub _ TopProdInfo = TopProdInfo
+
+instance Outputable ProdInfo where
+    ppr BotProdInfo = text "p _|_"
+    ppr TopProdInfo = text "p  T "
+    ppr (FieldProdInfo fields) = text "p" <+> ppr fields
+
 {- |
 
 Lattice of roughly this shape:
@@ -187,11 +220,13 @@ LatUnknown represents things over which we can't know anything but their tag.
 Prod/Sum refine this knowledge and extend it to the fields of a returned value.
 
 -}
-data TagLattice
-    = Bot -- Things we can't say anything about (yet)
-    | LatUnknown !TagInfo
 
-    | LatProd !TagInfo [TagLattice]
+
+data EnterLattice
+    = Bot -- Things we can't say anything about (yet)
+    | LatUnknown !EnterInfo
+
+    | LatProd !EnterInfo !ProdInfo
     -- ^ This cross product allows us to represent all but sum types
     -- * For things without contents (eg Bool) we have @LatProd tag [].
     -- * For things for which we care not about the outer tag (unboxed tuples)
@@ -199,14 +234,14 @@ data TagLattice
     -- * For things where we care about both (tag and fields)
     --   like:  y = True; x = Just y
     --   we get for x:
-    --   LatProd Tagged [LatProd Tagged []]
+    --   LatProd NeverEnter [LatProd NeverEnter []]
 
-    | LatSum !TagInfo SumInfo
+    | LatSum !EnterInfo !SumInfo
 
     | Top
                 deriving (Eq)
 
-getOuter :: TagLattice -> Maybe TagInfo
+getOuter :: EnterLattice -> Maybe EnterInfo
 getOuter (LatUnknown x) = Just x
 getOuter (LatProd x _) = Just x
 getOuter (LatSum x  _) = Just x
@@ -214,7 +249,7 @@ getOuter _ = Nothing
 
 
 
-instance Outputable TagLattice where
+instance Outputable EnterLattice where
     ppr Bot = text "_|_"
     ppr Top = text "T"
     ppr (LatUnknown outer) = ppr outer
@@ -223,7 +258,7 @@ instance Outputable TagLattice where
     ppr (LatSum outer inner) =
         ppr outer <+> (ppr inner)
 
-instance Lattice TagLattice where
+instance Lattice EnterLattice where
     bot = Bot
     top = Top
 
@@ -233,9 +268,11 @@ instance Lattice TagLattice where
     glb x Top = x
 
     glb (LatUnknown outer1) x
-        = LatUnknown (glb outer1 (expectJust "glb:TagLattice1" $ getOuter x))
+        = panic "TODO"
+          -- LatUnknown (glb outer1 (expectJust "glb:TagLattice1" $ getOuter x))
     glb x (LatUnknown outer1)
-        = LatUnknown (glb outer1 (expectJust "glb:TagLattice2" $ getOuter x))
+        = panic "TODO"
+          -- LatUnknown (glb outer1 (expectJust "glb:TagLattice2" $ getOuter x))
 
     glb (LatProd outer1 inner1) (LatProd outer2 inner2) =
         LatProd (glb outer1 outer2) (glb inner1 inner2)
@@ -250,15 +287,25 @@ instance Lattice TagLattice where
     -- something currently not analyzed.
     glb (LatProd _ _ ) (LatSum _ _) =
         panic "Comparing sum with prod type"
+    glb (LatSum _ _) (LatProd _ _ ) =
+        panic "Comparing sum with prod type"
+
 
     lub Top _ = Top
     lub _ Top = Top
     lub Bot y = y
     lub x Bot = x
-    lub (LatUnknown outer1) x
-        = setOuterInfo x outer1
-    lub x (LatUnknown outer1)
-        = setOuterInfo x outer1
+    lub (LatUnknown outer1) (LatProd outer2 _)
+        = LatProd (lub outer1 outer2) top
+    lub (LatProd outer1 _) (LatUnknown outer2)
+        = LatProd (lub outer1 outer2) top
+
+    lub (LatUnknown outer1) (LatSum outer2 _)
+        = LatSum (lub outer1 outer2) top
+    lub (LatSum outer1 _) (LatUnknown outer2)
+        = LatSum (lub outer1 outer2) top
+    lub (LatUnknown o1) (LatUnknown o2)
+        = LatUnknown (lub o1 o2)
 
     lub (LatProd outer1 inner1) (LatProd outer2 inner2) =
         LatProd (lub outer1 outer2) (lub inner1 inner2)
@@ -267,12 +314,18 @@ instance Lattice TagLattice where
         = LatSum (lub outer1 outer2) (lub fields1 fields2)
 
     lub (LatProd _ _ ) (LatSum _ _) =
-        panic "Comparing sum with prod type"
+        top
+        -- TODO: This should only occure because of shadowing
+        -- which we can work around.
+        -- panic "Comparing sum with prod type"
+    lub (LatSum _ _) (LatProd _ _ ) =
+        top
+        -- panic "Comparing sum with prod type"
 
 
 flatLattice x = LatUnknown x
 
-setOuterInfo :: TagLattice -> TagInfo -> TagLattice
+setOuterInfo :: EnterLattice -> EnterInfo -> EnterLattice
 setOuterInfo lat info =
     case lat of
         Bot -> LatUnknown info
@@ -281,16 +334,17 @@ setOuterInfo lat info =
         LatSum  _ fields -> LatSum info fields
         Top -> Top
 
-
 -- Lookup field info, defaulting towards bot
-indexField :: TagLattice -> Int -> TagLattice
+indexField :: EnterLattice -> Int -> EnterLattice
 indexField Bot _ = Bot
 indexField Top _ = Top
 indexField LatUnknown {} _ = Bot
-indexField (LatProd _ fields) n =
+indexField (LatProd _ (FieldProdInfo fields)) n =
     case drop n fields of
         [] -> bot
         (x:_xs) -> x
+indexField (LatProd _ BotProdInfo) _ = bot
+indexField (LatProd _ TopProdInfo) _ = top
 indexField (LatSum _ sum) n
     | SumInfo _con fields <- sum
     = case drop n fields of
@@ -298,10 +352,10 @@ indexField (LatSum _ sum) n
         (x:_xs) -> x
     | otherwise = bot
 
-hasOuterTag :: TagLattice -> Bool
-hasOuterTag (LatUnknown Tagged) = True
-hasOuterTag (LatProd Tagged _) = True
-hasOuterTag (LatSum Tagged _) = True
+hasOuterTag :: EnterLattice -> Bool
+hasOuterTag (LatUnknown NeverEnter) = True
+hasOuterTag (LatProd NeverEnter _) = True
+hasOuterTag (LatSum NeverEnter _) = True
 hasOuterTag _ = False
 
 -- Outdated Rules for 0CAF
@@ -317,11 +371,11 @@ hasOuterTag _ = False
 
     Nullary results | n-Product/Unboxed n-Tuple:
 
-    Tagged              [TagInfo x] (TagInfo^n)
+    NeverEnter              [EnterInfo x] (EnterInfo^n)
       |
     Maybe
       |
-    Untagged
+    NeedsEnter
 
 
 
@@ -356,7 +410,7 @@ hasOuterTag _ = False
 
     -- Always "tagged" (not represented by a pointer)
     [StgLit]
-        => tag[StgLit] = Tagged
+        => tag[StgLit] = NeverEnter
 
     -- Always returns a tagged pointer
     [StgConApp args]
@@ -364,7 +418,7 @@ hasOuterTag _ = False
 
     -- Unsure, but likely doesn't matter
     [StgOpApp]
-        => Untagged
+        => NeedsEnter
 
     -- Proper STG doesn't contain lambdas.
     [StgLam]
@@ -385,7 +439,7 @@ hasOuterTag _ = False
 
     -- The case binder is always tagged
     [StgCase scrut bndr alts]
-        => tag [bndr] = Tagged
+        => tag [bndr] = NeverEnter
 
     -- Alternative results are determined from their rhs
     [StgAlt con bnds expr]
@@ -403,7 +457,7 @@ hasOuterTag _ = False
     alti@[StgAlt con [b1, b2, .., bi, .., bn] rhs]
         => tag[b1] = extractFieldTag(1,fun_out(scrut))
 
-        If eg f returns a unboxed n-tuple then it's domain will be TagInfo^n.
+        If eg f returns a unboxed n-tuple then it's domain will be EnterInfo^n.
         extractFieldTag(i,tagInfo) gives us the info about the ith field.
 
 
@@ -411,23 +465,23 @@ hasOuterTag _ = False
     =======================================================
 
     [StgRhsClosure], arity > 0
-        => Tagged
+        => NeverEnter
 
     [StgRhsClosure], arity == 0
-        => Untagged
+        => NeedsEnter
 
     -- Will be tagged on the outer level, inner depends on the arguments
     [StgRhsCon cc con args], lazyCon rhs
         => mkTag(TagOuter, con, args)
 
         eg: Just [a1]
-        => Tagged x tag(a1)
+        => NeverEnter x tag(a1)
 
 
-    e[StgRhsCon], all (\arg -> e[arg] == Tagged) strictArgs rhs
+    e[StgRhsCon], all (\arg -> e[arg] == NeverEnter) strictArgs rhs
         => mkTag(TagOuter, con, args)
 
-    e[StgRhsCon], any (\arg -> e[arg] == Untagged) strictArgs rhs
+    e[StgRhsCon], any (\arg -> e[arg] == NeedsEnter) strictArgs rhs
         => mkTag(UntaggedOuter, con, args)
 
     e[StgRhsCon], otherwise
@@ -437,23 +491,27 @@ hasOuterTag _ = False
     -- Slightly less outdated considerations:
 
     Rule AppRec:
-    -- TODO: Should we make it (Prod/Sum Untagged Top) instead?
+    -- TODO: Should we make it (Prod/Sum NeedsEnter Top) instead?
     app@(StgApp _ f args), let f = ... app ...
         => [app] = [f]
 
-    Rule2:
+    Rule 2:
     -- If a banged field is not guaranteed tagged then we have to
     -- turn this into a closure loosing the tag :(
     con@(StgRhsCon con args), isMarkedStrict arg -> tag[arg]
-        => outer[con] = Tagged
+        => outer[con] = NeverEnter
 
     Rule AppAbsent:
-    -- We have to treat applications of absentError as tagged,
+    -- We have to treat applications of absentError as NeverEnter,
     -- otherwise we might enter them when forcing strict fields
     -- even though otherwise the demand analyser guarantees the
     -- content will not be used.
     app@(StgApp _ f args), f = absentError
-        => outer[app] = Tagged
+        => outer[app] = NeverEnter
+
+    Rule RhsClosure:
+    closure@(RhsClosure args body)
+        => [closure] = [body]
 
 
 ------------------------------------------------------
@@ -485,6 +543,7 @@ We could common up some of these though for performance.
 
 -- | Nodes identified by their id have the result mapped back the STG
 --   all other nodes get an unique and are only there for the analysis.
+--   We also map certain ids to uniqe based id's if they might be shadowed.
 type NodeId = Either Unique Id
 
 data FlowState
@@ -520,7 +579,7 @@ addNode node = do
                 Right v -> s { fs_idNodeMap = addToUFM (fs_idNodeMap s) v  node }
     put s'
 
-updateNode :: NodeId -> TagLattice -> AM ()
+updateNode :: NodeId -> EnterLattice -> AM ()
 updateNode id result = do
     node <- getNode id
     addNode $ node {node_result = result}
@@ -536,7 +595,7 @@ getNode node_id = do
 
 -- | Loke node_result <$> getNode but defaults to bot
 -- for non-existing nodes
-lookupNodeResult :: NodeId -> AM TagLattice
+lookupNodeResult :: NodeId -> AM EnterLattice
 lookupNodeResult node_id = do
     s <- get
     let result =
@@ -547,9 +606,9 @@ lookupNodeResult node_id = do
         Just r  -> return $ node_result r
         Nothing -> return top -- We know we know nothing
 
-getArgNodeId :: StgArg -> NodeId
-getArgNodeId (StgLitArg _ ) = taggedBotNodeId
-getArgNodeId (StgVarArg v ) = Right v
+getArgNodeId :: [SynContext] -> StgArg -> NodeId
+getArgNodeId _    (StgLitArg _ ) = litNodeId
+getArgNodeId ctxt (StgVarArg v ) = mkIdNodeId ctxt v
 
 -- | Creates a node which takes the result of id
 -- if available, a default value otherwise.
@@ -575,10 +634,10 @@ mkIndDefaultNode indirectee = do
 
 data FlowNode
     = FlowNode
-    { node_id :: NodeId -- ^ Node id
+    { node_id :: !NodeId -- ^ Node id
     , node_inputs :: [NodeId]  -- ^ Input dependencies
-    , node_result :: (TagLattice) -- ^ Cached result
-    , node_update :: (AM TagLattice)
+    , node_result :: !(EnterLattice) -- ^ Cached result
+    , node_update :: (AM EnterLattice)
     , node_desc :: !SDoc -- ^ Debugging purposes
     -- ^ Calculate result, update node in environment.
     }
@@ -596,7 +655,9 @@ instance Outputable FlowNode where
 
 data SynContext
     = CLetRec [Id]
+    | CClosure [(Id,NodeId)] -- Args of the closure
     | CTopLevel
+    | CNone -- ^ No Context given
     deriving Eq
 
 
@@ -616,9 +677,9 @@ mkLubNode inputs = do
     return node_id
 
 -- | Take a lattice argument per constructor argument to simplify things.
-mkConLattice :: DataCon -> TagInfo -> [TagLattice] -> TagLattice
+mkConLattice :: DataCon -> EnterInfo -> [EnterLattice] -> EnterLattice
 mkConLattice con outer fields
-    | conCount == 1 = LatProd outer fields
+    | conCount == 1 = LatProd outer (FieldProdInfo fields)
     | conCount > 1
     = LatSum outer (SumInfo con fields)
     | otherwise = panic "mkConLattice"
@@ -635,23 +696,23 @@ findTags us binds =
             addConstantNodes
             nodesTopBinds binds
             nodes <- solveConstraints
-            -- pprTraceM "Result nodes" $ vcat (map ppr nodes)
+            pprTraceM "Result nodes" $ vcat (map ppr nodes)
             return $ binds
     in second fs_idNodeMap result
 
 -- Constant mappings
 addConstantNodes :: AM ()
 addConstantNodes = do
-    addNode $ mkConstNode taggedBotNodeId (flatLattice Tagged)
-    addNode $ mkConstNode litNodeId (flatLattice Tagged)
+    addNode $ mkConstNode taggedBotNodeId (flatLattice NeverEnter)
+    addNode $ mkConstNode litNodeId (flatLattice NeverEnter)
     addNode $ mkConstNode botNodeId Bot
     addNode $ mkConstNode topNodeId Top
 
-mkConstNode :: NodeId -> TagLattice -> FlowNode
+mkConstNode :: NodeId -> EnterLattice -> FlowNode
 mkConstNode id val = FlowNode id [] val (return $ val) (text "const")
 
 -- We don't realy do anything with literals, but for a uniform approach we
--- map them to (Tagged x Bot)
+-- map them to (NeverEnter x Bot)
 taggedBotNodeId, litNodeId :: NodeId
 taggedBotNodeId = Left $ mkUnique 'c' 1
 litNodeId       = Left $ mkUnique 'c' 2
@@ -666,7 +727,7 @@ nodesTopBinds binds = mapM (nodesTop) binds
 nodesTop :: StgTopBinding -> AM StgTopBinding
 -- Always "tagged"
 nodesTop bind@(StgTopStringLit v _str) = do
-    let node = mkConstNode (mkIdNodeId v) (flatLattice Tagged)
+    let node = mkConstNode (mkIdNodeId [CTopLevel] v) (flatLattice NeverEnter)
     addNode node
     return $ bind
 nodesTop      (StgTopLifted bind)  = do
@@ -700,19 +761,19 @@ addImportedNode id = do
 
             -- Functions are tagged with arity
             | idFunRepArity id > 0
-            -> addNode $ mkConstNode node_id (LatProd Tagged bot)
+            -> addNode $ mkConstNode node_id (flatLattice NeverEnter)
 
             -- Known Nullarry constructor
             | Just con <- (isDataConWorkId_maybe id)
             , isNullaryRepDataCon con
-            -> addNode $ mkConstNode node_id (LatProd Tagged [])
+            -> addNode $ mkConstNode node_id (flatLattice NeverEnter)
 
             | otherwise
-            -> addNode $ mkConstNode node_id Bot
+            -> addNode $ mkConstNode node_id (flatLattice MaybeEnter)
 
 
   where
-    node_id = (mkIdNodeId id)
+    node_id = (mkIdNodeId [CNone] id)
 
 
 
@@ -722,7 +783,7 @@ addImportedNode id = do
 nodeRhs :: [SynContext] -> Id -> StgRhs -> AM ()
 nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
     mapM addImportedNode [v | StgVarArg v <- args]
-    let node_id = mkIdNodeId binding
+    let node_id = mkIdNodeId ctxt binding
     let node = FlowNode { node_id = node_id
                         , node_inputs = node_inputs
                         , node_result = Bot
@@ -731,7 +792,7 @@ nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
                         }
     addNode node
   where
-    node_inputs = map getArgNodeId args :: [NodeId]
+    node_inputs = map (getArgNodeId ctxt) args :: [NodeId]
     banged_inputs = getStrictConArgs con node_inputs
     node_update this_id = do
         -- Get input nodes
@@ -747,20 +808,22 @@ nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
                     (\(id,lat) -> hasOuterTag lat || not (elem id banged_inputs))
                     fieldResults
                 = -- pprTrace "Rule2" (ppr this_id)
-                    Tagged
-                | otherwise = UndetTag
+                    NeverEnter
+                | otherwise = UndetEnterInfo
 
         let result = mkConLattice con outerTag (map snd fieldResults)
         updateNode this_id result
         return $ result
 
 nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
+    let arg_nodes = zip args (repeat topNodeId) :: [(Id, NodeId)]
+    let ctxt' = (CClosure arg_nodes):ctxt
     -- TODO: Take into acount args somehow
     mapM addImportedNode args
-    body_id <- nodeExpr ctxt body
+    body_id <- nodeExpr ctxt' body
 
-    let node_id = mkIdNodeId binding
-    let node_inputs = [body_id] -- : (map mkIdNodeId args)
+    let node_id = mkIdNodeId ctxt binding
+    let node_inputs = body_id : (map snd arg_nodes)
     let node = FlowNode { node_id = node_id
                         , node_inputs = node_inputs
                         , node_result = Bot
@@ -774,10 +837,6 @@ nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
 
   where
     node_update this_id body_id= do
-        -- Get input nodes
-        -- Map their lattices to arguments
-        -- use mkConLattice to generate final lattice
-        -- mkConLattice con outer fields
         -- pprTraceM "UpdateClosure1" $ ppr body_id
 
         -- In case we have:
@@ -785,12 +844,19 @@ nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
         bodyInfo <- lookupNodeResult body_id
         -- pprTraceM "UpdateClosure2" $ ppr body_id
 
-        let result = setOuterInfo bodyInfo UndetTag
+        let result = setOuterInfo bodyInfo NeedsEnter
         updateNode this_id result
         return result
 
-mkIdNodeId :: Id -> NodeId
-mkIdNodeId = Right
+mkIdNodeId :: [SynContext] -> Id -> NodeId
+mkIdNodeId ctxt id = Right id
+        -- findMapping ctxt
+    where
+        findMapping [] = Right id
+        findMapping ((CClosure args):todo)
+            | Just uid <- lookup id args = uid
+        findMapping (_:todo) = findMapping todo
+
 
 mkUniqueId :: AM NodeId
 mkUniqueId = Left <$> getUniqueM
@@ -831,23 +897,23 @@ nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
                             , node_result = Bot, node_update = updater
                             , node_desc = text "caseBndr" }
       where
-        bndrId = mkIdNodeId bndr
+        bndrId = mkIdNodeId ctxt bndr
         -- Take the result of the scrutinee and throw an other tag on it.
         updater = do
             -- We don't create nodes for closure arguments, so they might
             -- be undefined
             scrutResult <- lookupNodeResult scrutNodeId
-            let result = setOuterInfo scrutResult Tagged
+            let result = setOuterInfo scrutResult NeverEnter
             updateNode bndrId result
             return result
 
     node_update this_id = do
-        let result = flatLattice UndetTag
+        let result = flatLattice UndetEnterInfo
         updateNode this_id result
         return result
 nodeCase _ _ = panic "Impossible: nodeCase"
 
-nodeAlt ctxt scrutNodeId (altcon, bndrs, rhs)
+nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
   | otherwise = do
     zipWithM mkAltBndrNode [0..] bndrs
 
@@ -857,7 +923,7 @@ nodeAlt ctxt scrutNodeId (altcon, bndrs, rhs)
     where
         -- TODO: These are always tagged
         strictBnds
-          | DataAlt con <- altcon
+          | DataAlt con <- altCon
           = getStrictConFields con bndrs
           | otherwise = []
 
@@ -867,13 +933,13 @@ nodeAlt ctxt scrutNodeId (altcon, bndrs, rhs)
           , not (isUnboxedSumType bndrTy)
           = return litNodeId
           | otherwise = do
-                let node_id = mkIdNodeId bndr
+                let node_id = mkIdNodeId ctxt bndr
                 let updater = do
                         scrut_res <- lookupNodeResult scrutNodeId
                         let res
                                 | elem bndr strictBnds
                                 -- Tag things coming out of strict binds
-                                = setOuterInfo (indexField scrut_res n) Tagged
+                                = setOuterInfo (indexField scrut_res n) NeverEnter
                                 | otherwise = indexField scrut_res n
 
                         updateNode node_id res
@@ -883,10 +949,13 @@ nodeAlt ctxt scrutNodeId (altcon, bndrs, rhs)
                     , node_result = Bot
                     , node_inputs = [scrutNodeId]
                     , node_update = updater
-                    , node_desc = text "altBndr" }
+                    , node_desc = text "altBndr" <-> ppr altCon <-> ppr strictBnds }
                 return node_id
             where
                 bndrTy = idType bndr
+
+(<->) :: SDoc -> SDoc -> SDoc
+(<->) a b = a <> char '_' <> b
 
 nodeLet ctxt (StgLet _ bind expr) = do
     nodesBind ctxt bind
@@ -900,10 +969,10 @@ nodeConApp ctxt (StgConApp con args tys) = do
     -- pprTraceM "ConApp" $ ppr con <+> ppr args
     mapM_ addImportedNode [v | StgVarArg v <- args]
     node_id <- mkUniqueId
-    let inputs = map getArgNodeId args :: [NodeId]
+    let inputs = map (getArgNodeId ctxt) args :: [NodeId]
 
     let updater = do
-            fields <- mapM lookupNodeResult inputs :: AM [TagLattice]
+            fields <- mapM lookupNodeResult inputs :: AM [EnterLattice]
             -- Todo: When an *expression* returns a value the outer tag
             --       is not really defined.
             let result = mkConLattice con bot fields
@@ -920,18 +989,8 @@ nodeConApp ctxt (StgConApp con args tys) = do
 
     return node_id
 
--- nodeStgApp ctxt (StgApp _ f []) = do
---     -- The important case!
---     -- The tag info from f flows to the use site of the expression
---     -- TODO: Avoiding the indirection when we know we will get a node
---     --       for the id
---     -- pprTraceM "ind" $ ppr f
---     mkIndDefaultNode $ mkIdNodeId f
-
-
-
 nodeStgApp ctxt (StgApp _ f args) = do
-    pprTraceM "App" $ ppr f <+> ppr args
+    -- pprTraceM "App" $ ppr f <+> ppr args
     node_id <- mkUniqueId
 
     let updater = do
@@ -940,18 +999,18 @@ nodeStgApp ctxt (StgApp _ f args) = do
                 case () of
                     _
                         | (idUnique f == absentErrorIdKey)
-                        -> return $ flatLattice Tagged -- Rule AppAbsent
+                        -> return $ flatLattice NeverEnter -- Rule AppAbsent
                         -- Rule AppRec
-                        | isRecursiveCall ctxt -> lookupNodeResult (mkIdNodeId f)
-                        | otherwise -> lookupNodeResult (mkIdNodeId f)
+                        | isRecursiveCall ctxt -> lookupNodeResult (mkIdNodeId ctxt f)
+                        | otherwise -> lookupNodeResult (mkIdNodeId ctxt f)
             -- pprTraceM "AppFields" $ ppr (f, func_lat)
-            let result = setOuterInfo func_lat NoTagInfo
+            let result = setOuterInfo func_lat BotEnterInfo
             updateNode node_id result
             return result
 
     addNode FlowNode
         { node_id = node_id, node_result = Bot
-        , node_inputs = [mkIdNodeId f]
+        , node_inputs = [mkIdNodeId ctxt f]
         , node_update = updater
         , node_desc = text "app"
         }
@@ -968,7 +1027,7 @@ nodeLit ctxt (StgLit lit) = return $ litNodeId
 
 nodeOpApp ctxt (StgOpApp op args res_ty) = do
     -- pprTraceM "OpApp" $ ppr args
-    return $ botNodeId
+    return $ topNodeId
 
 
 
@@ -989,17 +1048,27 @@ solveConstraints = do
         idList <- map snd . nonDetUFMToList . fs_idNodeMap <$> get
         uqList <- map snd . nonDetUFMToList . fs_uqNodeMap <$> get
 
-        progress <- liftM2 (||) (update idList False) (update uqList False)
-        when progress $ iterate (n+1)
+        progress <- liftM2 (||) (update n idList False) (update n uqList False)
+        if (not progress)
+            then return ()
+            else if (n > 30)
+                then pprTraceM "Warning:" (text "Aborting at" <+> ppr n <+> text "iterations")
+                else iterate (n+1)
 
-    update :: [FlowNode] -> Bool -> AM Bool
-    update []           progress = return $ progress
-    update (node:todo)  progress = do
+    update :: Int -> [FlowNode] -> Bool -> AM Bool
+    update n []           progress = return $ progress
+    update n (node:todo)  progress = do
+        -- pprTraceM "update:" $ ppr (node_id node) <+> (node_desc node)
         let old_result = node_result node
         -- node_update also updates the environment
         result <- node_update node
         if (result == old_result)
-            then update todo progress
-            else update todo True
+            then update n todo progress
+            else do
+                -- pprTraceM "Updated:" (ppr node)
+                -- pprTraceM "Updated:" (text "old:" <> ppr old_result <+> ppr node)
+                -- pprTraceM "Updated:" (ppr (node_id node) <+> (node_desc node))
+                when (mod n     1000 == 0) $ pprTraceM "Node:" (ppr node)
+                update n todo True
 
 

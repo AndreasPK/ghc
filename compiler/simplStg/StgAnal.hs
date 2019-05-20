@@ -272,6 +272,7 @@ tagTop binds = do
     -- Experimental stuff:
     us <- getUniqueSupplyM
     let (_binds, idMap) = findTags us binds
+    -- let (_binds, idMap) = (undefined, mempty)
 
     -- pprTraceM "map" $ ppr idMap
 
@@ -294,9 +295,9 @@ tagTop binds = do
             foldUFM maybeTagNode env
             where
                 maybeTagNode node env
-                    | hasOuterTag (node_result node)
-                    , Right id <- node_id node
-                    = pprTrace "Tagging:" (ppr id) $ tag env id
+                    | Right id <- node_id node
+                    , hasOuterTag (node_result node)
+                    = pprTrace "Tagging:" (ppr node) $ tag env id
                     | otherwise = env
 
 -- Is the top level binding evaluated, or can be treated as such.

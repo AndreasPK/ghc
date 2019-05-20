@@ -49,7 +49,7 @@ import Util
 import FastString
 import Outputable
 
-import Control.Monad (unless,void)
+import Control.Monad (unless,void, when)
 import Control.Arrow (first)
 import Data.Function ( on )
 
@@ -891,12 +891,14 @@ cgIdApp strict fun_id args = do
         -- A value in WHNF, but determined by StgCSR.
         -- See Note [CSR for Stg]
         _
-          | isWHNF && isVoidTy (idType fun_id) ->
-            pprTrace "WHNFv:" (ppr fun_id) $
-            emitReturn []
-          | isWHNF -> do
+          -- | isWHNF && isVoidTy (idType fun_id) ->
+          --   pprTrace "WHNFv:" (ppr fun_id) $
+          --   emitReturn []
+          | isWHNF && not (isVoidTy (idType fun_id)) -> do
             -- Check if it's really taged
-            -- emitTagTrap fun_id fun
+            -- when debugIsOn
+            (emitTagTrap fun_id fun)
+
 
             pprTraceM "WHNF:" (ppr fun_id <+> ppr args)
             emitReturn [fun]
