@@ -1196,8 +1196,10 @@ solveConstraints = do
             -- Nothing to do this round
             then update n todo progress
             else do
+                let node' = node { node_result = result }
                 done <- and <$> (mapM isMarkedDone (node_inputs node))
-                when done (markDone (node { node_result = result }))
+                when (done || nestingLevelOver result 10) (markDone node')
+
                 -- pprTraceM "Updated:" (ppr node)
                 -- pprTraceM "Updated:" (text "old:" <> ppr old_result <+> ppr node)
                 -- pprTraceM "Updated:" (ppr (node_id node) <+> (node_desc node))
