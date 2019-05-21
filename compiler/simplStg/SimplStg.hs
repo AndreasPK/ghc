@@ -86,7 +86,7 @@ stg2stg dflags this_mod binds
 
           StgTagFields -> do
             us <- getUniqueSupplyM
-            let binds' = {-# SCC "StgTagFields" #-} initUs_ us $ tagTop binds
+            let binds' = {-# SCC "StgTagFields" #-} initUs_ us $ tagTop this_mod binds
             end_pass "StgTagFields" binds'
 
           StgLiftLams -> do

@@ -40,6 +40,7 @@ import StgCmmClosure (idPrimRep)
 import RepType
 import StgUtil
 
+import Module
 import Name
 import PrelNames
 -- import OccName
@@ -86,8 +87,7 @@ class Lattice a where
 --     Regular -> e2
 -- does not require us to emite code to enter burger to branch on it's value.
 data EnterInfo
-    = BotEnterInfo      -- ^ No information
-    | UndetEnterInfo    -- ^ Not yet determined, happens for rhsCon if we don't
+    = UndetEnterInfo    -- ^ Not yet determined, happens for rhsCon if we don't
                         --   know if the strict fields are already tagged.
     | NeedsEnter        -- ^ WILL need to be entered
     | MaybeEnter        -- ^ Could be either
@@ -95,9 +95,8 @@ data EnterInfo
     deriving (Eq,Show)
 
 instance Outputable EnterInfo where
-    ppr BotEnterInfo   = text "_|_"
     ppr UndetEnterInfo    = char '?'
-    ppr NeedsEnter    = char 'u'
+    ppr NeedsEnter    = text "ent"
     ppr MaybeEnter  = char 'm'
     ppr NeverEnter      = char 't'
 
@@ -107,20 +106,13 @@ instance Outputable EnterInfo where
       NeedsEnter  |   NeverEnter
              \    |    /
             UndetEnterInfo
-                  |
-            BotEnterInfo
 
-
-    BotEnterInfo
 -}
 instance Lattice EnterInfo where
-    bot = BotEnterInfo
+    bot = UndetEnterInfo
     top = MaybeEnter
 
     glb = panic "glb not used"
-
-    lub BotEnterInfo x = x
-    lub x BotEnterInfo = x
 
     lub UndetEnterInfo x = x
     lub x UndetEnterInfo = x
@@ -437,8 +429,11 @@ nestingLevelOver _ _ = False
     -- non-tagged cases in the arguments, or we might infer
     -- SP !x !x; .. SP <undet> <tagged> as tagged.
 
-    rhs@[RhsCon con args], strictLub@(strictArgs args)
-        => tag[rhs] = (strictLub, map tag args)
+    -- This means we have to take great care  to assign unknown
+    -- bindings MaybeEnter.
+
+    rhs@[RhsCon con args], sargs@(strictArgs args)
+        => tag[rhs] = (lub Tagged sargs, map tag args)
 
     -- Closures always need to be entered. Their nested enterInfo
     -- is determined by the closure body.
@@ -578,7 +573,8 @@ comparingHelper (UniqId u) = (3,getKey u)
 
 data FlowState
     = FlowState
-    { fs_iteration :: !Int -- ^ Current iteration
+    { fs_mod :: !Module
+    , fs_iteration :: !Int -- ^ Current iteration
     , fs_us :: !UniqSupply
     , fs_idNodeMap :: !(UniqFM FlowNode) -- ^ Map from let bounds ids to their defining node
     , fs_uqNodeMap :: !(UniqFM FlowNode) -- ^ Transient results
@@ -721,9 +717,10 @@ data FlowNode
 
 instance Outputable FlowNode where
     ppr node =
-        text "node_" <> (node_desc node) <> char '_' <>
-            pprId node <> (ppr $ node_inputs node) <>
-            parens (ppr (node_result node)  )
+        hang
+            (text "node_" <> (node_desc node) <> char '_' <> pprId node)
+            2
+            ( (ppr $ node_inputs node) <> parens (ppr $ node_result node) )
       where
         pprId node =
             case node_id node of
@@ -775,19 +772,22 @@ mkConLattice con outer fields
     conCount = length (tyConDataCons $ dataConTyCon con)
 
 {-# NOINLINE findTags #-}
-findTags :: UniqSupply -> [StgTopBinding] -> ([StgTopBinding], UniqFM FlowNode)
-findTags us binds =
-    let state = FlowState 0 us emptyUFM emptyUFM mempty mempty
+findTags :: Module -> UniqSupply -> [StgTopBinding] -> ([StgTopBinding], [FlowNode])
+findTags this_mod us binds =
+    let state = FlowState this_mod 0 us emptyUFM emptyUFM mempty mempty
     -- Run the analysis, extract only info about id-bound nodes
-        result = (flip runState) state $ do
+        (binds', s) = (flip runState) state $ do
             -- pprTraceM "FindTags" empty
             addConstantNodes
             nodesTopBinds binds
             nodes <- solveConstraints
-            -- mapM_ (pprTraceM "res:" . ppr) nodes
+            mapM_ (pprTraceM "res:" . ppr) nodes
             -- pprTraceM "Result nodes" $ vcat (map ppr nodes)
             return $ binds
-    in second fs_idNodeMap result
+        idNodes = (eltsUFM $ fs_idNodeMap s)
+        doneIdNodes = [n | (BoundId _, n) <- (M.toList $ fs_doneNodes s) ]
+
+    in (binds', idNodes ++ doneIdNodes)
 
 -- Constant mappings
 addConstantNodes :: AM ()
@@ -806,7 +806,7 @@ taggedBotNodeId, litNodeId :: NodeId
 taggedBotNodeId = ConstId 1
 litNodeId       = ConstId 2
 botNodeId       = ConstId 3 -- Always returns bot
-topNodeId       = ConstId 4
+topNodeId       = ConstId 4 -- No information possible
 
 litNode :: FlowNode
 litNode = (mkConstNode litNodeId (flatLattice NeverEnter)) { node_desc = text "lit" }
@@ -818,8 +818,9 @@ nodesTopBinds binds = mapM (nodesTop) binds
 nodesTop :: StgTopBinding -> AM StgTopBinding
 -- Always "tagged"
 nodesTop bind@(StgTopStringLit v _str) = do
-    let node = mkConstNode (mkIdNodeId [CTopLevel] v) (flatLattice NeverEnter)
-    markDone node
+    let node = mkConstNode (mkIdNodeId [CTopLevel] v)
+                           (flatLattice NeverEnter)
+    markDone $ node { node_desc = text "c_str" }
     return $ bind
 nodesTop      (StgTopLifted bind)  = do
     nodesBind [CTopLevel] bind
@@ -841,25 +842,30 @@ nodeBind ctxt id rhs = do
 --   Mimics what we do in StgCmmClosure.hs:mkLFImported
 addImportedNode :: Id -> AM ()
 addImportedNode id = do
-    idMap <- fs_idNodeMap <$> get
-    case lookupUFM idMap id of
+    s <- get
+    let doneNodes = fs_doneNodes s
+    let idNodes =   fs_idNodeMap s
+    case lookupUFM idNodes id <|> M.lookup (BoundId id) doneNodes of
         Just _ -> return ()
         Nothing
-            | not (isGlobalId id)
+            | nameIsLocalOrFrom (fs_mod s) (idName id)
             -> return ()
 
             -- Functions are tagged with arity and never entered as atoms
             | idFunRepArity id > 0
-            -> markDone $ mkConstNode node_id (flatLattice NeverEnter)
+            -> markDone $ (mkConstNode node_id (flatLattice NeverEnter))
+                            { node_desc = text "ext_func" }
 
             -- Known Nullarry constructors are also never entered
             | Just con <- (isDataConWorkId_maybe id)
             , isNullaryRepDataCon con
-            -> markDone $ mkConstNode node_id (flatLattice NeverEnter)
+            -> markDone $ (mkConstNode node_id (flatLattice NeverEnter))
+                            { node_desc = text "ext_nullCon" }
 
             -- May or may not be entered.
             | otherwise
-            -> markDone $ mkConstNode node_id (flatLattice MaybeEnter)
+            -> markDone $ (mkConstNode node_id (flatLattice MaybeEnter))
+                            { node_desc = text "ext_unknown" }
 
 
   where
@@ -889,7 +895,7 @@ nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
     node_update this_id = do
         fieldResults <- zip node_inputs <$> mapM lookupNodeResult node_inputs
         let strictResults = map snd $ getStrictConArgs con fieldResults
-        let strictFieldLub = foldl' lub bot $ map getOuter strictResults
+        let strictFieldLub = foldl' lub NeverEnter $ map getOuter strictResults
         -- foldl' lub bot strictResults
         -- pprTraceM "RhsCon" (ppr con <+> ppr this_id <+> ppr fieldResults)
         -- Rule 2
@@ -1119,8 +1125,7 @@ nodeStgApp ctxt (StgApp _ f args) = do
                         | otherwise -> do
                             lookupNodeResult function_id
             -- pprTraceM "AppFields" $ ppr (f, func_lat)
-            -- let result = setOuterInfo func_lat BotEnterInfo
-            when (nestingLevelOver result 5) $ do
+            when (nestingLevelOver result 10) $ do
                 pprTraceM "Limiting nesting for " (ppr node_id)
                 node <- getNode node_id
                 addNode $ node { node_update = return result }
@@ -1176,7 +1181,7 @@ solveConstraints = do
         progress <- liftM2 (||) (update n idList False) (update n uqList False)
         if (not progress)
             then return ()
-            else if (n > 5)
+            else if (n > 10)
                 then pprTraceM "Warning:" (text "Aborting at" <+> ppr n <+> text "iterations")
                 else iterate (n+1)
 

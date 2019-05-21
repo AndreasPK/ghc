@@ -162,6 +162,8 @@ import qualified Data.List as L
 
 import UniqFM
 
+import Module
+
 import StgTraceTags.Analyze
 
 ------------------------------------------------------------
@@ -266,18 +268,18 @@ tagMany env ids = addListToUFM env (zip ids $ repeat STagged)
 -}
 
 {-# NOINLINE tagTop #-}
-tagTop :: [StgTopBinding] -> UniqSM [StgTopBinding]
+tagTop :: Module -> [StgTopBinding] -> UniqSM [StgTopBinding]
 -- tagTop binds = return binds
 
-tagTop binds = do
+tagTop this_mod binds = do
     -- Experimental stuff:
     us <- getUniqueSupplyM
-    let (_binds, idMap) = findTags us binds
+    let (_binds, idResults) = findTags this_mod us binds
     -- let (_binds, idMap) = (undefined, mempty)
 
     -- pprTraceM "map" $ ppr idMap
 
-    let env' = fromIdMap env idMap
+    let env' = fromIdMap env idResults
     -- let env' = env
     -- Proven but too simplistic approach:
     rbinds <- (mapM (tagTopBind env') binds)
@@ -291,11 +293,11 @@ tagTop binds = do
         -- env = topEnv binds
         env = topEnv binds
 
-        fromIdMap :: AnaEnv -> UniqFM FlowNode -> AnaEnv
+        fromIdMap :: AnaEnv -> [FlowNode] -> AnaEnv
         fromIdMap env =
-            foldUFM maybeTagNode env
+            foldl' maybeTagNode env
             where
-                maybeTagNode node env
+                maybeTagNode env node
                     | BoundId id <- node_id node
                     , hasOuterTag (node_result node)
                     = pprTrace "Tagging:" (ppr $ node_id node) $
