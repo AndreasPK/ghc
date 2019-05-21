@@ -877,18 +877,23 @@ addImportedNode id = do
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
 nodeRhs :: [SynContext] -> Id -> StgRhs -> AM ()
-nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
-    mapM addImportedNode [v | StgVarArg v <- args]
-    let node_id = mkIdNodeId ctxt binding
-    let node = FlowNode { node_id = node_id
-                        , node_inputs = node_inputs
-                        , node_result = bot
-                        , node_update = node_update node_id
-                        , node_desc   = text "rhsCon"
-                        }
-    if null args
-        then markDone node
-        else addNode node
+nodeRhs ctxt binding (StgRhsCon _ccs con args)
+  | null args = do
+        let node_id = mkIdNodeId ctxt binding
+        let node = mkConstNode node_id (flatLattice NeverEnter)
+        markDone $ node { node_desc = text "rhsCon" }
+  | otherwise = do
+        mapM addImportedNode [v | StgVarArg v <- args]
+        let node_id = mkIdNodeId ctxt binding
+        let node = FlowNode { node_id = node_id
+                            , node_inputs = node_inputs
+                            , node_result = bot
+                            , node_update = node_update node_id
+                            , node_desc   = text "rhsCon"
+                            }
+        if null args
+            then markDone node
+            else addNode node
   where
     node_inputs = map (getArgNodeId ctxt) args :: [NodeId]
     banged_inputs = getStrictConArgs con node_inputs
