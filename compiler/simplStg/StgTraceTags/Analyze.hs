@@ -6,9 +6,12 @@
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE GADTs, TupleSections #-}
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE BangPatterns #-}
+
+{-# OPTIONS_GHC -O0 #-}
 
 -- (findTags, nodesTopBinds)
-module StgTraceTags.Analyze  where
+module StgTraceTags.Analyze (findTags, FlowNode(..), NodeId(..), hasOuterTag) where
 
 #include "HsVersions.h"
 
@@ -49,13 +52,19 @@ import qualified Data.List as L
 
 import Unique
 import UniqFM
+import qualified Data.IntMap.Strict as IM
+import qualified Data.Map.Strict as M
 import Util
+import Data.Ord (comparing)
 
 import State
 import Maybes
 import Data.Foldable
+import Control.Applicative
 
 import StgSubst
+
+data AppEnterMapping = AppEnterMapping
 
 class Lattice a where
     bot :: a
@@ -83,7 +92,6 @@ data EnterInfo
     | NeedsEnter        -- ^ WILL need to be entered
     | MaybeEnter        -- ^ Could be either
     | NeverEnter        -- ^ Does NOT need to be entered.
-    | TopEnterInfo      -- ^ We know we can't tell
     deriving (Eq,Show)
 
 instance Outputable EnterInfo where
@@ -92,13 +100,12 @@ instance Outputable EnterInfo where
     ppr NeedsEnter    = char 'u'
     ppr MaybeEnter  = char 'm'
     ppr NeverEnter      = char 't'
-    ppr TopEnterInfo  = char 'T'
 
 {- |
-             TopEnterInfo
-             /    |     \
-   NeedsEnter NeverEnter MaybeEnter
-             \    |     /
+              MaybeEnter
+             /    |    \
+      NeedsEnter  |   NeverEnter
+             \    |    /
             UndetEnterInfo
                   |
             BotEnterInfo
@@ -108,25 +115,26 @@ instance Outputable EnterInfo where
 -}
 instance Lattice EnterInfo where
     bot = BotEnterInfo
-    top = TopEnterInfo
+    top = MaybeEnter
 
-    glb BotEnterInfo _ = BotEnterInfo
-    glb _ BotEnterInfo = BotEnterInfo
-    glb UndetEnterInfo _ = UndetEnterInfo
-    glb _ UndetEnterInfo = UndetEnterInfo
-    -- This should not happen, we should only ever INCREASE information
-    -- or we risk non-termination
-    glb x y = if x == y then x else panic "Regressing taginfo"
+    glb = panic "glb not used"
 
     lub BotEnterInfo x = x
     lub x BotEnterInfo = x
+
     lub UndetEnterInfo x = x
     lub x UndetEnterInfo = x
-    lub TopEnterInfo _ = TopEnterInfo
-    lub _ TopEnterInfo = TopEnterInfo
+
+    lub NeedsEnter NeverEnter = MaybeEnter
+    lub NeverEnter NeedsEnter  = MaybeEnter
+
+    lub NeedsEnter NeedsEnter = NeedsEnter
+    lub NeverEnter NeverEnter = NeverEnter
+
+    lub MaybeEnter _ = MaybeEnter
+    lub _ MaybeEnter = MaybeEnter
 
 
-    lub x y = if x == y then x else TopEnterInfo
 
 
 -- Pointwise instances, but with a twist:
@@ -207,24 +215,49 @@ instance Outputable ProdInfo where
 
 Lattice of roughly this shape:
 
-          Top
-          / \
-    LatProd LatSum
-         |   |
-       LatUnknown
-           |
-          Bot
+              Top
+               |
+           LatUnknown
+           |        |
+          / \       |
+    LatProd LatSum  |
+         |   |      |
+       LatUndet    /
+               \  /
+                Bot
 
-LatUnknown represents things over which we can't know anything but their tag.
+LatUnknown represents things over which we can't know anything but their enter behaviour.
+LatUndet represents cases where we haven't been able to compute field information yet.
 
-Prod/Sum refine this knowledge and extend it to the fields of a returned value.
+Prod/Sum tell us something about the values returned.
+
+LatUndet/Unknown allows us to differentiate between lack of
+information about returned values from "uncomputeable" field information.
+
+
+
+-- TODO:
+
+f x = case x of
+    C1 _ -> e1
+    C2 p -> f p
+    C3 _ -> e3
+
+The information for f is determined by [f] = lub [e1] [f] [e3]
 
 -}
 
 
 data EnterLattice
     = Bot -- Things we can't say anything about (yet)
+
+    -- | At most we can say something about the tag of the value itself.
+    --   The fields are obscured (eg imported ids).
     | LatUnknown !EnterInfo
+
+    -- | We know something about the value itself, and we can find out more
+    -- about it's return values as well.
+    | LatUndet !EnterInfo
 
     | LatProd !EnterInfo !ProdInfo
     -- ^ This cross product allows us to represent all but sum types
@@ -241,11 +274,14 @@ data EnterLattice
     | Top
                 deriving (Eq)
 
-getOuter :: EnterLattice -> Maybe EnterInfo
-getOuter (LatUnknown x) = Just x
-getOuter (LatProd x _) = Just x
-getOuter (LatSum x  _) = Just x
-getOuter _ = Nothing
+-- | Get the (outer) EnterInfo value
+getOuter :: EnterLattice -> EnterInfo
+getOuter Bot = bot
+getOuter (LatUndet x) = x
+getOuter (LatUnknown x) = x
+getOuter (LatProd x _) = x
+getOuter (LatSum x  _) = x
+getOuter Top = top
 
 
 
@@ -253,6 +289,7 @@ instance Outputable EnterLattice where
     ppr Bot = text "_|_"
     ppr Top = text "T"
     ppr (LatUnknown outer) = ppr outer
+    ppr (LatUndet   outer) = ppr outer <+> text "undet"
     ppr (LatProd outer inner) =
         ppr outer <+> (ppr inner)
     ppr (LatSum outer inner) =
@@ -262,95 +299,97 @@ instance Lattice EnterLattice where
     bot = Bot
     top = Top
 
-    glb Bot _ = Bot
-    glb _ Bot = Bot
-    glb Top y = y
-    glb x Top = x
-
-    glb (LatUnknown outer1) x
-        = panic "TODO"
-          -- LatUnknown (glb outer1 (expectJust "glb:TagLattice1" $ getOuter x))
-    glb x (LatUnknown outer1)
-        = panic "TODO"
-          -- LatUnknown (glb outer1 (expectJust "glb:TagLattice2" $ getOuter x))
-
-    glb (LatProd outer1 inner1) (LatProd outer2 inner2) =
-        LatProd (glb outer1 outer2) (glb inner1 inner2)
-
-    glb (LatSum outer1 fields1) (LatSum outer2 fields2)
-        = LatSum (glb outer1 outer2) (glb fields1 fields2)
-    -- While from the lattice perspectice this makes sense,
-    -- we error here as it implies a binding takes a value
-    -- both from a sum and a product type which can't happen
-    -- unless it's polymorphic.
-    -- But then the result must come from the functions argument
-    -- something currently not analyzed.
-    glb (LatProd _ _ ) (LatSum _ _) =
-        panic "Comparing sum with prod type"
-    glb (LatSum _ _) (LatProd _ _ ) =
-        panic "Comparing sum with prod type"
+    glb = panic "glb not implemented"
 
 
     lub Top _ = Top
     lub _ Top = Top
     lub Bot y = y
     lub x Bot = x
+
+    -- Compare LatUnknown to remaining constructors
     lub (LatUnknown outer1) (LatProd outer2 _)
-        = LatProd (lub outer1 outer2) top
+        = LatUnknown (lub outer1 outer2)
     lub (LatProd outer1 _) (LatUnknown outer2)
-        = LatProd (lub outer1 outer2) top
+        = LatUnknown (lub outer1 outer2)
 
     lub (LatUnknown outer1) (LatSum outer2 _)
-        = LatSum (lub outer1 outer2) top
+        = LatUnknown (lub outer1 outer2)
     lub (LatSum outer1 _) (LatUnknown outer2)
-        = LatSum (lub outer1 outer2) top
+        = LatUnknown (lub outer1 outer2)
+
     lub (LatUnknown o1) (LatUnknown o2)
         = LatUnknown (lub o1 o2)
 
+    lub (LatUnknown o1) (LatUndet o2) = LatUnknown (lub o1 o2)
+    lub (LatUndet o1) (LatUnknown o2) = LatUnknown (lub o1 o2)
+
+    -- Compare LatUndet to remaining constructors
+    lub (LatUndet o1) (LatUndet o2)
+        = LatUndet (lub o1 o2)
+
+    lub (LatUndet o1) (LatSum o2 fs1) = LatSum (lub o1 o2) (fs1)
+    lub (LatSum o1 fs1) (LatUndet o2)  = LatSum (lub o1 o2) (fs1)
+
+    lub (LatUndet o1) (LatProd o2 fs1) = LatProd (lub o1 o2) (fs1)
+    lub (LatProd o1 fs1) (LatUndet o2)  = LatProd (lub o1 o2) (fs1)
+
+    -- Compare LatProd/LatSum
     lub (LatProd outer1 inner1) (LatProd outer2 inner2) =
         LatProd (lub outer1 outer2) (lub inner1 inner2)
 
     lub (LatSum outer1 fields1) (LatSum outer2 fields2)
         = LatSum (lub outer1 outer2) (lub fields1 fields2)
 
-    lub (LatProd _ _ ) (LatSum _ _) =
-        top
+    lub (LatProd o1 _ ) (LatSum o2 _) =
+        LatUnknown (lub o1 o2)
         -- TODO: This should only occure because of shadowing
         -- which we can work around.
         -- panic "Comparing sum with prod type"
-    lub (LatSum _ _) (LatProd _ _ ) =
-        top
+    lub (LatSum o1 _) (LatProd o2 _ ) =
+        LatUnknown (lub o1 o2)
         -- panic "Comparing sum with prod type"
 
-
+flatLattice :: EnterInfo -> EnterLattice
 flatLattice x = LatUnknown x
 
 setOuterInfo :: EnterLattice -> EnterInfo -> EnterLattice
 setOuterInfo lat info =
     case lat of
-        Bot -> LatUnknown info
+        Bot ->  LatUndet info
+        LatUndet _ ->  LatUndet info
         LatUnknown _ -> LatUnknown info
         LatProd _ fields -> LatProd info fields
         LatSum  _ fields -> LatSum info fields
         Top -> Top
 
+setFieldsToTop :: EnterLattice -> EnterLattice
+setFieldsToTop Bot = top
+setFieldsToTop (LatUndet x) = LatUnknown x
+setFieldsToTop (LatProd x _) = LatUnknown x
+setFieldsToTop (LatSum x _) = LatUnknown x
+setFieldsToTop (LatUnknown x) = LatUnknown x
+setFieldsToTop Top = Top
+
 -- Lookup field info, defaulting towards bot
 indexField :: EnterLattice -> Int -> EnterLattice
-indexField Bot _ = Bot
-indexField Top _ = Top
-indexField LatUnknown {} _ = Bot
+indexField Bot _ = bot
+indexField (LatUndet _) _ = bot
 indexField (LatProd _ (FieldProdInfo fields)) n =
     case drop n fields of
         [] -> bot
         (x:_xs) -> x
 indexField (LatProd _ BotProdInfo) _ = bot
 indexField (LatProd _ TopProdInfo) _ = top
+
 indexField (LatSum _ sum) n
     | SumInfo _con fields <- sum
     = case drop n fields of
         [] -> bot
         (x:_xs) -> x
     | otherwise = bot
+indexField Top _ = top
+indexField LatUnknown {} _ = top
 
 hasOuterTag :: EnterLattice -> Bool
 hasOuterTag (LatUnknown NeverEnter) = True
@@ -358,161 +397,134 @@ hasOuterTag (LatProd NeverEnter _) = True
 hasOuterTag (LatSum NeverEnter _) = True
 hasOuterTag _ = False
 
--- Outdated Rules for 0CAF
+-- TODO: Rewrite for early termination.
+nestingLevelOver :: EnterLattice -> Int -> Bool
+nestingLevelOver _ 0 = True
+nestingLevelOver (LatProd _ (FieldProdInfo fields)) n
+    = any (`nestingLevelOver` (n-1)) fields
+nestingLevelOver (LatSum _ (SumInfo _ fields)) n
+    = any (`nestingLevelOver` (n-1)) fields
+nestingLevelOver _ _ = False
+
+-- Constraints we aim to resolve.
 {-
 
     Assumptions made:
         * StgApp is always fully applied
         * Now shadowing - currently not guaranted will fix later.
 
-    Build the domain for a constructor:
-
-    Tag Lattice for expression results, not listed are the common bot/top elements
-
-    Nullary results | n-Product/Unboxed n-Tuple:
-
-    NeverEnter              [EnterInfo x] (EnterInfo^n)
-      |
-    Maybe
-      |
-    NeedsEnter
-
-
-
-    Syntax:
-    tag[e] -> Tagness info of e
-
-    e[expr]
-
-
-    Binds, top level and otherwise.
-    =======================================================
+    Binds, top level and otherwise are implemented by nodeBind
+    ========================================================
     [NonRec x rhs]
-        => fun_out[x] = tag[rhs]
         => tag[x] = tag[rhs]
 
     Rec [(x1,rhs1), (x2,rhs2), ... ]]
-        => fun_out[x1] = tag[rhs1]
-           tag[x1] = tag[rhs1]
+        => tag[x1] = tag[rhs1]
+           tag[x2] = tag[rhs2]
            ...
 
+    Rhss are implemented by nodeRhs
+    ========================================================
+
+    -- This is the general case for constructors without
+    -- strict fields. They will always be tagged.
+
+    rhs@[RhsCon con args], noneMarkedStrict args
+        => tag[rhs] = (NeverEnter, map tag args)
+
+    -- The special case for constructors with strict fields.
+    -- This works fine, but it requires us to reliable detect
+    -- non-tagged cases in the arguments, or we might infer
+    -- SP !x !x; .. SP <undet> <tagged> as tagged.
+
+    rhs@[RhsCon con args], strictLub@(strictArgs args)
+        => tag[rhs] = (strictLub, map tag args)
+
+    -- Closures always need to be entered. Their nested enterInfo
+    -- is determined by the closure body.
+    rhs@[RhsClosure args body]
+        => tag[rhs] = (NeedsEnter, fieldsOf(tag body))
+
+    -- Not implemented:
+    -- We can mark closures with arity > 1 as NeverEnter.
+    -- If they are not applied to arguments they in fact are never entered.
+    -- We just have to be sure to properly deal with the applied case.
 
     Expressions:
-    =======================================================
+    ========================================================
 
-    -- The result is tagged if the function returns a tagged arguments.
-    [StgApp f args]
-        => tag[StgApp f args] = fun_out[f]
+    -- Unsure, but likely doesn't matter
+    [StgOpApp]
+        => (MayEnter, top)
+
+    -- Proper STG doesn't contain lambdas.
+    [StgLam]
+        => panic
+
+    -- Let's just flow along
+    [StgLet bnd body]
+        => tag[body]
+
+    -- Let's just flow along
+    [StgLetNoEscape bnd body]
+        => tag[body]
+
+    -- Literal expressions never require entering.
+    [StgLit]
+        => tag[StgLit] = (NeverEnter, top)
+
+    Function application
+    --------------------------------------------------------
+
+    -- AppAbsent
+    -- The result does not need to be entered if it's an application of
+    -- absentError
+    app@[StgApp f _], f == absentError
+        => tag[app] = (NeverEnter, top)
+
+    -- AppRec:
+    -- In the recursive case, the app gives us no new information,
+    -- but does not constrain us either.
+    app@[StgApp f _], hasEnv[letrec f = @rhs(... app ...)]
+        => tag[app] = tag[rhs]
+
+    AppDefault
+    -- If f represents a constructor we want to avoid entering,
+    -- but we need to force entering if it's not. However this
+    -- is already set in the rhs rules so we just pass it along.
+    app@[StgApp f []]
+        => tag[app] = tag f
 
     -- The result is tagged if the function returns a tagged arguments.
     [StgApp f []]
         => fun_out[ [StgApp f []] ] = tag[f]
 
-    -- Always "tagged" (not represented by a pointer)
-    [StgLit]
-        => tag[StgLit] = NeverEnter
+    conApp@[StgConApp con args]
+        => tag[conApp] = (NeedsEnter, map tag args)
 
-    -- Always returns a tagged pointer
-    [StgConApp args]
-        => fields[StgConApp] = tags(args)
+    -- This constraint is currently disabled.
+    conApp@[StgConApp con [arg1,arg2,argi,... argn], hasCtxt[letrec argi = ...]
+        => tag[argi] = (enterInfo arg1, top)
 
-    -- Unsure, but likely doesn't matter
-    [StgOpApp]
-        => NeedsEnter
-
-    -- Proper STG doesn't contain lambdas.
-    [StgLam]
-        => panic -
-
-    --
-    [StgLet bnd body]
-        => tag[body]
-
-    --
-    [StgLetNoEscape bnd body]
-        => tag[body]
+    Subparts of case expressions
+    --------------------------------------------------------
 
     -- Cases are one of the harder parts.
     -- The lower bound of the alts determine the expressions tag
-    [StgCase scrut bndr alts]
-        => tag[StgCase scrut bndr alts] = glb alts
+    case@[StgCase scrut bndr alts]
+        => tag[case] = lub alts
 
-    -- The case binder is always tagged
+    -- The case binder is never entered
     [StgCase scrut bndr alts]
-        => tag [bndr] = NeverEnter
+        => tag [bndr] = (NeverEnter, fields scrut)
 
     -- Alternative results are determined from their rhs
-    [StgAlt con bnds expr]
-        => tag[StgAlt con bnds expr] = tag[expr]
+    alt@[StgAlt con bnds expr]
+        => tag[alt] = tag expr
 
-    -- Strict fields are always at least tagged
-    -- tagOuter tells transforms the tagInfo in one that
-    -- represents a tagged pointer, without touching information about
-    -- inner fields. This is monotonic!
-    [StgAlt con [b1,b2,..bn] expr], strictField bi
-            => tag[bi] = tagOuter(tag[bi])
-
-    -- Function return values flowing into alternative binders.
-    [StgCase scrut bndr [alt0, ..., alti, ..., altn]],
-    alti@[StgAlt con [b1, b2, .., bi, .., bn] rhs]
-        => tag[b1] = extractFieldTag(1,fun_out(scrut))
-
-        If eg f returns a unboxed n-tuple then it's domain will be EnterInfo^n.
-        extractFieldTag(i,tagInfo) gives us the info about the ith field.
-
-
-    GenStgRhs:
-    =======================================================
-
-    [StgRhsClosure], arity > 0
-        => NeverEnter
-
-    [StgRhsClosure], arity == 0
-        => NeedsEnter
-
-    -- Will be tagged on the outer level, inner depends on the arguments
-    [StgRhsCon cc con args], lazyCon rhs
-        => mkTag(TagOuter, con, args)
-
-        eg: Just [a1]
-        => NeverEnter x tag(a1)
-
-
-    e[StgRhsCon], all (\arg -> e[arg] == NeverEnter) strictArgs rhs
-        => mkTag(TagOuter, con, args)
-
-    e[StgRhsCon], any (\arg -> e[arg] == NeedsEnter) strictArgs rhs
-        => mkTag(UntaggedOuter, con, args)
-
-    e[StgRhsCon], otherwise
-        => mkTag(UndetTagOuter, con, args)
-
-
-    -- Slightly less outdated considerations:
-
-    Rule AppRec:
-    -- TODO: Should we make it (Prod/Sum NeedsEnter Top) instead?
-    app@(StgApp _ f args), let f = ... app ...
-        => [app] = [f]
-
-    Rule 2:
-    -- If a banged field is not guaranteed tagged then we have to
-    -- turn this into a closure loosing the tag :(
-    con@(StgRhsCon con args), isMarkedStrict arg -> tag[arg]
-        => outer[con] = NeverEnter
-
-    Rule AppAbsent:
-    -- We have to treat applications of absentError as NeverEnter,
-    -- otherwise we might enter them when forcing strict fields
-    -- even though otherwise the demand analyser guarantees the
-    -- content will not be used.
-    app@(StgApp _ f args), f = absentError
-        => outer[app] = NeverEnter
-
-    Rule RhsClosure:
-    closure@(RhsClosure args body)
-        => [closure] = [body]
-
+    -- Strict fields are tagged and as such need not be entered.
+    alt@[StgAlt con [b1,b2,..bn] expr], strictField bi, hasEnv[case scrut of ... alt, ...]
+            => tag[bi] = (NeverEnter, fields scrut !! i)
 
 ------------------------------------------------------
 
@@ -544,13 +556,34 @@ We could common up some of these though for performance.
 -- | Nodes identified by their id have the result mapped back the STG
 --   all other nodes get an unique and are only there for the analysis.
 --   We also map certain ids to uniqe based id's if they might be shadowed.
-type NodeId = Either Unique Id
+data NodeId
+    = BoundId !Id
+    | UniqId  !Unique
+    | ConstId !Int
+    deriving (Eq)
+
+instance Ord NodeId where
+    compare = comparing comparingHelper
+
+instance Outputable NodeId where
+    ppr (BoundId i) = char 'v' <-> ppr i
+    ppr (UniqId  i) = char 'u' <-> ppr i
+    ppr (ConstId i) = char 'c' <-> ppr i
+
+
+comparingHelper :: NodeId -> (Int,Int)
+comparingHelper (ConstId i) = (1, i)
+comparingHelper (BoundId id) = (2,getKey $ getUnique  id)
+comparingHelper (UniqId u) = (3,getKey u)
 
 data FlowState
     = FlowState
-    { fs_us :: UniqSupply
-    , fs_idNodeMap :: UniqFM FlowNode -- ^ Map from let bounds ids to their defining node
-    , fs_uqNodeMap :: UniqFM FlowNode -- ^ Transient results
+    { fs_iteration :: !Int -- ^ Current iteration
+    , fs_us :: !UniqSupply
+    , fs_idNodeMap :: !(UniqFM FlowNode) -- ^ Map from let bounds ids to their defining node
+    , fs_uqNodeMap :: !(UniqFM FlowNode) -- ^ Transient results
+    , fs_constNodeMap :: !(IM.IntMap FlowNode) -- ^ Non-updating nodes
+    , fs_doneNodes :: !(M.Map NodeId FlowNode) -- ^ We can be sure these will no longer change.
     }
 
 -- getNodeIdMap :: FlowState -> NodeId -> UniqFM FlowNode
@@ -570,63 +603,104 @@ instance MonadUnique AM where
         let (us1,us2) = splitUniqSupply $ fs_us s
         put $ s {fs_us = us1}
         return us2
+    getUniqueM = do
+        s <- get
+        let (u,us) = takeUniqFromSupply $ fs_us s
+        put $! s {fs_us = us}
+        return u
 
 addNode :: FlowNode -> AM ()
 addNode node = do
     s <- get
+    -- TODO: Assert node doesn't exist
     let s' = case node_id node of
-                Left uq -> s { fs_uqNodeMap = addToUFM (fs_uqNodeMap s) uq node }
-                Right v -> s { fs_idNodeMap = addToUFM (fs_idNodeMap s) v  node }
+                UniqId uq -> s { fs_uqNodeMap = addToUFM (fs_uqNodeMap s) uq node }
+                BoundId v -> s { fs_idNodeMap = addToUFM (fs_idNodeMap s) v  node }
+                ConstId i -> s { fs_constNodeMap = IM.insert i node (fs_constNodeMap s) }
     put s'
 
-updateNode :: NodeId -> EnterLattice -> AM ()
-updateNode id result = do
-    node <- getNode id
-    addNode $ node {node_result = result}
+-- | Move the node from the updateable to the finished set
+markDone :: FlowNode -> AM ()
+markDone node = do
+    case node_id node of
+        ConstId id -> do
+            s <- get
+            let s' = s  { fs_constNodeMap = IM.insert id node (fs_constNodeMap s) }
+            put s'
+        BoundId id -> do
+            s <- get
+            let s' = s  { fs_idNodeMap = delFromUFM (fs_idNodeMap s) id
+                        , fs_doneNodes = M.insert (BoundId id) node (fs_doneNodes s) }
+            put s'
+        UniqId uq -> do
+            s <- get
+            let s' = s  { fs_uqNodeMap = delFromUFM (fs_uqNodeMap s) uq
+                        , fs_doneNodes = M.insert (UniqId uq) node (fs_doneNodes s) }
+            put s'
 
+isMarkedDone :: NodeId -> AM Bool
+isMarkedDone (ConstId _) = return True
+isMarkedDone id = M.member id . fs_doneNodes <$> get
+
+updateNode :: NodeId -> EnterLattice -> AM ()
+updateNode id !result = do
+    -- TODO: Assert node is not done yet
+    node <- getNode id
+    addNode $! node {node_result = result}
 
 
 getNode :: NodeId -> AM FlowNode
 getNode node_id = do
     s <- get
-    return $ case node_id of
-        Left uq -> fromMaybe (panic "getNodeUq" $ ppr node_id) $ lookupUFM  (fs_uqNodeMap s) uq
-        Right v -> fromMaybe (pprPanic "getNodeId" $ ppr node_id) $ lookupUFM  (fs_idNodeMap s) v
+    let m_done = M.lookup node_id (fs_doneNodes s)
+
+    case m_done of
+        Just node -> return $ node
+        Nothing -> return $ case node_id of
+                        UniqId uq -> fromMaybe (panic "getNodeUq"       $ ppr node_id) $ lookupUFM  (fs_uqNodeMap s) uq
+                        BoundId v -> fromMaybe (pprPanic "getNodeId"    $ ppr node_id) $ lookupUFM  (fs_idNodeMap s) v
+                        ConstId i -> fromMaybe (pprPanic "getNodeConst" $ ppr node_id) $ IM.lookup  i (fs_constNodeMap s)
 
 -- | Loke node_result <$> getNode but defaults to bot
 -- for non-existing nodes
 lookupNodeResult :: NodeId -> AM EnterLattice
 lookupNodeResult node_id = do
     s <- get
-    let result =
-            case node_id of
-                Left uq -> lookupUFM  (fs_uqNodeMap s) uq
-                Right v -> lookupUFM  (fs_idNodeMap s) v
+    let result = (M.lookup node_id (fs_doneNodes s)) <|>
+                 (lookupNode s node_id)
     case result of
         Just r  -> return $ node_result r
-        Nothing -> return top -- We know we know nothing
+        Nothing -> pprPanic "No node created for " (ppr node_id)
+                   --return $ top -- We know we know nothing
+    where
+        lookupNode :: FlowState -> NodeId -> (Maybe FlowNode)
+        lookupNode s node_id =
+                case node_id of
+                    UniqId uq -> lookupUFM  (fs_uqNodeMap s) uq
+                    BoundId v -> lookupUFM  (fs_idNodeMap s) v
+                    ConstId i -> IM.lookup  i (fs_constNodeMap s)
 
 getArgNodeId :: [SynContext] -> StgArg -> NodeId
 getArgNodeId _    (StgLitArg _ ) = litNodeId
 getArgNodeId ctxt (StgVarArg v ) = mkIdNodeId ctxt v
 
--- | Creates a node which takes the result of id
--- if available, a default value otherwise.
-mkIndDefaultNode :: NodeId -> AM NodeId
-mkIndDefaultNode indirectee = do
-    node_id <- mkUniqueId
+-- -- | Creates a node which takes the result of id
+-- -- if available, a default value otherwise.
+-- mkIndDefaultNode :: NodeId -> AM NodeId
+-- mkIndDefaultNode indirectee = do
+--     node_id <- mkUniqueId
 
-    let updater = do
-            result <- lookupNodeResult indirectee
-            updateNode node_id result
-            return result
+--     let updater = do
+--             result <- lookupNodeResult indirectee
+--             updateNode node_id result
+--             return result
 
-    addNode FlowNode
-        { node_id = node_id, node_inputs = [indirectee]
-        , node_result = Bot, node_update = updater
-        , node_desc = text "ind" }
+--     addNode FlowNode
+--         { node_id = node_id, node_inputs = [indirectee]
+--         , node_result = Bot, node_update = updater
+--         , node_desc = text "ind" }
 
-    return node_id
+--     return node_id
 
 
 
@@ -637,7 +711,10 @@ data FlowNode
     { node_id :: !NodeId -- ^ Node id
     , node_inputs :: [NodeId]  -- ^ Input dependencies
     , node_result :: !(EnterLattice) -- ^ Cached result
-    , node_update :: (AM EnterLattice)
+    , node_update :: (AM EnterLattice) -- ^ Calculates a new value for the node
+                                       -- AND updates the environment with it.
+    -- , node_updated :: Int -- ^ Latest iteration in which the node was updated.
+    --                       -- ^ Zero implies it never was
     , node_desc :: !SDoc -- ^ Debugging purposes
     -- ^ Calculate result, update node in environment.
     }
@@ -650,15 +727,25 @@ instance Outputable FlowNode where
       where
         pprId node =
             case node_id node of
-                Left uq -> text "u_" <> ppr uq
-                Right v -> text "v_" <> ppr v
+                UniqId uq -> text "u_" <> ppr uq
+                BoundId v -> text "v_" <> ppr v
+                ConstId i -> text "c_" <> ppr i
 
 data SynContext
     = CLetRec [Id]
-    | CClosure [(Id,NodeId)] -- Args of the closure
+    | CClosure [(Id,NodeId)] -- Args of the closure mapped to nodes
     | CTopLevel
     | CNone -- ^ No Context given
     deriving Eq
+
+hasLetRecId :: [SynContext] -> Id -> Bool
+hasLetRecId ctxt id =
+        findLetRec ctxt
+    where
+        findLetRec [] = False
+        findLetRec ((CLetRec ids):todo)
+            | id `elem` ids = True
+        findLetRec (_:todo) = findLetRec todo
 
 
 -- | Lub between all input node
@@ -667,12 +754,13 @@ mkLubNode inputs = do
     node_id <- mkUniqueId
 
     let updater = do
-            input_results <- mapM (\id -> node_result <$> getNode id) inputs
+            input_results <- mapM lookupNodeResult inputs
             let result = foldl1 lub input_results
             updateNode node_id result
             return result
 
-    addNode $ FlowNode { node_id = node_id, node_result = Bot, node_inputs = inputs
+    addNode $ FlowNode { node_id = node_id, node_result = bot
+                       , node_inputs = inputs
                        , node_update = updater, node_desc = text "lub" }
     return node_id
 
@@ -689,14 +777,15 @@ mkConLattice con outer fields
 {-# NOINLINE findTags #-}
 findTags :: UniqSupply -> [StgTopBinding] -> ([StgTopBinding], UniqFM FlowNode)
 findTags us binds =
-    let state = FlowState us emptyUFM emptyUFM
+    let state = FlowState 0 us emptyUFM emptyUFM mempty mempty
     -- Run the analysis, extract only info about id-bound nodes
         result = (flip runState) state $ do
             -- pprTraceM "FindTags" empty
             addConstantNodes
             nodesTopBinds binds
             nodes <- solveConstraints
-            pprTraceM "Result nodes" $ vcat (map ppr nodes)
+            -- mapM_ (pprTraceM "res:" . ppr) nodes
+            -- pprTraceM "Result nodes" $ vcat (map ppr nodes)
             return $ binds
     in second fs_idNodeMap result
 
@@ -704,8 +793,8 @@ findTags us binds =
 addConstantNodes :: AM ()
 addConstantNodes = do
     addNode $ mkConstNode taggedBotNodeId (flatLattice NeverEnter)
-    addNode $ mkConstNode litNodeId (flatLattice NeverEnter)
-    addNode $ mkConstNode botNodeId Bot
+    addNode litNode
+    markDone $ mkConstNode botNodeId Bot
     addNode $ mkConstNode topNodeId Top
 
 mkConstNode :: NodeId -> EnterLattice -> FlowNode
@@ -714,11 +803,13 @@ mkConstNode id val = FlowNode id [] val (return $ val) (text "const")
 -- We don't realy do anything with literals, but for a uniform approach we
 -- map them to (NeverEnter x Bot)
 taggedBotNodeId, litNodeId :: NodeId
-taggedBotNodeId = Left $ mkUnique 'c' 1
-litNodeId       = Left $ mkUnique 'c' 2
-botNodeId       = Left $ mkUnique 'c' 3 -- Always returns bot
-topNodeId       = Left $ mkUnique 'c' 4
+taggedBotNodeId = ConstId 1
+litNodeId       = ConstId 2
+botNodeId       = ConstId 3 -- Always returns bot
+topNodeId       = ConstId 4
 
+litNode :: FlowNode
+litNode = (mkConstNode litNodeId (flatLattice NeverEnter)) { node_desc = text "lit" }
 
 {-# NOINLINE nodesTopBinds #-}
 nodesTopBinds :: [StgTopBinding] -> AM [StgTopBinding]
@@ -728,14 +819,12 @@ nodesTop :: StgTopBinding -> AM StgTopBinding
 -- Always "tagged"
 nodesTop bind@(StgTopStringLit v _str) = do
     let node = mkConstNode (mkIdNodeId [CTopLevel] v) (flatLattice NeverEnter)
-    addNode node
+    markDone node
     return $ bind
 nodesTop      (StgTopLifted bind)  = do
     nodesBind [CTopLevel] bind
     return $ (StgTopLifted bind)
 
--- | Converts RhsCon into RhsClosure if it's required to uphold the tagging
--- invariant.
 nodesBind :: [SynContext] -> StgBinding -> AM ()
 nodesBind ctxt (StgNonRec v rhs) = do
     nodeBind ctxt v rhs
@@ -759,17 +848,18 @@ addImportedNode id = do
             | not (isGlobalId id)
             -> return ()
 
-            -- Functions are tagged with arity
+            -- Functions are tagged with arity and never entered as atoms
             | idFunRepArity id > 0
-            -> addNode $ mkConstNode node_id (flatLattice NeverEnter)
+            -> markDone $ mkConstNode node_id (flatLattice NeverEnter)
 
-            -- Known Nullarry constructor
+            -- Known Nullarry constructors are also never entered
             | Just con <- (isDataConWorkId_maybe id)
             , isNullaryRepDataCon con
-            -> addNode $ mkConstNode node_id (flatLattice NeverEnter)
+            -> markDone $ mkConstNode node_id (flatLattice NeverEnter)
 
+            -- May or may not be entered.
             | otherwise
-            -> addNode $ mkConstNode node_id (flatLattice MaybeEnter)
+            -> markDone $ mkConstNode node_id (flatLattice MaybeEnter)
 
 
   where
@@ -786,30 +876,31 @@ nodeRhs ctxt binding (StgRhsCon _ccs con args)  = do
     let node_id = mkIdNodeId ctxt binding
     let node = FlowNode { node_id = node_id
                         , node_inputs = node_inputs
-                        , node_result = Bot
+                        , node_result = bot
                         , node_update = node_update node_id
                         , node_desc   = text "rhsCon"
                         }
-    addNode node
+    if null args
+        then markDone node
+        else addNode node
   where
     node_inputs = map (getArgNodeId ctxt) args :: [NodeId]
     banged_inputs = getStrictConArgs con node_inputs
     node_update this_id = do
-        -- Get input nodes
-        -- Map their lattices to arguments
-        -- use mkConLattice to generate final lattice
-        -- mkConLattice con outer fields
         fieldResults <- zip node_inputs <$> mapM lookupNodeResult node_inputs
+        let strictResults = map snd $ getStrictConArgs con fieldResults
+        let strictFieldLub = foldl' lub bot $ map getOuter strictResults
+        -- foldl' lub bot strictResults
         -- pprTraceM "RhsCon" (ppr con <+> ppr this_id <+> ppr fieldResults)
-        -- lookupNodeResult is kinda expensive so instead here we go
         -- Rule 2
         let outerTag
-                | all
-                    (\(id,lat) -> hasOuterTag lat || not (elem id banged_inputs))
-                    fieldResults
-                = -- pprTrace "Rule2" (ppr this_id)
-                    NeverEnter
-                | otherwise = UndetEnterInfo
+                | null banged_inputs
+                = NeverEnter
+                -- If any of the inputs are undetermined so is the output,
+                -- if any of the inputs require entering or can't be reasoned
+                -- about well then the same is true about this con.
+                | otherwise
+                = strictFieldLub
 
         let result = mkConLattice con outerTag (map snd fieldResults)
         updateNode this_id result
@@ -819,14 +910,13 @@ nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
     let arg_nodes = zip args (repeat topNodeId) :: [(Id, NodeId)]
     let ctxt' = (CClosure arg_nodes):ctxt
     -- TODO: Take into acount args somehow
-    mapM addImportedNode args
     body_id <- nodeExpr ctxt' body
 
     let node_id = mkIdNodeId ctxt binding
     let node_inputs = body_id : (map snd arg_nodes)
     let node = FlowNode { node_id = node_id
                         , node_inputs = node_inputs
-                        , node_result = Bot
+                        , node_result = bot
                         , node_update = node_update node_id body_id
                         , node_desc   = text "rhsClosure"
                         }
@@ -848,18 +938,23 @@ nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
         updateNode this_id result
         return result
 
+-- If the id is the argument of a closure we
+-- set it to top as we don't analyze closure arguments currently.
 mkIdNodeId :: [SynContext] -> Id -> NodeId
-mkIdNodeId ctxt id = Right id
-        -- findMapping ctxt
+mkIdNodeId ctxt id = -- BoundId id
+        findMapping ctxt
     where
-        findMapping [] = Right id
+        findMapping [] = BoundId id
         findMapping ((CClosure args):todo)
+            -- While traversing the AST when we enter a closure
+            -- with arguments we map the arguments to dummy nodes already.
+            -- We look these up here.
             | Just uid <- lookup id args = uid
         findMapping (_:todo) = findMapping todo
 
 
 mkUniqueId :: AM NodeId
-mkUniqueId = Left <$> getUniqueM
+mkUniqueId = UniqId <$> getUniqueM
 
 nodeExpr :: [SynContext] -> StgExpr -> AM NodeId
 nodeExpr ctxt (e@StgCase {})          = nodeCase ctxt e
@@ -894,7 +989,7 @@ nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
     mkCaseBndrNode scrutNodeId bndr = do
         let node_inputs = [scrutNodeId]
         addNode $ FlowNode  { node_id = bndrId, node_inputs = [scrutNodeId]
-                            , node_result = Bot, node_update = updater
+                            , node_result = bot, node_update = updater
                             , node_desc = text "caseBndr" }
       where
         bndrId = mkIdNodeId ctxt bndr
@@ -913,6 +1008,8 @@ nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
         return result
 nodeCase _ _ = panic "Impossible: nodeCase"
 
+-- TODO: Shadowing is possible here for the alt bndrs
+nodeAlt :: [SynContext] -> NodeId -> StgAlt -> AM NodeId
 nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
   | otherwise = do
     zipWithM mkAltBndrNode [0..] bndrs
@@ -931,7 +1028,10 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
           | isUnliftedType bndrTy
           , not (isUnboxedTupleType bndrTy)
           , not (isUnboxedSumType bndrTy)
-          = return litNodeId
+          = do
+                let node_id = mkIdNodeId ctxt bndr
+                addNode litNode { node_id = node_id }
+                return node_id
           | otherwise = do
                 let node_id = mkIdNodeId ctxt bndr
                 let updater = do
@@ -946,7 +1046,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
                         return res
                 addNode FlowNode
                     { node_id = node_id
-                    , node_result = Bot
+                    , node_result = bot
                     , node_inputs = [scrutNodeId]
                     , node_update = updater
                     , node_desc = text "altBndr" <-> ppr altCon <-> ppr strictBnds }
@@ -957,6 +1057,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
 (<->) :: SDoc -> SDoc -> SDoc
 (<->) a b = a <> char '_' <> b
 
+nodeLet :: [SynContext] -> StgExpr -> State FlowState NodeId
 nodeLet ctxt (StgLet _ bind expr) = do
     nodesBind ctxt bind
     nodeExpr ctxt expr
@@ -970,18 +1071,27 @@ nodeConApp ctxt (StgConApp con args tys) = do
     mapM_ addImportedNode [v | StgVarArg v <- args]
     node_id <- mkUniqueId
     let inputs = map (getArgNodeId ctxt) args :: [NodeId]
+    -- let recInputs = map (getArgNodeId ctxt . StgVarArg) .
+    --                 filter (ctxt `hasLetRecId`) $
+    --                 [v | StgVarArg v <- args]
 
     let updater = do
-            fields <- mapM lookupNodeResult inputs :: AM [EnterLattice]
+            fields <- mapM getField inputs :: AM [EnterLattice]
             -- Todo: When an *expression* returns a value the outer tag
             --       is not really defined.
-            let result = mkConLattice con bot fields
+            let result = mkConLattice con top fields
             -- pprTraceM "Update conApp" $ ppr (con, args, fields, result)
             updateNode node_id result
             return result
+                where
+                    getField input_id
+                        -- | elem input_id recInputs
+                        -- , pprTrace "recCon" (ppr input_id) True
+                        -- = setFieldsToTop <$> lookupNodeResult input_id
+                        | otherwise = lookupNodeResult input_id
 
     addNode FlowNode
-        { node_id = node_id, node_result = Bot
+        { node_id = node_id, node_result = bot
         , node_inputs = inputs
         , node_update = updater
         , node_desc = text "conApp"
@@ -992,25 +1102,34 @@ nodeConApp ctxt (StgConApp con args tys) = do
 nodeStgApp ctxt (StgApp _ f args) = do
     -- pprTraceM "App" $ ppr f <+> ppr args
     node_id <- mkUniqueId
+    let function_id = mkIdNodeId ctxt f
 
     let updater = do
             -- Try to peek into the function
-            func_lat <-
+            result <-
                 case () of
-                    _
+                    _   -- Rule AppAbsent
                         | (idUnique f == absentErrorIdKey)
-                        -> return $ flatLattice NeverEnter -- Rule AppAbsent
+                        -> return $ flatLattice NeverEnter
+
                         -- Rule AppRec
-                        | isRecursiveCall ctxt -> lookupNodeResult (mkIdNodeId ctxt f)
-                        | otherwise -> lookupNodeResult (mkIdNodeId ctxt f)
+                        | isRecursiveCall ctxt -> lookupNodeResult function_id
+
+                        -- AppDefault
+                        | otherwise -> do
+                            lookupNodeResult function_id
             -- pprTraceM "AppFields" $ ppr (f, func_lat)
-            let result = setOuterInfo func_lat BotEnterInfo
+            -- let result = setOuterInfo func_lat BotEnterInfo
+            when (nestingLevelOver result 5) $ do
+                pprTraceM "Limiting nesting for " (ppr node_id)
+                node <- getNode node_id
+                addNode $ node { node_update = return result }
             updateNode node_id result
             return result
 
     addNode FlowNode
         { node_id = node_id, node_result = Bot
-        , node_inputs = [mkIdNodeId ctxt f]
+        , node_inputs = [function_id]
         , node_update = updater
         , node_desc = text "app"
         }
@@ -1040,7 +1159,10 @@ solveConstraints = do
         iterate 1
         idList <- map snd . nonDetUFMToList . fs_idNodeMap <$> get
         uqList <- map snd . nonDetUFMToList . fs_uqNodeMap <$> get
-        return $ idList ++ uqList
+        doneList <- map snd . M.toList . fs_doneNodes <$> get
+
+        pprTraceM "ListLengthsFinal" $ ppr (length idList, length uqList, length doneList)
+        return $ idList ++ uqList ++ doneList
   where
     iterate :: Int -> AM ()
     iterate n = do
@@ -1048,10 +1170,13 @@ solveConstraints = do
         idList <- map snd . nonDetUFMToList . fs_idNodeMap <$> get
         uqList <- map snd . nonDetUFMToList . fs_uqNodeMap <$> get
 
+        doneList <- map snd . M.toList . fs_doneNodes <$> get
+        pprTraceM "ListLengthsPass" $ ppr (length idList, length uqList, length doneList)
+
         progress <- liftM2 (||) (update n idList False) (update n uqList False)
         if (not progress)
             then return ()
-            else if (n > 30)
+            else if (n > 5)
                 then pprTraceM "Warning:" (text "Aborting at" <+> ppr n <+> text "iterations")
                 else iterate (n+1)
 
@@ -1063,8 +1188,11 @@ solveConstraints = do
         -- node_update also updates the environment
         result <- node_update node
         if (result == old_result)
+            -- Nothing to do this round
             then update n todo progress
             else do
+                done <- and <$> (mapM isMarkedDone (node_inputs node))
+                when done (markDone (node { node_result = result }))
                 -- pprTraceM "Updated:" (ppr node)
                 -- pprTraceM "Updated:" (text "old:" <> ppr old_result <+> ppr node)
                 -- pprTraceM "Updated:" (ppr (node_id node) <+> (node_desc node))

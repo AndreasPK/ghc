@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE GADTs, TupleSections #-}
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
+{-# OPTIONS_GHC -fprof-auto #-}
 
 {-|
 
@@ -295,9 +296,10 @@ tagTop binds = do
             foldUFM maybeTagNode env
             where
                 maybeTagNode node env
-                    | Right id <- node_id node
+                    | BoundId id <- node_id node
                     , hasOuterTag (node_result node)
-                    = pprTrace "Tagging:" (ppr node) $ tag env id
+                    = pprTrace "Tagging:" (ppr $ node_id node) $
+                      tag env id
                     | otherwise = env
 
 -- Is the top level binding evaluated, or can be treated as such.
@@ -482,7 +484,7 @@ tagRhs env (StgRhsCon ccs con args)
   = return $ (StgRhsCon ccs con args)
   -- Make sure everything we put into strict fields is also tagged.
   | otherwise
-  = -- pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
+  = pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
     -- pprTrace "SUntagged args:"
 --             (   ppr possiblyUntagged $$
 --                 text "allArgs" <+> ppr args $$
