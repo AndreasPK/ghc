@@ -11,17 +11,16 @@
 {-# OPTIONS_GHC -O -fprof-auto #-}
 
 -- (findTags, nodesTopBinds)
-module StgTraceTags.Analyze (findTags, FlowNode(..), NodeId(..), hasOuterTag) where
+module StgTraceTags.AbstAnalyze (findTags, FlowNode(..), NodeId(..), hasOuterTag) where
 
 #include "HsVersions.h"
 
 import GhcPrelude
 
-import BasicTypes
 import DataCon
 import Data.Bifunctor
 import Id
-import StgSyn hiding (AlwaysEnter)
+import StgSyn
 import StgUtil
 import Outputable
 -- import VarEnv
@@ -54,33 +53,17 @@ import qualified Data.List as L
 
 import Unique
 import UniqFM
-import qualified EnumSet as ES
-import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Util
-import MonadUtils (whenM)
 import Data.Ord (comparing)
 
 import State
 import Maybes
 import Data.Foldable
-import Control.Applicative hiding (empty)
+import Control.Applicative
 
 import StgSubst
-
-data RecursionKind
-    = SimpleRecursion
-    -- ^ Simple direction recursion of the (syntactic) form
-    --   let f x = ... if cond then e' else f x'
-
-    | OtherRecursion
-    -- ^ All other kinds
-    | NoRecursion
-    deriving Eq
-
-isSimpleRecursion SimpleRecursion   = True
-isSimpleRecursion _                 = False
 
 {- Note [Dealing with function arguments]
 
@@ -108,6 +91,9 @@ c) We can limit this to exploring the arguments which are likely to matter.
 
 -}
 
+
+data AppEnterMapping = AppEnterMapping
+
 class Lattice a where
     bot :: a
     glb :: a -> a -> a
@@ -130,21 +116,21 @@ class Lattice a where
 data EnterInfo
     = UndetEnterInfo    -- ^ Not yet determined, happens for rhsCon if we don't
                         --   know if the strict fields are already tagged.
-    | AlwaysEnter        -- ^ WILL need to be entered
+    | NeedsEnter        -- ^ WILL need to be entered
     | MaybeEnter        -- ^ Could be either
     | NeverEnter        -- ^ Does NOT need to be entered.
-    deriving (Eq,Ord,Show,Enum)
+    deriving (Eq,Show)
 
 instance Outputable EnterInfo where
     ppr UndetEnterInfo    = char '?'
-    ppr AlwaysEnter    = text "ent"
+    ppr NeedsEnter    = text "ent"
     ppr MaybeEnter  = char 'm'
     ppr NeverEnter      = char 't'
 
 {- |
               MaybeEnter
              /    |    \
-      AlwaysEnter  |   NeverEnter
+      NeedsEnter  |   NeverEnter
              \    |    /
             UndetEnterInfo
 
@@ -158,10 +144,10 @@ instance Lattice EnterInfo where
     lub UndetEnterInfo x = x
     lub x UndetEnterInfo = x
 
-    lub AlwaysEnter NeverEnter = MaybeEnter
-    lub NeverEnter AlwaysEnter  = MaybeEnter
+    lub NeedsEnter NeverEnter = MaybeEnter
+    lub NeverEnter NeedsEnter  = MaybeEnter
 
-    lub AlwaysEnter AlwaysEnter = AlwaysEnter
+    lub NeedsEnter NeedsEnter = NeedsEnter
     lub NeverEnter NeverEnter = NeverEnter
 
     lub MaybeEnter _ = MaybeEnter
@@ -197,13 +183,6 @@ data SumInfo
     | TopSumInfo -- ^ Result could be different constructors
     deriving (Eq)
 
-instance Ord SumInfo where
-    -- TODO: Define comparing for efficiency
-    NoSumInfo <= _ = True
-    _ <= TopSumInfo = True
-    SumInfo con1 lat1 <= SumInfo con2 lat2
-        = (dataConTag con1, lat1) <= (dataConTag con2, lat2)
-
 instance Outputable SumInfo where
     ppr NoSumInfo = text "_|_"
     ppr (SumInfo con fields) = char '<' <> ppr con <> char '>' <> ppr fields
@@ -231,11 +210,7 @@ instance Lattice SumInfo where
         = SumInfo con1 (lub lat1 lat2)
         | otherwise = TopSumInfo
 
-data ProdInfo
-    = BotProdInfo
-    | FieldProdInfo [EnterLattice]
-    | TopProdInfo
-    deriving (Eq, Ord)
+data ProdInfo = BotProdInfo | FieldProdInfo [EnterLattice] | TopProdInfo deriving Eq
 
 instance Lattice ProdInfo where
     bot = BotProdInfo
@@ -264,13 +239,16 @@ instance Outputable ProdInfo where
 
 Lattice of roughly this shape:
 
+              Top
+               |
            LatUnknown
            |        |
           / \       |
     LatProd LatSum  |
-          |    |    |
-           \   |   /
-           LatUndet
+         |   |      |
+       LatUndet    /
+               \  /
+                Bot
 
 LatUnknown represents things over which we can't know anything but their enter behaviour.
 LatUndet represents cases where we haven't been able to compute field information yet.
@@ -294,10 +272,11 @@ The information for f is determined by [f] = lub [e1] [f] [e3]
 -}
 
 data EnterLattice
+    = Bot -- Things we can't say anything about (yet)
+
     -- | At most we can say something about the tag of the value itself.
-    --   The fields are not yet known.
-    --   Semantically: EnterInfo x bot(fields)
-    = LatUnknown !EnterInfo
+    --   The fields are obscured (eg imported ids).
+    | LatUnknown !EnterInfo
 
     -- | We know something about the value itself, and we can find out more
     -- about it's return values as well.
@@ -314,18 +293,24 @@ data EnterLattice
     --   LatProd NeverEnter [LatProd NeverEnter []]
 
     | LatSum !EnterInfo !SumInfo
-    deriving (Eq, Ord)
+
+    | Top
+                deriving (Eq)
 
 -- | Get the (outer) EnterInfo value
 getOuter :: EnterLattice -> EnterInfo
+getOuter Bot = bot
 getOuter (LatUndet x) = x
 getOuter (LatUnknown x) = x
 getOuter (LatProd x _) = x
 getOuter (LatSum x  _) = x
+getOuter Top = top
 
 
 
 instance Outputable EnterLattice where
+    ppr Bot = text "_|_"
+    ppr Top = text "T"
     ppr (LatUnknown outer) = ppr outer
     ppr (LatUndet   outer) = ppr outer <+> text "undet"
     ppr (LatProd outer inner) =
@@ -334,10 +319,16 @@ instance Outputable EnterLattice where
         ppr outer <+> (ppr inner)
 
 instance Lattice EnterLattice where
-    bot = LatUndet UndetEnterInfo
-    top = LatUnknown MaybeEnter
+    bot = Bot
+    top = Top
 
     glb = panic "glb not implemented"
+
+
+    lub Top _ = Top
+    lub _ Top = Top
+    lub Bot y = y
+    lub x Bot = x
 
     -- Compare LatUnknown to remaining constructors
     lub (LatUnknown outer1) (LatProd outer2 _)
@@ -382,29 +373,30 @@ instance Lattice EnterLattice where
         LatUnknown (lub o1 o2)
         -- panic "Comparing sum with prod type"
 
--- Lattice when we only know the outer layer.
 flatLattice :: EnterInfo -> EnterLattice
 flatLattice x = LatUnknown x
-
-undetLattice :: EnterInfo -> EnterLattice
-undetLattice = LatUndet
 
 setOuterInfo :: EnterLattice -> EnterInfo -> EnterLattice
 setOuterInfo lat info =
     case lat of
+        Bot ->  LatUndet info
         LatUndet _ ->  LatUndet info
         LatUnknown _ -> LatUnknown info
         LatProd _ fields -> LatProd info fields
         LatSum  _ fields -> LatSum info fields
+        Top -> Top
 
 setFieldsToTop :: EnterLattice -> EnterLattice
+setFieldsToTop Bot = top
 setFieldsToTop (LatUndet x) = LatUnknown x
 setFieldsToTop (LatProd x _) = LatUnknown x
 setFieldsToTop (LatSum x _) = LatUnknown x
 setFieldsToTop (LatUnknown x) = LatUnknown x
+setFieldsToTop Top = Top
 
 -- Lookup field info, defaulting towards bot
 indexField :: EnterLattice -> Int -> EnterLattice
+indexField Bot _ = bot
 indexField (LatUndet _) _ = bot
 indexField (LatProd _ (FieldProdInfo fields)) n =
     case drop n fields of
@@ -419,7 +411,8 @@ indexField (LatSum _ sum) n
         [] -> bot
         (x:_xs) -> x
     | otherwise = bot
-indexField LatUnknown {} _ = bot
+indexField Top _ = top
+indexField LatUnknown {} _ = top
 
 hasOuterTag :: EnterLattice -> Bool
 hasOuterTag (LatUnknown NeverEnter) = True
@@ -520,7 +513,7 @@ nestingLevelOver _ _ = False
     -- applications are always entered when applied to arguments.
 
     rhs@[RhsClosure args body], null args
-        => info[rhs] = (AlwaysEnter, fieldsOf(info body))
+        => info[rhs] = (NeedsEnter, fieldsOf(info body))
 
     rhs@[RhsClosure args body], not (null args)
         => info[rhs] = (NeverEnter, fieldsOf(info body))
@@ -574,7 +567,7 @@ nestingLevelOver _ _ = False
         => fun_out[ [StgApp f []] ] = info[f]
 
     conApp@[StgConApp con args]
-        => info[conApp] = (AlwaysEnter, map info args)
+        => info[conApp] = (NeedsEnter, map info args)
 
     -- This constraint is currently disabled.
     conApp@[StgConApp con [arg1,arg2,argi,... argn], hasCtxt[letrec argi = ...]
@@ -659,7 +652,6 @@ data FlowState
     , fs_uqNodeMap :: !(UniqFM FlowNode) -- ^ Transient results
     , fs_constNodeMap :: !(IM.IntMap FlowNode) -- ^ Non-updating nodes
     , fs_doneNodes :: !(M.Map NodeId FlowNode) -- ^ We can be sure these will no longer change.
-    , fs_funcInfo :: !(UniqFM FunctionInfo)
     }
 
 -- getNodeIdMap :: FlowState -> NodeId -> UniqFM FlowNode
@@ -756,63 +748,10 @@ lookupNodeResult node_id = do
                     BoundId v -> lookupUFM  (fs_idNodeMap s) v
                     ConstId i -> IM.lookup  i (fs_constNodeMap s)
 
--- | Loke node_result <$> getNode but defaults to bot
--- for non-existing nodes
-lookupNodeResultOuter :: NodeId -> AM EnterLattice
-lookupNodeResultOuter node_id = do
-    s <- get
-    let result = (M.lookup node_id (fs_doneNodes s)) <|>
-                 (lookupNode s node_id)
-    case result of
-        Just r  -> return $ node_result r
-        Nothing -> pprPanic "No node created for " (ppr node_id)
-                   --return $ top -- We know we know nothing
-    where
-        lookupNode :: FlowState -> NodeId -> (Maybe FlowNode)
-        lookupNode s node_id =
-                case node_id of
-                    UniqId uq -> lookupUFM  (fs_uqNodeMap s) uq
-                    BoundId v -> lookupUFM  (fs_idNodeMap s) v
-                    ConstId i -> IM.lookup  i (fs_constNodeMap s)
+getArgNodeId :: [SynContext] -> StgArg -> NodeId
+getArgNodeId _    (StgLitArg _ ) = litNodeId
+getArgNodeId ctxt (StgVarArg v ) = mkIdNodeId ctxt v
 
--- | If we use a *function* as an unapplied argument we throw
--- away nested information and make do with NeverEnter Top
-getConArgNodeId :: [SynContext] -> StgArg -> NodeId
-getConArgNodeId _    (StgLitArg _ ) = litNodeId
-getConArgNodeId ctxt (StgVarArg v )
-    | pprTrace "getArgNodeId"
-        (   ppr v <+>
-            text "arity" <+>
-            ppr (idArity v) <+>
-            text "type" <+>
-            ppr (idType v)
-        )
-        False
-    = undefined
-    | isFunTy (unwrapType $ idType v)
-    = neverNodeId
-    | otherwise
-    = mkIdNodeId ctxt v
-
-data FunctionInfo
-    = FunctionInfo
-    { fun_id :: Id
-    , fun_argSets :: [S.Set EnterLattice]
-    -- ^ Variations we calculate the result for.
-    -- Useful because it allows looking up individual argument entries.
-    , fun_nodeMap :: M.Map [EnterLattice] NodeId
-    , fun_instNode :: [EnterLattice] -> AM NodeId
-    -- ^ Given arguments to the function return the
-    -- accompaning node, or create it.
-    , fun_argCount :: !Int
-    -- ^ Arguments required to instantiate the RHS node
-    }
-
-getFunctionInfo :: Id -> AM (Maybe FunctionInfo)
-getFunctionInfo id = do
-     s <- get
-     let funcInfos = fs_funcInfo s
-     return $ lookupUFM funcInfos id
 
 data FlowNode
     = FlowNode
@@ -842,36 +781,23 @@ instance Outputable FlowNode where
                 ConstId i -> text "c_" <> ppr i
 
 data SynContext
-    = CLetRec [Id] -- These id's are in the same recursive group.
+    = CLetRec [Id]
     | CClosureBody
-        { cid_map :: [(Id,NodeId)] -- ^ Args of the closure mapped to nodes in the body
+        { carg_map :: [(Id,NodeId)] -- ^ Args of the closure mapped to nodes in the body
         }
-    -- | Around rhs of case alternative, with alternative binders mapped to nodes.
-    | CAlt { cid_map :: [(Id,NodeId)] }
     | CTopLevel
     | CNone -- ^ No Context given
     deriving Eq
 
-instance Outputable SynContext where
-    ppr CNone = text "CNone"
-    ppr (CTopLevel) = text "CTop"
-    ppr (CAlt map) = text "CAlt" <> ppr map
-    ppr (CClosureBody map) = text "CClosure" <> ppr map
-    ppr (CLetRec ids) = text "CLetRec" <> ppr ids
+hasLetRecId :: [SynContext] -> Id -> Bool
+hasLetRecId ctxt id =
+        findLetRec ctxt
+    where
+        findLetRec [] = False
+        findLetRec ((CLetRec ids):todo)
+            | id `elem` ids = True
+        findLetRec (_:todo) = findLetRec todo
 
-
-idMappedInCtxt :: Id -> [SynContext] -> Maybe NodeId
-idMappedInCtxt id ctxt
-    = go ctxt
-  where
-    go ((CClosureBody argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    go ((CAlt argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    go (_:todo) = go todo
-    go [] = Nothing
 
 -- | Lub between all input node
 mkLubNode :: [NodeId] -> AM NodeId
@@ -902,10 +828,9 @@ mkConLattice con outer fields
 {-# NOINLINE findTags #-}
 findTags :: Module -> UniqSupply -> [StgTopBinding] -> ([StgTopBinding], [FlowNode])
 findTags this_mod us binds =
-    pprTrace "findTags" (ppr this_mod) $
-    let state = FlowState this_mod 0 us emptyUFM emptyUFM mempty mempty mempty
+    let state = FlowState this_mod 0 us emptyUFM emptyUFM mempty mempty
     -- Run the analysis, extract only info about id-bound nodes
-        (!binds', !s) = (flip runState) state $ do
+        (binds', s) = (flip runState) state $ do
             -- pprTraceM "FindTags" empty
             addConstantNodes
             nodesTopBinds binds
@@ -913,8 +838,8 @@ findTags this_mod us binds =
             -- mapM_ (pprTraceM "res:" . ppr) nodes
             -- pprTraceM "Result nodes" $ vcat (map ppr nodes)
             return $ binds
-        !idNodes = (eltsUFM $ fs_idNodeMap s)
-        !doneIdNodes = [n | (BoundId _, n) <- (M.toList $ fs_doneNodes s) ]
+        idNodes = (eltsUFM $ fs_idNodeMap s)
+        doneIdNodes = [n | (BoundId _, n) <- (M.toList $ fs_doneNodes s) ]
 
     in (binds', idNodes ++ doneIdNodes)
 
@@ -923,11 +848,8 @@ addConstantNodes :: AM ()
 addConstantNodes = do
     addNode $ mkConstNode taggedBotNodeId (flatLattice NeverEnter)
     addNode litNode
-    markDone $ mkConstNode botNodeId bot
-    addNode $ mkConstNode topNodeId top
-    addNode $ mkConstNode neverNodeId (flatLattice NeverEnter)
-    addNode $ mkConstNode alwaysNodeId (flatLattice AlwaysEnter)
-
+    markDone $ mkConstNode botNodeId Bot
+    addNode $ mkConstNode topNodeId Top
 
 mkConstNode :: NodeId -> EnterLattice -> FlowNode
 mkConstNode id val = FlowNode id [] val (return $ val) (text "const")
@@ -938,10 +860,7 @@ taggedBotNodeId, litNodeId :: NodeId
 taggedBotNodeId = ConstId 1
 litNodeId       = ConstId 2
 botNodeId       = ConstId 3 -- Always returns bot
-topNodeId       = ConstId 4 -- No information possible (MaybeEnter)
-neverNodeId     = ConstId 5 -- No information possible (MaybeEnter)
-alwaysNodeId    = ConstId 6 -- No information possible (MaybeEnter)
-
+topNodeId       = ConstId 4 -- No information possible
 
 litNode :: FlowNode
 litNode = (mkConstNode litNodeId (flatLattice NeverEnter)) { node_desc = text "lit" }
@@ -953,29 +872,28 @@ nodesTopBinds binds = mapM (nodesTop) binds
 nodesTop :: StgTopBinding -> AM StgTopBinding
 -- Always "tagged"
 nodesTop bind@(StgTopStringLit v _str) = do
-    pprTraceM "TopString" (ppr v)
     let node = mkConstNode (mkIdNodeId [CTopLevel] v)
                            (flatLattice NeverEnter)
     markDone $ node { node_desc = text "c_str" }
     return $ bind
 nodesTop      (StgTopLifted bind)  = do
-    nodesBind [CTopLevel] TopLevel bind
+    nodesBind [CTopLevel] bind
     return $ (StgTopLifted bind)
 
-nodesBind :: [SynContext] -> TopLevelFlag -> StgBinding -> AM ()
-nodesBind ctxt top (StgNonRec v rhs) = do
-    void $ nodeBind ctxt top v rhs
-nodesBind ctxt top (StgRec binds) = do
+nodesBind :: [SynContext] -> StgBinding -> AM ()
+nodesBind ctxt (StgNonRec v rhs) = do
+    nodeBind ctxt v rhs
+nodesBind ctxt (StgRec binds) = do
     let boundIds = map fst binds
     let ctxt' = (CLetRec boundIds) : ctxt
-    void $ mapM (uncurry (nodeBind ctxt' top )) binds
+    mapM_ (uncurry (nodeBind ctxt')) binds
 
-nodeBind :: [SynContext] -> TopLevelFlag -> Id -> StgRhs -> AM NodeId
-nodeBind ctxt top id rhs = do
-    nodeRhs ctxt top id rhs
+nodeBind :: [SynContext] -> Id -> StgRhs -> AM ()
+nodeBind ctxt id rhs = do
+    nodeRhs ctxt id rhs
 
 -- | This adds nodes with information we can figure out about imported ids.
---   Mimics somewhat what we do in StgCmmClosure.hs:mkLFImported
+--   Mimics what we do in StgCmmClosure.hs:mkLFImported
 addImportedNode :: Id -> AM ()
 addImportedNode id = do
     s <- get
@@ -1003,32 +921,21 @@ addImportedNode id = do
             -> markDone $ (mkConstNode node_id (flatLattice MaybeEnter))
                             { node_desc = text "ext_unknown" }
 
+
   where
     node_id = (mkIdNodeId [CNone] id)
 
-importedFuncNode :: Module -> Id -> Maybe NodeId
-importedFuncNode this_mod id
-    -- Not an imported function
-    | nameIsLocalOrFrom this_mod (idName id)
-    = Nothing
-    | Just con <- (isDataConWorkId_maybe id)
-    , isNullaryRepDataCon con
-    = Just $ neverNodeId
-    | otherwise
-    = Just $ alwaysNodeId
 
 
 
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
-nodeRhs :: [SynContext] -> TopLevelFlag -> Id -> StgRhs -> AM NodeId
-nodeRhs ctxt _ binding (StgRhsCon _ccs con args)
-  | pprTrace "nodeRhsCon" (ppr binding) False = undefined
+nodeRhs :: [SynContext] -> Id -> StgRhs -> AM ()
+nodeRhs ctxt binding (StgRhsCon _ccs con args)
   | null args = do
         let node_id = mkIdNodeId ctxt binding
         let node = mkConstNode node_id (flatLattice NeverEnter)
         markDone $ node { node_desc = text "rhsCon" }
-        return node_id
   | otherwise = do
         mapM addImportedNode [v | StgVarArg v <- args]
         let node_id = mkIdNodeId ctxt binding
@@ -1038,13 +945,14 @@ nodeRhs ctxt _ binding (StgRhsCon _ccs con args)
                             , node_update = node_update node_id
                             , node_desc   = text "rhsCon"
                             }
-        addNode node
-        return node_id
+        if null args
+            then markDone node
+            else addNode node
   where
-    node_inputs = map (getConArgNodeId ctxt) args :: [NodeId]
+    node_inputs = map (getArgNodeId ctxt) args :: [NodeId]
     banged_inputs = getStrictConArgs con node_inputs
     node_update this_id = do
-        fieldResults <- zip node_inputs <$> mapM (lookupNodeResult) node_inputs
+        fieldResults <- zip node_inputs <$> mapM lookupNodeResult node_inputs
         let strictResults = map snd $ getStrictConArgs con fieldResults
         let strictFieldLub = foldl' lub NeverEnter $ map getOuter strictResults
         -- foldl' lub bot strictResults
@@ -1063,141 +971,31 @@ nodeRhs ctxt _ binding (StgRhsCon _ccs con args)
         updateNode this_id result
         return $ result
 
+nodeRhs ctxt binding (StgRhsClosure _ext _ccs _flag args body) = do
+    let arg_nodes = zip args (repeat topNodeId) :: [(Id, NodeId)]
+    let ctxt' = (CClosureBody arg_nodes):ctxt
+    -- TODO: Take into acount args somehow
+    body_id <- nodeExpr ctxt' body
 
-{- Functions are a pain.
+    let node_id = mkIdNodeId ctxt binding
+    let node_inputs = body_id : (map snd arg_nodes)
+    let node = FlowNode { node_id = node_id
+                        , node_inputs = node_inputs
+                        , node_result = bot
+                        , node_update = node_update node_id body_id
+                        , node_desc   = text "rhsClosure"
+                        }
+    addNode node
 
-We do NOT create their nodes here, instead we create a generator function
-which creates needed nodes on the fly.
-
-WHY we do this is that it allows us to instantiate closure nodes with
-actual information of their arguments. If we have for example:
-
-let fst x = case x of (a,_) -> a
-in
-    let foo = (C1 <constArgs> ,C2)
-    let bar = fst foo
-    in ... e ...
-
-    we instantiate the function fst with it's arguments
-    and as a consequence know the tag info of bar which gives
-    us better information about e as well.
-
--}
-nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
-    | pprTrace "nodeRhs" (ppr binding <+> text "args:" <> ppr args) False
-    = undefined
-    -- Nullary thunks
-    | null args
-    = do
-        let ctxt' = (CClosureBody []):ctxt
-        body_id <- nodeExpr ctxt' body
-        let node_id = mkIdNodeId ctxt binding
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [body_id]
-                            , node_result = LatUndet AlwaysEnter
-                            , node_update = node_update node_id body_id
-                            , node_desc   = text "rhsThunk"
-                            }
-        addNode node
-
-        let fun_info = FunctionInfo
-                { fun_id = binding
-                , fun_argSets = []
-                , fun_nodeMap = M.singleton [] node_id
-                , fun_instNode = const (return node_id)
-                , fun_argCount = arity
-                }
-        s <- get
-        put $ s { fs_funcInfo = addToUFM (fs_funcInfo s) binding fun_info }
-        return node_id
-
-    -- Functions
-    | otherwise = do
-    let fun_info = FunctionInfo
-            { fun_id = binding
-            , fun_argSets = replicate arity mempty
-            , fun_nodeMap = mempty
-            , fun_instNode = getFuncNode
-            , fun_argCount = arity
-            }
-
-    s <- get
-    put $ s { fs_funcInfo = addToUFM (fs_funcInfo s) binding fun_info }
-
-    when (isTopLevel topFlag || True) $ do
-        let node_id = mkIdNodeId ctxt binding
-        func_node <- getFuncNode $ map (const top) args
-
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [func_node]
-                            , node_result = bot
-                            , node_update = node_update node_id func_node
-                            , node_desc   = text "rhsDefault"
-                            }
-        addNode $ node
-
-
-
-    -- TODO: Add func_info
-    return $ panic "nodeRhs id can't be used directly"
+    return ()
 
   where
-    getFuncNode :: [EnterLattice] -> AM NodeId
-    getFuncNode arg_info
-        | (length arg_info /= arity) = return neverNodeId
-        | otherwise = do
-            s <- get
-            let funcInfos = fs_funcInfo s
-            let f_info = expectJust "nodeRhs:getNode" $ lookupUFM funcInfos binding
-            f_node <- maybe (createNode arg_info)
-                            return
-                            (M.lookup arg_info (fun_nodeMap f_info))
-            return f_node
-
-
-    arity = length args
-    -- | ALWAYS creates a new node for the closure and returns it id.
-    createNode :: [EnterLattice] -> AM NodeId
-    createNode arg_info = do
-        node_id <- mkUniqueId
-        arg_nodes <- mapM mkArgNode arg_info
-        let ctxt' = (CClosureBody (zip args arg_nodes):ctxt)
-
-        body_id <- nodeExpr ctxt' body
-
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [body_id]
-                            , node_result = bot
-                            , node_update = node_update node_id body_id
-                            , node_desc   = text "rhsClosure"
-                            }
-        addNode node
-
-        -- Add/update the FunctionInfo entry in the state.
-        s <- get
-        let funcInfos = fs_funcInfo s
-        let funcInfo = expectJust "createFuncNode1" $ lookupUFM funcInfos binding
-
-        let funcInfo' = funcInfo
-                { fun_argSets = zipWith (S.insert) arg_info (fun_argSets funcInfo)
-                , fun_nodeMap = M.insert arg_info node_id (fun_nodeMap funcInfo)
-                }
-        put $ s { fs_funcInfo = addToUFM funcInfos binding funcInfo' }
-        return node_id
-      where
-            mkArgNode :: EnterLattice -> AM NodeId
-            mkArgNode info = do
-                id <- mkUniqueId
-                addNode $ mkConstNode id info
-                return id
-
-
     node_update this_id body_id= do
 
         bodyInfo <- lookupNodeResult body_id
 
         let enterInfo
-                | null args = AlwaysEnter
+                | null args = NeedsEnter
                 | otherwise = NeverEnter -- Thunks with arity > 0
                                          -- are only entered when applied.
         let result = setOuterInfo bodyInfo enterInfo
@@ -1205,13 +1003,19 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
         return result
 
 -- If the id is the argument of a closure we
--- do a little dance in findMapping to find the appropriate node.
-
+-- set it to top as we don't analyze closure arguments currently.
 mkIdNodeId :: [SynContext] -> Id -> NodeId
-mkIdNodeId ctxt id
-    | Just node <- idMappedInCtxt id ctxt
-    = node
-    | otherwise = BoundId id
+mkIdNodeId ctxt id = -- BoundId id
+        findMapping ctxt
+    where
+        findMapping [] = BoundId id
+        findMapping ((CClosureBody args):todo)
+            -- While traversing the AST when we enter a closure
+            -- with arguments we map the arguments to dummy nodes already.
+            -- We look these up here.
+            | Just uid <- lookup id args = uid
+        findMapping (_:todo) = findMapping todo
+
 
 mkUniqueId :: AM NodeId
 mkUniqueId = UniqId <$> getUniqueM
@@ -1224,9 +1028,9 @@ nodeExpr ctxt (StgTick t e)           = nodeExpr ctxt e
 nodeExpr ctxt e@(StgConApp _con _args _tys) = nodeConApp ctxt e
 
 nodeExpr ctxt e@(StgApp _ f args)      = do
-    mapM_ addImportedNode [v | StgVarArg v <- args]
+    mapM addImportedNode [v | StgVarArg v <- args]
     addImportedNode f
-    nodeApp ctxt e
+    nodeStgApp ctxt e
 nodeExpr ctxt e@(StgLit _lit)            = nodeLit ctxt e
 nodeExpr ctxt e@(StgOpApp _op _args _ty) = nodeOpApp ctxt e
 nodeExpr ctxt  (StgLam {}) = error "Invariant violated: No lambdas in STG representation."
@@ -1272,9 +1076,9 @@ nodeCase _ _ = panic "Impossible: nodeCase"
 nodeAlt :: [SynContext] -> NodeId -> StgAlt -> AM NodeId
 nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
   | otherwise = do
-    bndrMappings <- zipWithM mkAltBndrNode [0..] bndrs
-    let ctxt' = (CAlt bndrMappings):ctxt
-    rhs_id <- nodeExpr ctxt' rhs
+    zipWithM mkAltBndrNode [0..] bndrs
+
+    rhs_id <- nodeExpr ctxt rhs
     return rhs_id
 
     where
@@ -1284,7 +1088,6 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
           = getStrictConFields con bndrs
           | otherwise = []
 
-        mkAltBndrNode :: Int -> Id -> AM (Id,NodeId)
         mkAltBndrNode n bndr
           | isUnliftedType bndrTy
           , not (isUnboxedTupleType bndrTy)
@@ -1292,7 +1095,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
           = do
                 let node_id = mkIdNodeId ctxt bndr
                 addNode litNode { node_id = node_id }
-                return (bndr,node_id)
+                return node_id
           | otherwise = do
                 let node_id = mkIdNodeId ctxt bndr
                 let updater = do
@@ -1311,7 +1114,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
                     , node_inputs = [scrutNodeId]
                     , node_update = updater
                     , node_desc = text "altBndr" <-> ppr altCon <-> ppr strictBnds }
-                return (bndr,node_id)
+                return node_id
             where
                 bndrTy = idType bndr
 
@@ -1320,19 +1123,19 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
 
 nodeLet :: [SynContext] -> StgExpr -> State FlowState NodeId
 nodeLet ctxt (StgLet _ bind expr) = do
-    nodesBind ctxt NotTopLevel bind
+    nodesBind ctxt bind
     nodeExpr ctxt expr
 
 nodeLetNoEscape ctxt (StgLetNoEscape _ bind expr) = do
-    nodesBind ctxt NotTopLevel bind
+    nodesBind ctxt bind
     nodeExpr ctxt expr
 
 nodeConApp ctxt (StgConApp con args tys) = do
     -- pprTraceM "ConApp" $ ppr con <+> ppr args
     mapM_ addImportedNode [v | StgVarArg v <- args]
     node_id <- mkUniqueId
-    let inputs = map (getConArgNodeId ctxt) args :: [NodeId]
-    -- let recInputs = map (getConArgNodeId ctxt . StgVarArg) .
+    let inputs = map (getArgNodeId ctxt) args :: [NodeId]
+    -- let recInputs = map (getArgNodeId ctxt . StgVarArg) .
     --                 filter (ctxt `hasLetRecId`) $
     --                 [v | StgVarArg v <- args]
 
@@ -1360,128 +1163,45 @@ nodeConApp ctxt (StgConApp con args tys) = do
 
     return node_id
 
--- | Todo: Higher order functions?
-getFunctionNode :: [SynContext] -> Id -> [EnterLattice] -> AM NodeId
-getFunctionNode ctxt id arg_lats
-    | Just node <- isArgFunction ctxt
-    = return node
-    | otherwise = do
-        -- Care: If a function
-        mfunc_info <- getFunctionInfo id
-        let func_info = fromMaybe (pprPanic "getFunctionNode1" (ppr id)) mfunc_info
-        -- let args_avail = fun_argSets func_info
-        -- let use_args = zipWith getArgInfo arg_lats args_avail :: [EnterInfo]
-        (fun_instNode func_info) arg_lats
-  where
-    arity = idFunRepArity id
+nodeStgApp ctxt (StgApp _ f args) = do
+    -- pprTraceM "App" $ ppr f <+> ppr args
+    node_id <- mkUniqueId
+    let function_id = mkIdNodeId ctxt f
 
-    -- getArgInfo :: EnterLattice -> ES.Set EnterLattice -> EnterLattice
-    -- getArgInfo lat set
-    --     | S.member enterInfo set
-    --     = enterInfo
-    --     -- We always create the node(s) for arguments being MaybeEnter.
-    --     | otherwise = top
-    --   where
-    --     enterInfo = (getOuter lat)
+    let updater = do
+            -- Try to peek into the function
+            result <-
+                case () of
+                    _   -- Rule AppAbsent
+                        | (idUnique f == absentErrorIdKey)
+                        -> return $ flatLattice NeverEnter
 
-    isArgFunction ((CClosureBody argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    isArgFunction ((CAlt argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    isArgFunction [] = Nothing
-    isArgFunction (_:todo) = isArgFunction todo
+                        -- Rule AppRec
+                        | isRecursiveCall ctxt -> lookupNodeResult function_id
 
-{-
-    * A recursive call won't produce any new information.
-    * Neither will imported functions
+                        -- AppDefault
+                        | otherwise -> do
+                            lookupNodeResult function_id
+            -- pprTraceM "AppFields" $ ppr (f, func_lat)
+            when (nestingLevelOver result 10) $ do
+                pprTraceM "Limiting nesting for " (ppr node_id)
+                node <- getNode node_id
+                addNode $ node { node_update = return result }
+            updateNode node_id result
+            return result
 
+    addNode FlowNode
+        { node_id = node_id, node_result = Bot
+        , node_inputs = [function_id]
+        , node_update = updater
+        , node_desc = text "app"
+        }
 
-    -- TODO: Mutual recursion
--}
-nodeApp :: [SynContext] -> StgExpr -> AM NodeId
-nodeApp ctxt (StgApp _ f args) = do
-        s <- get
-        let this_mod = fs_mod s
-        pprTraceM "App1" $ ppr f <+> ppr args
-
-        case () of
-          _
-            | Just nodeId <- importedFuncNode this_mod f
-            -> return nodeId
-            | otherwise -> do
-
-                node_id <- mkUniqueId
-                pprTraceM "App" $ ppr f <+> ppr args <+> ppr node_id
-                let arg_ids = map (getConArgNodeId ctxt) args
-                let updater = do
-                        -- Argument handling:
-                        arg_latts <- mapM lookupNodeResult arg_ids :: AM [EnterLattice]
-                        -- Try to peek into the function
-                        result <-
-                            case () of
-                                _   -- Rule AppAbsent
-                                    | (idUnique f == absentErrorIdKey)
-                                    -> return $ flatLattice NeverEnter
-
-                                    -- Rule AppRec
-                                    | SimpleRecursion <- recursionKind ctxt
-                                    -> do
-                                        func_node <- return $ mkIdNodeId ctxt f
-                                            --getFunctionNode ctxt f arg_latts
-                                        lookupNodeResult func_node
-
-                                    | OtherRecursion <- recursionKind ctxt
-                                    -- We don't even try to inspect mutual recursion currently.
-                                    -> pprTrace "mutRec" (Outputable.empty) $ return top
-
-                                    -- AppDefault
-                                    | isFunTy (unwrapType $ idType f) -> do
-                                        -- pprTraceM "updateStgApp:func" (
-                                        --     text "type" <+> ppr (unwrapType $ idType f) $$
-                                        --     text "func" <+> ppr f $$
-                                        --     text "args" <+> ppr args $$
-                                        --     text "context" <+> vcat (map ppr ctxt)
-                                        --     )
-                                        func_node <- getFunctionNode ctxt f arg_latts
-                                        lookupNodeResult func_node
-                                    | otherwise -> do
-                                        -- pprTraceM "updateStgApp:other" (
-                                        --     text "type" <+> ppr (unwrapType $ idType f) $$
-                                        --     text "func" <+> ppr f $$
-                                        --     text "args" <+> ppr args $$
-                                        --     text "context" <+> vcat (map ppr ctxt)
-                                        --     )
-                                        lookupNodeResult (mkIdNodeId ctxt f)
-                        -- pprTraceM "AppFields" $ ppr (f, func_lat)
-                        when (nestingLevelOver result 10) $ do
-                            pprTraceM "Limiting nesting for " (ppr node_id)
-                            node <- getNode node_id
-                            addNode $ node { node_update = return result }
-                        updateNode node_id result
-                        return result
-
-                inputs <- if ( isSimpleRecursion $ recursionKind ctxt )
-                    then do
-                        return (mkIdNodeId ctxt f  : arg_ids)
-                    else return arg_ids
-
-                addNode FlowNode
-                    { node_id = node_id, node_result = bot
-                    , node_inputs = inputs
-                    , node_update = updater
-                    , node_desc = text "app" <-> ppr f <> ppr args
-                    }
-
-                return node_id
+    return node_id
     where
-        arg_ids = map (getConArgNodeId ctxt) args
-        recursionKind [] = NoRecursion
-        recursionKind ((CLetRec ids) : todo) | f `elem` ids =
-            if length ids == 1 then SimpleRecursion else OtherRecursion
-        recursionKind (_ : todo) = recursionKind todo
-        arity = idFunRepArity f
+        isRecursiveCall [] = False
+        isRecursiveCall ((CLetRec ids) : todo) | f `elem` ids = True
+        isRecursiveCall (_ : todo) = isRecursiveCall todo
 
 
 -- Do we need rules here?
@@ -1505,7 +1225,6 @@ solveConstraints = do
         doneList <- map snd . M.toList . fs_doneNodes <$> get
 
         pprTraceM "ListLengthsFinal" $ ppr (length idList, length uqList, length doneList)
-        pprTraceM "Result nodes" (vcat $ map ppr (idList ++ uqList ++ doneList))
         return $ idList ++ uqList ++ doneList
   where
     iterate :: Int -> AM ()

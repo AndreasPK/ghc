@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeFamilies, RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE GADTs, TupleSections #-}
-{-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts, ScopedTypeVariables, BangPatterns #-}
 {-# OPTIONS_GHC -fprof-auto #-}
 
 {-|
@@ -272,14 +272,15 @@ tagTop :: Module -> [StgTopBinding] -> UniqSM [StgTopBinding]
 -- tagTop binds = return binds
 
 tagTop this_mod binds = do
+    pprTraceM "tagTop" empty
     -- Experimental stuff:
     us <- getUniqueSupplyM
-    let (_binds, idResults) = findTags this_mod us binds
+    let (!_binds, !idResults) = findTags this_mod us binds
     -- let (_binds, idMap) = (undefined, mempty)
 
-    -- pprTraceM "map" $ ppr idMap
+    -- pprTraceM "map" $ ppr idResults
 
-    let env' = fromIdMap env idResults
+    let !env' = fromIdMap env idResults
     -- let env' = env
     -- Proven but too simplistic approach:
     rbinds <- (mapM (tagTopBind env') binds)
@@ -613,7 +614,7 @@ mkSeq id bndr expr =
 mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> UniqSM StgExpr
 mkSeqs untaggedIds con args tys = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: UniqSM [(InId, OutId)]
-    -- mapM_ (pprTraceM "Forcing strict args:" . ppr) argMap
+    mapM_ (pprTraceM "Forcing strict args:" . ppr) argMap
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
