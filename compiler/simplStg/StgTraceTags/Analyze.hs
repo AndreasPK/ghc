@@ -272,13 +272,13 @@ Lattice of roughly this shape:
            \   |   /
            LatUndet
 
-LatUnknown represents things over which we can't know anything but their enter behaviour.
+LatUnknown represents things over which we can't know anything except their enter behaviour.
 LatUndet represents cases where we haven't been able to compute field information yet.
 
 Prod/Sum tell us something about the values returned.
 
 LatUndet/Unknown allows us to differentiate between lack of
-information about returned values from "uncomputeable" field information.
+information about returned values and "uncomputeable" field information.
 
 
 
@@ -659,7 +659,6 @@ data FlowState
     , fs_uqNodeMap :: !(UniqFM FlowNode) -- ^ Transient results
     , fs_constNodeMap :: !(IM.IntMap FlowNode) -- ^ Non-updating nodes
     , fs_doneNodes :: !(M.Map NodeId FlowNode) -- ^ We can be sure these will no longer change.
-    , fs_funcInfo :: !(UniqFM FunctionInfo)
     }
 
 -- getNodeIdMap :: FlowState -> NodeId -> UniqFM FlowNode
@@ -775,44 +774,24 @@ lookupNodeResultOuter node_id = do
                     BoundId v -> lookupUFM  (fs_idNodeMap s) v
                     ConstId i -> IM.lookup  i (fs_constNodeMap s)
 
--- | If we use a *function* as an unapplied argument we throw
--- away nested information and make do with NeverEnter Top
+-- | If we use a *function* as an unapplied argument to a constructor we throw
+-- away nested information and make do with NeverEnter Top for now.
 getConArgNodeId :: [SynContext] -> StgArg -> NodeId
 getConArgNodeId _    (StgLitArg _ ) = litNodeId
 getConArgNodeId ctxt (StgVarArg v )
-    | pprTrace "getArgNodeId"
-        (   ppr v <+>
-            text "arity" <+>
-            ppr (idArity v) <+>
-            text "type" <+>
-            ppr (idType v)
-        )
-        False
-    = undefined
+    -- | pprTrace "getArgNodeId"
+    --     (   ppr v <+>
+    --         text "arity" <+>
+    --         ppr (idArity v) <+>
+    --         text "type" <+>
+    --         ppr (idType v)
+    --     )
+    --     False
+    -- = undefined
     | isFunTy (unwrapType $ idType v)
     = neverNodeId
     | otherwise
     = mkIdNodeId ctxt v
-
-data FunctionInfo
-    = FunctionInfo
-    { fun_id :: Id
-    , fun_argSets :: [S.Set EnterLattice]
-    -- ^ Variations we calculate the result for.
-    -- Useful because it allows looking up individual argument entries.
-    , fun_nodeMap :: M.Map [EnterLattice] NodeId
-    , fun_instNode :: [EnterLattice] -> AM NodeId
-    -- ^ Given arguments to the function return the
-    -- accompaning node, or create it.
-    , fun_argCount :: !Int
-    -- ^ Arguments required to instantiate the RHS node
-    }
-
-getFunctionInfo :: Id -> AM (Maybe FunctionInfo)
-getFunctionInfo id = do
-     s <- get
-     let funcInfos = fs_funcInfo s
-     return $ lookupUFM funcInfos id
 
 data FlowNode
     = FlowNode
@@ -844,7 +823,7 @@ instance Outputable FlowNode where
 data SynContext
     = CLetRec [Id] -- These id's are in the same recursive group.
     | CClosureBody
-        { cid_map :: [(Id,NodeId)] -- ^ Args of the closure mapped to nodes in the body
+        { cid_map :: [(Id,NodeId)] -- ^ Args of a closure mapped to nodes in the body
         }
     -- | Around rhs of case alternative, with alternative binders mapped to nodes.
     | CAlt { cid_map :: [(Id,NodeId)] }
@@ -903,7 +882,7 @@ mkConLattice con outer fields
 findTags :: Module -> UniqSupply -> [StgTopBinding] -> ([StgTopBinding], [FlowNode])
 findTags this_mod us binds =
     pprTrace "findTags" (ppr this_mod) $
-    let state = FlowState this_mod 0 us emptyUFM emptyUFM mempty mempty mempty
+    let state = FlowState this_mod 0 us emptyUFM emptyUFM mempty mempty
     -- Run the analysis, extract only info about id-bound nodes
         (!binds', !s) = (flip runState) state $ do
             -- pprTraceM "FindTags" empty
@@ -974,7 +953,7 @@ nodeBind :: [SynContext] -> TopLevelFlag -> Id -> StgRhs -> AM NodeId
 nodeBind ctxt top id rhs = do
     nodeRhs ctxt top id rhs
 
--- | This adds nodes with information we can figure out about imported ids.
+-- | This adds nodes with information we can figure out about imported ids into the env.
 --   Mimics somewhat what we do in StgCmmClosure.hs:mkLFImported
 addImportedNode :: Id -> AM ()
 addImportedNode id = do
@@ -1094,104 +1073,33 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
         let node_id = mkIdNodeId ctxt binding
         let node = FlowNode { node_id = node_id
                             , node_inputs = [body_id]
+                            -- ^ We might infer things about nested fields once evaluated.
                             , node_result = LatUndet AlwaysEnter
                             , node_update = node_update node_id body_id
                             , node_desc   = text "rhsThunk"
                             }
         addNode node
-
-        let fun_info = FunctionInfo
-                { fun_id = binding
-                , fun_argSets = []
-                , fun_nodeMap = M.singleton [] node_id
-                , fun_instNode = const (return node_id)
-                , fun_argCount = arity
-                }
-        s <- get
-        put $ s { fs_funcInfo = addToUFM (fs_funcInfo s) binding fun_info }
         return node_id
 
     -- Functions
     | otherwise = do
-    let fun_info = FunctionInfo
-            { fun_id = binding
-            , fun_argSets = replicate arity mempty
-            , fun_nodeMap = mempty
-            , fun_instNode = getFuncNode
-            , fun_argCount = arity
-            }
-
-    s <- get
-    put $ s { fs_funcInfo = addToUFM (fs_funcInfo s) binding fun_info }
-
-    when (isTopLevel topFlag || True) $ do
         let node_id = mkIdNodeId ctxt binding
-        func_node <- getFuncNode $ map (const top) args
-
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [func_node]
-                            , node_result = bot
-                            , node_update = node_update node_id func_node
-                            , node_desc   = text "rhsDefault"
-                            }
-        addNode $ node
-
-
-
-    -- TODO: Add func_info
-    return $ panic "nodeRhs id can't be used directly"
-
-  where
-    getFuncNode :: [EnterLattice] -> AM NodeId
-    getFuncNode arg_info
-        | (length arg_info /= arity) = return neverNodeId
-        | otherwise = do
-            s <- get
-            let funcInfos = fs_funcInfo s
-            let f_info = expectJust "nodeRhs:getNode" $ lookupUFM funcInfos binding
-            f_node <- maybe (createNode arg_info)
-                            return
-                            (M.lookup arg_info (fun_nodeMap f_info))
-            return f_node
-
-
-    arity = length args
-    -- | ALWAYS creates a new node for the closure and returns it id.
-    createNode :: [EnterLattice] -> AM NodeId
-    createNode arg_info = do
-        node_id <- mkUniqueId
-        arg_nodes <- mapM mkArgNode arg_info
-        let ctxt' = (CClosureBody (zip args arg_nodes):ctxt)
-
+        let ctxt' = (CClosureBody (zip args (replicate arity topNodeId)):ctxt)
         body_id <- nodeExpr ctxt' body
 
         let node = FlowNode { node_id = node_id
                             , node_inputs = [body_id]
+                            -- ^ We might infer things about nested fields once evaluated.
                             , node_result = bot
                             , node_update = node_update node_id body_id
-                            , node_desc   = text "rhsClosure"
+                            , node_desc   = text "rhsFunc"
                             }
-        addNode node
 
-        -- Add/update the FunctionInfo entry in the state.
-        s <- get
-        let funcInfos = fs_funcInfo s
-        let funcInfo = expectJust "createFuncNode1" $ lookupUFM funcInfos binding
-
-        let funcInfo' = funcInfo
-                { fun_argSets = zipWith (S.insert) arg_info (fun_argSets funcInfo)
-                , fun_nodeMap = M.insert arg_info node_id (fun_nodeMap funcInfo)
-                }
-        put $ s { fs_funcInfo = addToUFM funcInfos binding funcInfo' }
+        addNode $ node
         return node_id
-      where
-            mkArgNode :: EnterLattice -> AM NodeId
-            mkArgNode info = do
-                id <- mkUniqueId
-                addNode $ mkConstNode id info
-                return id
 
-
+  where
+    arity = length args
     node_update this_id body_id= do
 
         bodyInfo <- lookupNodeResult body_id
@@ -1362,28 +1270,12 @@ nodeConApp ctxt (StgConApp con args tys) = do
 
 -- | Todo: Higher order functions?
 getFunctionNode :: [SynContext] -> Id -> [EnterLattice] -> AM NodeId
-getFunctionNode ctxt id arg_lats
+getFunctionNode ctxt id _arg_lats
     | Just node <- isArgFunction ctxt
     = return node
-    | otherwise = do
-        -- Care: If a function
-        mfunc_info <- getFunctionInfo id
-        let func_info = fromMaybe (pprPanic "getFunctionNode1" (ppr id)) mfunc_info
-        -- let args_avail = fun_argSets func_info
-        -- let use_args = zipWith getArgInfo arg_lats args_avail :: [EnterInfo]
-        (fun_instNode func_info) arg_lats
+    | otherwise
+    = return (mkIdNodeId ctxt id)
   where
-    arity = idFunRepArity id
-
-    -- getArgInfo :: EnterLattice -> ES.Set EnterLattice -> EnterLattice
-    -- getArgInfo lat set
-    --     | S.member enterInfo set
-    --     = enterInfo
-    --     -- We always create the node(s) for arguments being MaybeEnter.
-    --     | otherwise = top
-    --   where
-    --     enterInfo = (getOuter lat)
-
     isArgFunction ((CClosureBody argMap):todo)
         | Just node <- lookup id argMap
         = Just node
@@ -1467,7 +1359,7 @@ nodeApp ctxt (StgApp _ f args) = do
                         return (mkIdNodeId ctxt f  : arg_ids)
                     else return arg_ids
 
-                addNode FlowNode
+                addNode $ FlowNode
                     { node_id = node_id, node_result = bot
                     , node_inputs = inputs
                     , node_update = updater
