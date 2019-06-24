@@ -73,7 +73,7 @@ cgTopRhsClosure dflags rec id ccs upd_flag args body =
   let closure_label = mkLocalClosureLabel (idName id) (idCafInfo id)
       lf_info       = mkClosureLFInfo dflags id TopLevel [] upd_flag args
       cg_id_info    = litIdInfo dflags id lf_info (CmmLabel closure_label)
-  in  
+  in
       -- (if "lparen" `isSubsequenceOf` showSDocUnsafe (ppr id <> ppr args <> ppr body)
       --   then pprTrace "cgTopRhsClosure" (
       --     text "id" <+> ppr id $$
@@ -91,9 +91,9 @@ cgTopRhsClosure dflags rec id ccs upd_flag args body =
       --     text "args" <+> ppr args $$
       --     text "body" <+> ppr body
       --     )
-      
-  
-  
+
+
+
       (cg_id_info, gen_code dflags lf_info closure_label)
   where
   -- special case for a indirection (f = g).  We create an IND_STATIC
@@ -223,7 +223,7 @@ cgRhs :: Id
                                   -- (see above)
                )
 
-cgRhs id (StgRhsCon cc con args)
+cgRhs id (StgRhsCon _ext cc con args)
   = withNewTickyCounterCon (idName id) $
     buildDynCon id True cc con (assertNonVoidStgArgs args)
       -- con args are always non-void,

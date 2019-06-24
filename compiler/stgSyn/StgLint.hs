@@ -141,7 +141,7 @@ checkNoCurrentCCS
 checkNoCurrentCCS rhs@(StgRhsClosure _ ccs _ _ _)
   | isCurrentCCS ccs
   = addErrL (text "Top-level StgRhsClosure with CurrentCCS" $$ ppr rhs)
-checkNoCurrentCCS rhs@(StgRhsCon ccs _ _)
+checkNoCurrentCCS rhs@(StgRhsCon _ ccs _ _)
   | isCurrentCCS ccs
   = addErrL (text "Top-level StgRhsCon with CurrentCCS" $$ ppr rhs)
 checkNoCurrentCCS _
@@ -157,7 +157,7 @@ lintStgRhs (StgRhsClosure _ _ _ binders expr)
       addInScopeVars binders $
         lintStgExpr expr
 
-lintStgRhs rhs@(StgRhsCon _ con args) = do
+lintStgRhs rhs@(StgRhsCon _ _ con args) = do
     when (isUnboxedTupleCon con || isUnboxedSumCon con) $
       addErrL (text "StgRhsCon is an unboxed tuple or sum application" $$
                ppr rhs)

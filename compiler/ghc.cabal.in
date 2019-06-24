@@ -307,7 +307,7 @@ Library
         StgCmmUtils
         StgCmmExtCode
         StgTraceTags.Analyze
-        StgTraceTags.Rename
+        StgTraceTags.AddEvals
         StgMap
         SMRep
         CoreArity

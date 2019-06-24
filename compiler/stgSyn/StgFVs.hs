@@ -121,7 +121,7 @@ rhs env (StgRhsClosure _ ccs uf bndrs body)
     -- See Note [Tacking local binders]
     (body', body_fvs) = expr (addLocals bndrs env) body
     fvs = delDVarSetList body_fvs bndrs
-rhs env (StgRhsCon ccs dc as) = (StgRhsCon ccs dc as, args env as)
+rhs env (StgRhsCon ext ccs dc as) = (StgRhsCon ext ccs dc as, args env as)
 
 alt :: Env -> StgAlt -> (CgStgAlt, DIdSet)
 alt env (con, bndrs, e) = ((con, bndrs, e'), fvs)

@@ -101,9 +101,9 @@ liftRhs
   -- as lambda binders, discarding all free vars.
   -> LlStgRhs
   -> LiftM OutStgRhs
-liftRhs mb_former_fvs rhs@(StgRhsCon ccs con args)
+liftRhs mb_former_fvs rhs@(StgRhsCon ext ccs con args)
   = ASSERT2(isNothing mb_former_fvs, text "Should never lift a constructor" $$ ppr rhs)
-    StgRhsCon ccs con <$> traverse liftArgs args
+    StgRhsCon ext ccs con <$> traverse liftArgs args
 liftRhs Nothing (StgRhsClosure _ ccs upd infos body) = do
   -- This RHS wasn't lifted.
   withSubstBndrs (map binderInfoBndr infos) $ \bndrs' ->

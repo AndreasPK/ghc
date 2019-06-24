@@ -37,6 +37,7 @@ import Cmm
 import CmmInfo
 import CoreSyn
 import DataCon
+import DynFlags
 import ForeignCall
 import Id
 import PrimOp
@@ -154,7 +155,7 @@ cgLetNoEscapeRhsBody
     -> FCode (CgIdInfo, FCode ())
 cgLetNoEscapeRhsBody local_cc bndr (StgRhsClosure _ cc _upd args body)
   = cgLetNoEscapeClosure bndr local_cc cc (nonVoidIds args) body
-cgLetNoEscapeRhsBody local_cc bndr (StgRhsCon cc con args)
+cgLetNoEscapeRhsBody local_cc bndr (StgRhsCon _ext cc con args)
   = cgLetNoEscapeClosure bndr local_cc cc []
       (StgConApp con args (pprPanic "cgLetNoEscapeRhsBody" $
                            text "StgRhsCon doesn't have type args"))
@@ -875,6 +876,7 @@ cgIdApp strict fun_id args = do
     fun_info       <- getCgIdInfo fun_id
     self_loop_info <- getSelfLoop
     let fun_arg     = StgVarArg fun_id
+        profiling   = WayProf `elem` ways dflags
         fun_name    = idName    fun_id
         fun         = idInfoToAmode fun_info :: CmmExpr
         lf_info     = cg_lf         fun_info
@@ -894,7 +896,10 @@ cgIdApp strict fun_id args = do
           -- | isWHNF && isVoidTy (idType fun_id) ->
           --   pprTrace "WHNFv:" (ppr fun_id) $
           --   emitReturn []
-          | isWHNF && not (isVoidTy (idType fun_id)) -> do
+          | isWHNF && not (isVoidTy (idType fun_id))
+          , not profiling
+          , False
+          -> do
             -- Check if it's really taged
             -- when debugIsOn
             (emitTagTrap fun_id fun)

@@ -284,8 +284,8 @@ stgCseTopLvlRhs :: InScopeSet -> InStgRhs -> OutStgRhs
 stgCseTopLvlRhs in_scope (StgRhsClosure ext ccs upd args body)
     = let body' = stgCseExpr (initEnv in_scope) body
       in  StgRhsClosure ext ccs upd args body'
-stgCseTopLvlRhs _ (StgRhsCon ccs dataCon args)
-    = StgRhsCon ccs dataCon args
+stgCseTopLvlRhs _ (StgRhsCon ext ccs dataCon args)
+    = StgRhsCon ext ccs dataCon args
 
 ------------------------------
 -- The actual AST traversal --
@@ -389,14 +389,14 @@ stgCsePairs env0 ((b,e):pairs)
 -- The RHS of a binding.
 -- If it is a constructor application, either short-cut it or extend the environment
 stgCseRhs :: CseEnv -> OutId -> InStgRhs -> (Maybe (OutId, OutStgRhs), CseEnv)
-stgCseRhs env bndr (StgRhsCon ccs dataCon args)
+stgCseRhs env bndr (StgRhsCon ext ccs dataCon args)
     | Just other_bndr <- envLookup dataCon args' env
     = let env' = addSubst bndr other_bndr env
       in (Nothing, env')
     | otherwise
     = let env' = addDataCon bndr dataCon args' env
             -- see note [Case 1: CSEing allocated closures]
-          pair = (bndr, StgRhsCon ccs dataCon args')
+          pair = (bndr, StgRhsCon ext ccs dataCon args')
       in (Just pair, env')
   where args' = substArgs env args
 stgCseRhs env bndr (StgRhsClosure ext ccs upd args body)

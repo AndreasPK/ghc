@@ -341,6 +341,7 @@ isSystemName _                        = False
 
 -- | Create a name which is (for now at least) local to the current module and hence
 -- does not need a 'Module' to disambiguate it from other 'Name's
+{-# NOINLINE mkInternalName #-}
 mkInternalName :: Unique -> OccName -> SrcSpan -> Name
 mkInternalName uniq occ loc = Name { n_uniq = uniq
                                    , n_sort = Internal

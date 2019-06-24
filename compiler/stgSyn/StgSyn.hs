@@ -24,7 +24,7 @@ module StgSyn (
         GenStgTopBinding(..), GenStgBinding(..), GenStgExpr(..), GenStgRhs(..),
         GenStgAlt, AltType(..),
 
-        StgPass(..), BinderP, XRhsClosure, XLet, XLetNoEscape, XStgApp,
+        StgPass(..), BinderP, XRhsClosure, XRhsCon, XLet, XLetNoEscape, XStgApp,
         NoExtSilent, noExtSilent, AppEnters(..),
         OutputablePass,
 
@@ -35,6 +35,9 @@ module StgSyn (
 
         -- a set of synonyms for the code gen parameterisation
         CgStgTopBinding, CgStgBinding, CgStgExpr, CgStgRhs, CgStgAlt,
+
+        -- Same for taggedness
+        TgStgTopBinding, TgStgBinding, TgStgExpr, TgStgRhs, TgStgAlt,
 
         -- a set of synonyms for the lambda lifting parameterisation
         LlStgTopBinding, LlStgBinding, LlStgExpr, LlStgRhs, LlStgAlt,
@@ -437,6 +440,7 @@ The second flavour of right-hand-side is for constructors (simple but important)
 -}
 
   | StgRhsCon
+        (XRhsCon pass)
         CostCentreStack -- CCS to be attached (default is CurrentCCS).
                         -- Top-level (static) ones will end up with
                         -- DontCareCCS, because we don't count static
@@ -451,6 +455,7 @@ data StgPass
   = Vanilla
   | LiftLams
   | CodeGen
+  | Taggedness
 
 -- | Like 'HsExpression.NoExt', but with an 'Outputable' instance that returns
 -- 'empty'.
@@ -490,6 +495,10 @@ type instance XRhsClosure 'Vanilla = NoExtSilent
 -- | Code gen needs to track non-global free vars
 type instance XRhsClosure 'CodeGen = DIdSet
 
+type family XRhsCon (pass :: StgPass)
+type instance XRhsCon 'Vanilla = NoExtSilent
+type instance XRhsCon 'CodeGen = NoExtSilent
+
 type family XLet (pass :: StgPass)
 type instance XLet 'Vanilla = NoExtSilent
 type instance XLet 'CodeGen = NoExtSilent
@@ -508,7 +517,7 @@ stgRhsArity :: StgRhs -> Int
 stgRhsArity (StgRhsClosure _ _ _ bndrs _)
   = ASSERT( all isId bndrs ) length bndrs
   -- The arity never includes type parameters, but they should have gone by now
-stgRhsArity (StgRhsCon _ _ _) = 0
+stgRhsArity (StgRhsCon _ _ _ _) = 0
 
 -- Note [CAF consistency]
 -- ~~~~~~~~~~~~~~~~~~~~~~
@@ -535,7 +544,7 @@ topRhsHasCafRefs :: GenStgRhs pass -> Bool
 topRhsHasCafRefs (StgRhsClosure _ _ upd _ body)
   = -- See Note [CAF consistency]
     isUpdatable upd || exprHasCafRefs body
-topRhsHasCafRefs (StgRhsCon _ _ args)
+topRhsHasCafRefs (StgRhsCon _ _ _ args)
   = any stgArgHasCafRefs args
 
 exprHasCafRefs :: GenStgExpr pass -> Bool
@@ -571,7 +580,7 @@ bindHasCafRefs (StgRec binds)
 rhsHasCafRefs :: GenStgRhs pass -> Bool
 rhsHasCafRefs (StgRhsClosure _ _ _ _ body)
   = exprHasCafRefs body
-rhsHasCafRefs (StgRhsCon _ _ args)
+rhsHasCafRefs (StgRhsCon _ _ _ args)
   = any stgArgHasCafRefs args
 
 altHasCafRefs :: GenStgAlt pass -> Bool
@@ -649,6 +658,12 @@ type CgStgBinding    = GenStgBinding    'CodeGen
 type CgStgExpr       = GenStgExpr       'CodeGen
 type CgStgRhs        = GenStgRhs        'CodeGen
 type CgStgAlt        = GenStgAlt        'CodeGen
+
+type TgStgTopBinding = GenStgTopBinding 'Taggedness
+type TgStgBinding    = GenStgBinding    'Taggedness
+type TgStgExpr       = GenStgExpr       'Taggedness
+type TgStgRhs        = GenStgRhs        'Taggedness
+type TgStgAlt        = GenStgAlt        'Taggedness
 
 {- Many passes apply a substitution, and it's very handy to have type
    synonyms to remind us whether or not the substitution has been applied.
@@ -735,6 +750,7 @@ type OutputablePass pass =
   ( Outputable (XLet pass)
   , Outputable (XLetNoEscape pass)
   , Outputable (XRhsClosure pass)
+  , Outputable (XRhsCon pass)
   , OutputableBndr (BinderP pass)
   , Outputable (XStgApp pass)
   )
@@ -904,9 +920,9 @@ pprStgRhs (StgRhsClosure ext cc upd_flag args body)
                 char '\\' <> ppr upd_flag, brackets (interppSP args)])
          4 (ppr body)
 
-pprStgRhs (StgRhsCon cc con args)
-  = hcat [ ppr cc,
-           space, ppr con, text "! ", brackets (interppSP args)]
+pprStgRhs (StgRhsCon ext cc con args)
+  = hcat [ pprExt ext, ppr cc
+         , space, ppr con, text "! ", brackets (interppSP args)]
 
 pprExt :: Outputable ext => ext -> SDoc
 pprExt ext = sdocWithDynFlags $ \dflags

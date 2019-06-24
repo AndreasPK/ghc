@@ -142,6 +142,7 @@ getStgToDo dflags =
     , optional Opt_StgCSE StgCSE
     , optional Opt_StgLiftLams StgLiftLams
     , StgTagFields
+    -- , optional Opt_StgCSR StgTagFields
     , optional Opt_StgStats StgStats
     ] where
       optional opt = runWhen (gopt opt dflags)

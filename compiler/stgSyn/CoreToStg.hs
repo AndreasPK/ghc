@@ -648,7 +648,7 @@ mkTopStgRhs dflags this_mod ccs bndr rhs
   = -- CorePrep does this right, but just to make sure
     ASSERT2( not (isUnboxedTupleCon con || isUnboxedSumCon con)
            , ppr bndr $$ ppr con $$ ppr args)
-    ( StgRhsCon dontCareCCS con args, ccs )
+    ( StgRhsCon noExtSilent dontCareCCS con args, ccs )
 
   -- Otherwise it's a CAF, see Note [Cost-centre initialization plan].
   | gopt Opt_AutoSccsOnIndividualCafs dflags
@@ -699,7 +699,7 @@ mkStgRhs bndr rhs
                   [] rhs
 
   | StgConApp con args _ <- unticked_rhs
-  = StgRhsCon currentCCS con args
+  = StgRhsCon noExtSilent currentCCS con args
 
   | otherwise
   = StgRhsClosure noExtSilent

@@ -8,6 +8,8 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, BangPatterns #-}
 {-# OPTIONS_GHC -fprof-auto #-}
 
+-- {-# LANGUAGE Strict #-}
+
 {-|
 
     Note [CSR for Stg]
@@ -275,35 +277,36 @@ tagTop this_mod binds = do
     pprTraceM "tagTop" empty
     -- Experimental stuff:
     us <- getUniqueSupplyM
-    let (!_binds, !idResults) = findTags this_mod us binds
+    let (!binds', !idResults) = findTags this_mod us binds
     -- let (_binds, idMap) = (undefined, mempty)
 
-    -- pprTraceM "map" $ ppr idResults
+    -- -- pprTraceM "map" $ ppr idResults
 
-    let !env' = fromIdMap env idResults
-    -- let env' = env
-    -- Proven but too simplistic approach:
-    rbinds <- (mapM (tagTopBind env') binds)
+    -- let !env' = fromIdMap env idResults
+    -- -- let env' = env
+    -- -- Proven but too simplistic approach:
+    -- rbinds <- (mapM (tagTopBind env') binds)
 
-    return $ rbinds
+    -- return $ rbinds
+    return binds'
 
 
 
-    where
-        -- See Note [Top level and recursive binds]
-        -- env = topEnv binds
-        env = topEnv binds
+    -- where
+    --     -- See Note [Top level and recursive binds]
+    --     -- env = topEnv binds
+    --     env = topEnv binds
 
-        fromIdMap :: AnaEnv -> [FlowNode] -> AnaEnv
-        fromIdMap env =
-            foldl' maybeTagNode env
-            where
-                maybeTagNode env node
-                    | BoundId id <- node_id node
-                    , hasOuterTag (node_result node)
-                    = pprTrace "Tagging:" (ppr $ node_id node) $
-                      tag env id
-                    | otherwise = env
+    --     fromIdMap :: AnaEnv -> [FlowNode] -> AnaEnv
+    --     fromIdMap env =
+    --         foldl' maybeTagNode env
+    --         where
+    --             maybeTagNode env node
+    --                 | BoundId id <- node_id node
+    --                 , hasOuterTag (node_result node)
+    --                 = -- pprTrace "Tagging:" (ppr $ node_id node) $
+    --                   tag env id
+    --                 | otherwise = env
 
 -- Is the top level binding evaluated, or can be treated as such.
 topEnv :: [StgTopBinding] -> AnaEnv
@@ -331,7 +334,7 @@ rhsTagInfo env rhs = evaldRhs rhs
         = STagged
         -- Thunk - untagged
         | otherwise = SUntagged
-    evaldRhs (StgRhsCon _ccs con args)
+    evaldRhs (StgRhsCon _ext _ccs con args)
         -- If the constructor has no strict fields,
         -- or the args are already tagged then it we known
         -- it won't become a thunk and will be tagged.
@@ -407,7 +410,7 @@ taggedByBind env isFinal bnd
         | StgApp _ func _ <- body
         , idUnique func == absentErrorIdKey
         = STagged
-    evaldRhs (StgRhsCon _ccs con args)
+    evaldRhs (StgRhsCon _ext _ccs con args)
         -- Final let bound constructors always get a proper tag.
         | isFinal
         = -- pprTrace "taggedBind - FinalCon" (ppr con)
@@ -482,9 +485,9 @@ tagRecBinds env binds = do
 tagRhs :: AnaEnv -> StgRhs -> UniqSM StgRhs
 tagRhs env (StgRhsClosure _ext _ccs _flag _args body)
     = StgRhsClosure _ext _ccs _flag _args <$> tagExpr env body
-tagRhs env (StgRhsCon ccs con args)
+tagRhs env (StgRhsCon ext ccs con args)
   | null possiblyUntagged
-  = return $ (StgRhsCon ccs con args)
+  = return $ (StgRhsCon ext ccs con args)
   -- Make sure everything we put into strict fields is also tagged.
   | otherwise
   = pprTraceM "tagRhs: Creating Closure for" (ppr (con, args)) >>
@@ -494,10 +497,10 @@ tagRhs env (StgRhsCon ccs con args)
 --                 text "strictness" <+> ppr conReps $$
 --                 text "Constructor:" <+> ppr con
 --             )
-    mkTopConEval possiblyUntagged (StgRhsCon ccs con args)
+    mkTopConEval possiblyUntagged (StgRhsCon ext ccs con args)
 
   | otherwise
-  = return $ (StgRhsCon ccs con args)
+  = return $ (StgRhsCon ext ccs con args)
   where
     strictArgs = getStrictConArgs con args
     possiblyUntagged =  [ v | (StgVarArg v) <- strictArgs
@@ -614,7 +617,7 @@ mkSeq id bndr expr =
 mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> UniqSM StgExpr
 mkSeqs untaggedIds con args tys = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: UniqSM [(InId, OutId)]
-    mapM_ (pprTraceM "Forcing strict args:" . ppr) argMap
+    mapM_ (pprTraceM "tagRhs:Forcing strict args:" . ppr) argMap
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
@@ -627,7 +630,7 @@ mkSeqs untaggedIds con args tys = do
 
 mkTopConEval :: [Id] -> StgRhs -> UniqSM StgRhs
 mkTopConEval _          StgRhsClosure {} = panic "Impossible"
-mkTopConEval needsEval (StgRhsCon ccs con args)
+mkTopConEval needsEval (StgRhsCon _ext ccs con args)
   = do
     -- pprTraceM "mkTopConEval" ( empty
     --     -- $$ text "evalStrictnesses" <+> ppr (map idStrictness needsEval)
