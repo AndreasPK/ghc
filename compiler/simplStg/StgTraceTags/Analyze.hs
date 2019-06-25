@@ -1112,13 +1112,11 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
     -- Nullary thunks
     | null args
     = do
-        let ctxt' = (CClosureBody []):ctxt
         (body', body_id) <- nodeExpr ctxt' body
-        let node_id = mkIdNodeId ctxt binding
         let node = FlowNode { node_id = node_id
                             , node_inputs = [body_id]
                             -- ^ We might infer things about nested fields once evaluated.
-                            , node_result = LatUndet AlwaysEnter
+                            , node_result = LatUndet enterInfo
                             , node_update = node_update node_id body_id
                             , node_desc   = text "rhsThunk"
                             }
@@ -1127,8 +1125,6 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
 
     -- Functions
     | otherwise = do
-        let node_id = mkIdNodeId ctxt binding
-        let ctxt' = (CClosureBody (zip args (replicate arity topNodeId)):ctxt)
         (body', body_id) <- nodeExpr ctxt' body
 
         let node = FlowNode { node_id = node_id
@@ -1143,15 +1139,15 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
         return (StgRhsClosure _ext _ccs _flag args body', node_id)
 
   where
+    node_id = mkIdNodeId ctxt binding
+    ctxt' = (CClosureBody (zip args (replicate arity topNodeId)):ctxt)
     arity = length args
+    enterInfo
+        | null args && not (isAbsentExpr body) = AlwaysEnter
+        | otherwise = NeverEnter -- Thunks with arity > 0
+                                        -- are only entered when applied.
     node_update this_id body_id= do
-
         bodyInfo <- lookupNodeResult body_id
-
-        let enterInfo
-                | null args = AlwaysEnter
-                | otherwise = NeverEnter -- Thunks with arity > 0
-                                         -- are only entered when applied.
         let result = setOuterInfo bodyInfo enterInfo
         updateNode this_id result
         return result
@@ -1338,7 +1334,7 @@ getFunctionNode ctxt id _arg_lats
     -- TODO: Mutual recursion
 -}
 nodeApp :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
-nodeApp ctxt (StgApp _ f args) = do
+nodeApp ctxt expr@(StgApp _ f args) = do
         s <- get
         let this_mod = fs_mod s
         -- pprTraceM "App1" $ ppr f <+> ppr args
@@ -1359,7 +1355,7 @@ nodeApp ctxt (StgApp _ f args) = do
                         result <-
                             case () of
                                 _   -- Rule AppAbsent
-                                    | (idUnique f == absentErrorIdKey)
+                                    | isAbsentExpr expr
                                     -> return $ flatLattice NeverEnter
 
                                     -- Rule AppRec
@@ -1439,7 +1435,7 @@ solveConstraints = do
         pprTraceM "ListLengthsFinal" $ ppr (length idList, length uqList, length doneList)
         pprTraceM "Result nodes" empty
         let resultNodes = (idList ++ uqList ++ doneList)
-        mapM_ (pprTraceM "node:" . ppr) resultNodes
+        -- mapM_ (pprTraceM "node:" . ppr) resultNodes
         return $ resultNodes
   where
     iterate :: Int -> AM ()
@@ -1517,6 +1513,7 @@ rewriteRhs binding rhs@(StgRhsCon node_id ccs con args) = do
     if (not needsRewrite)
         then return (StgRhsCon noExtSilent ccs con args)
         else do
+            pprTraceM "Creating closure for " $ ppr binding
             let strictIndices = getStrictConArgs con [0..] :: [Int]
             let needsEval = filter (not . hasOuterTag . indexField tagInfo) strictIndices :: [Int]
             let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
@@ -1606,3 +1603,10 @@ mkLocalArgId :: Id -> AM Id
 mkLocalArgId id = do
     u <- getUniqueM
     return $ setIdUnique (localiseId id) u
+
+-- These are inserted by the WW transformation and we treat them semantically as tagged.
+-- This avoids us seqing them again.
+isAbsentExpr :: GenStgExpr p -> Bool
+isAbsentExpr (StgApp _ f _)
+  | idUnique f == absentErrorIdKey = True
+isAbsentExpr _ = False
