@@ -485,7 +485,7 @@ coreToStgApp _ f args ticks = do
         res_ty = exprType (mkApps (Var f) args)
         app = case idDetails f of
                 DataConWorkId dc
-                  | saturated    -> StgConApp dc args'
+                  | saturated    -> StgConApp noExtSilent dc args'
                                       (dropRuntimeRepArgs (fromMaybe [] (tyConAppArgs_maybe res_ty)))
 
                 -- Some primitive operator that might be implemented as a library call.
@@ -540,7 +540,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
         (aticks, arg'') = stripStgTicksTop tickishFloatable arg'
         stg_arg = case arg'' of
                        StgApp _ext v []   -> StgVarArg v
-                       StgConApp con [] _ -> StgVarArg (dataConWorkId con)
+                       StgConApp _ con [] _ -> StgVarArg (dataConWorkId con)
                        StgLit lit         -> StgLitArg lit
                        _                  -> pprPanic "coreToStgArgs" (ppr arg)
 
@@ -642,7 +642,7 @@ mkTopStgRhs dflags this_mod ccs bndr rhs
                     (toList bndrs) body
     , ccs )
 
-  | StgConApp con args _ <- unticked_rhs
+  | StgConApp _ con args _ <- unticked_rhs
   , -- Dynamic StgConApps are updatable
     not (isDllConApp dflags this_mod con args)
   = -- CorePrep does this right, but just to make sure
@@ -698,7 +698,7 @@ mkStgRhs bndr rhs
                   ReEntrant -- ignored for LNE
                   [] rhs
 
-  | StgConApp con args _ <- unticked_rhs
+  | StgConApp _ext con args _ <- unticked_rhs
   = StgRhsCon noExtSilent currentCCS con args
 
   | otherwise

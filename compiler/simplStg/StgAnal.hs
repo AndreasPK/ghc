@@ -514,7 +514,7 @@ tagExpr env (e@StgCase {})          = tagCase env e
 tagExpr env (e@StgLet {})           = tagLet env e
 tagExpr env (e@StgLetNoEscape {})   = tagLetNoEscape env e
 tagExpr env (StgTick t e)           = StgTick t <$> tagExpr env e
-tagExpr env e@(StgConApp _con _args _tys) = tagConApp env e
+tagExpr env e@(StgConApp {}) = tagConApp env e
 
 tagExpr _env e@(StgApp _ _f _args)      = return $ e
 tagExpr _env e@(StgLit _lit)            = return $ e
@@ -522,7 +522,7 @@ tagExpr _env e@(StgOpApp _op _args _ty) = return $ e
 tagExpr _env   (StgLam {}) = error "Invariant violated: No lambdas in finalized STG representation."
 
 tagConApp :: AnaEnv -> StgExpr -> UniqSM StgExpr
-tagConApp env e@(StgConApp con args tys)
+tagConApp env e@(StgConApp ext con args tys)
     | null possiblyUntagged = return e
     | otherwise = do
         mkSeqs possiblyUntagged con args tys
@@ -624,7 +624,7 @@ mkSeqs untaggedIds con args tys = do
                         lit -> lit)
                     args
 
-    let conBody = StgConApp con taggedArgs tys
+    let conBody = StgConApp noExtSilent con taggedArgs tys
     let body = foldr (\(v,bndr) expr -> mkSeq v bndr expr) conBody argMap
     return body
 

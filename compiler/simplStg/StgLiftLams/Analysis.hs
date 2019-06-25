@@ -115,6 +115,7 @@ type instance XRhsCon      'LiftLams = NoExtSilent
 type instance XLet         'LiftLams = Skeleton
 type instance XLetNoEscape 'LiftLams = Skeleton
 type instance XStgApp      'LiftLams = AppEnters
+type instance XStgConApp   'LiftLams = NoExtSilent
 
 freeVarsOfRhs :: (XRhsClosure pass ~ DIdSet) => GenStgRhs pass -> DIdSet
 freeVarsOfRhs (StgRhsCon _ _ _ args) = mkDVarSet [ id | StgVarArg id <- args ]
@@ -221,8 +222,8 @@ tagSkeletonTopBind bind = bind'
 tagSkeletonExpr :: CgStgExpr -> (Skeleton, IdSet, LlStgExpr)
 tagSkeletonExpr (StgLit lit)
   = (NilSk, emptyVarSet, StgLit lit)
-tagSkeletonExpr (StgConApp con args tys)
-  = (NilSk, mkArgOccs args, StgConApp con args tys)
+tagSkeletonExpr (StgConApp ext con args tys)
+  = (NilSk, mkArgOccs args, StgConApp ext con args tys)
 tagSkeletonExpr (StgOpApp op args ty)
   = (NilSk, mkArgOccs args, StgOpApp op args ty)
 tagSkeletonExpr (StgApp ext f args)

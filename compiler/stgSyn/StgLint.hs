@@ -172,7 +172,7 @@ lintStgExpr (StgApp _ fun args) = do
     lintStgVar fun
     mapM_ lintStgArg args
 
-lintStgExpr app@(StgConApp con args _arg_tys) = do
+lintStgExpr app@(StgConApp _ext con args _arg_tys) = do
     -- unboxed sums should vanish during unarise
     lf <- getLintFlags
     when (lf_unarised lf && isUnboxedSumCon con) $

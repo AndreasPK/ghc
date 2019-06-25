@@ -88,7 +88,7 @@ expr env = go
     go (StgApp ext occ as)
       = (StgApp ext occ as, unionDVarSet (args env as) (mkFreeVarSet env [occ]))
     go (StgLit lit) = (StgLit lit, emptyDVarSet)
-    go (StgConApp dc as tys) = (StgConApp dc as tys, args env as)
+    go (StgConApp ext dc as tys) = (StgConApp ext dc as tys, args env as)
     go (StgOpApp op as ty) = (StgOpApp op as ty, args env as)
     go StgLam{} = pprPanic "StgFVs: StgLam" empty
     go (StgCase scrut bndr ty alts) = (StgCase scrut' bndr ty alts', fvs)

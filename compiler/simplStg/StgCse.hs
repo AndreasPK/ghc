@@ -320,11 +320,11 @@ stgCseExpr env (StgCase scrut bndr ty alts)
 
 -- A constructor application.
 -- To be removed by a variable use when found in the CSE environment
-stgCseExpr env (StgConApp dataCon args tys)
+stgCseExpr env (StgConApp ext dataCon args tys)
     | Just bndr' <- envLookup dataCon args' env
-    = StgApp MayEnter bndr' []
+    = StgApp noEnterInfo bndr' []
     | otherwise
-    = StgConApp dataCon args' tys
+    = StgConApp ext dataCon args' tys
   where args' = substArgs env args
 
 -- Let bindings

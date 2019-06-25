@@ -78,7 +78,7 @@ cgExpr (StgOpApp (StgPrimOp DataToTagOp) [StgVarArg a] _res_ty) = do
   emitReturn [getConstrTag dflags (cmmUntag dflags (CmmReg (CmmLocal tmp)))]
 
 cgExpr (StgOpApp op args ty) = cgOpApp op args ty
-cgExpr (StgConApp con args _)= cgConApp con args
+cgExpr (StgConApp _ext con args _)= cgConApp con args
 cgExpr (StgTick t e)         = cgTick t >> cgExpr e
 cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
                                emitReturn [CmmLit cmm_lit]
@@ -157,7 +157,7 @@ cgLetNoEscapeRhsBody local_cc bndr (StgRhsClosure _ cc _upd args body)
   = cgLetNoEscapeClosure bndr local_cc cc (nonVoidIds args) body
 cgLetNoEscapeRhsBody local_cc bndr (StgRhsCon _ext cc con args)
   = cgLetNoEscapeClosure bndr local_cc cc []
-      (StgConApp con args (pprPanic "cgLetNoEscapeRhsBody" $
+      (StgConApp _ext con args (pprPanic "cgLetNoEscapeRhsBody" $
                            text "StgRhsCon doesn't have type args"))
         -- For a constructor RHS we want to generate a single chunk of
         -- code which can be jumped to from many places, which will
@@ -898,7 +898,6 @@ cgIdApp strict fun_id args = do
           --   emitReturn []
           | isWHNF && not (isVoidTy (idType fun_id))
           , not profiling
-          , False
           -> do
             -- Check if it's really taged
             -- when debugIsOn

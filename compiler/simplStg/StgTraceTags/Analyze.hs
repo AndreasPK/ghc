@@ -88,6 +88,7 @@ type instance XRhsCon 'Taggedness = NodeId
 type instance XLet 'Taggedness = NoExtSilent
 type instance XLetNoEscape 'Taggedness = NoExtSilent
 type instance XStgApp 'Taggedness = NodeId
+type instance XStgConApp 'Taggedness = NodeId
 
 data RecursionKind
     = SimpleRecursion
@@ -157,9 +158,9 @@ data EnterInfo
     deriving (Eq,Ord,Show,Enum,Generic,NFData)
 
 instance Outputable EnterInfo where
-    ppr UndetEnterInfo    = char '?'
-    ppr AlwaysEnter    = text "ent"
-    ppr MaybeEnter  = char 'm'
+    ppr UndetEnterInfo  = char '?'
+    ppr AlwaysEnter     = text "ent"
+    ppr MaybeEnter      = char 'm'
     ppr NeverEnter      = char 't'
 
 {- |
@@ -465,8 +466,10 @@ nestingLevelOver (LatSum _ (SumInfo _ fields)) n
     = any (`nestingLevelOver` (n-1)) fields
 nestingLevelOver _ _ = False
 
--- Note [Constraints/Rules for tag/enter information]
+
 {-
+    -- Note [Constraints/Rules for tag/enter information]
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     Assumptions made:
         * StgApp is always fully applied
@@ -538,7 +541,9 @@ nestingLevelOver _ _ = False
     -- bindings MaybeEnter.
 
     rhs@[RhsCon con args], sargs@(strictArgs args)
-        => info[rhs] = (lub Tagged sargs, map info args)
+        => info[rhs] = (lub Tagged sargs, map (noEnterSargs . info) args)
+
+    -- We also mark the strict fields as neverEnter
 
     Functions/Closures
     --------------------------------------------------------
@@ -653,6 +658,31 @@ In the last step we transfer back the information gained from the analysis.
 
 For now generate one node per rule.
 We could common up some of these though for performance.
+
+Note [Taggedness of let bound constructors]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default a let bound StgRhsCon WILL result in a tagged binding.
+However there are some exceptions:
+
+* Imported non-nullary constructors.
+
+    We don't store the tag in the Interface so can't recreate it - not tagged.
+
+* Top level RhsCon with strict untagged arguments.
+
+    In order these will only contain tagged references we have to turn them into
+    functions who evaluate the possibly untagged arguments.
+
+Note [Taggedness of absentError]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+WW under certain circumstances will determine that a strict
+
+* Let bound absentErrors.
+    These are closures without args so no tag.
+    However we mark them as tagged as they have been proofen unused
+    by WW and as such
 
 -}
 
@@ -861,7 +891,8 @@ instance Outputable FlowNode where
                 ConstId i -> text "c_" <> ppr i
 
 data SynContext
-    = CLetRec [Id] -- These id's are in the same recursive group.
+    = CLetRec [Id] -- ^ These id's are in the same recursive group.
+    | CLet !Id
     | CClosureBody
         { cid_map :: [(Id,NodeId)] -- ^ Args of a closure mapped to nodes in the body
         }
@@ -976,7 +1007,7 @@ nodesTopBinds binds = mapM (nodesTop) binds
 nodesTop :: StgTopBinding -> AM TgStgTopBinding
 -- Always "tagged"
 nodesTop (StgTopStringLit v _str) = do
-    pprTraceM "TopString" (ppr v)
+    -- pprTraceM "TopString" (ppr v)
     let node = mkConstNode (mkIdNodeId [CTopLevel] v)
                            (flatLattice NeverEnter)
     markDone $ node { node_desc = text "c_str" }
@@ -987,7 +1018,7 @@ nodesTop      (StgTopLifted bind)  = do
 
 nodesBind :: [SynContext] -> TopLevelFlag -> StgBinding -> AM TgStgBinding
 nodesBind ctxt top (StgNonRec v rhs) = do
-    (rhs',_) <- (nodeRhs ctxt top v rhs)
+    (rhs',_) <- (nodeRhs ((CLet v):ctxt) top v rhs)
     return (StgNonRec v rhs')
 nodesBind ctxt top (StgRec binds) = do
     let boundIds = map fst binds
@@ -1044,7 +1075,7 @@ importedFuncNode this_mod id
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
 nodeRhs :: [SynContext] -> TopLevelFlag -> Id -> StgRhs -> AM (TgStgRhs, NodeId)
-nodeRhs ctxt _ binding (StgRhsCon _ _ccs con args)
+nodeRhs ctxt topFlag binding (StgRhsCon _ _ccs con args)
 --   | pprTrace "nodeRhsCon" (ppr binding) False = undefined
   | null args = do
         let node_id = mkIdNodeId ctxt binding
@@ -1074,7 +1105,12 @@ nodeRhs ctxt _ binding (StgRhsCon _ _ccs con args)
         -- pprTraceM "RhsCon" (ppr con <+> ppr this_id <+> ppr fieldResults)
         -- Rule 2
         let outerTag
+                -- | not (isTopLevel topFlag)
+                -- = NeverEnter
+                -- All lazy fields
                 | null banged_inputs
+                = NeverEnter
+                | all hasOuterTag strictResults
                 = NeverEnter
                 -- If any of the inputs are undetermined so is the output,
                 -- if any of the inputs require entering or can't be reasoned
@@ -1082,7 +1118,10 @@ nodeRhs ctxt _ binding (StgRhsCon _ _ccs con args)
                 | otherwise
                 = strictFieldLub
 
-        let result = mkConLattice con outerTag (map snd fieldResults)
+        -- Strict fields need to marked as neverEnter here, even if they are not analysed as such
+        -- This is because when we READ the result of this rhs they will have been tagged.
+        let fieldTags = mapStrictConArgs con (\lat -> setOuterInfo lat NeverEnter) (map snd fieldResults)
+        let result = mkConLattice con outerTag fieldTags
         updateNode this_id result
         return $ result
 
@@ -1143,7 +1182,8 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
     ctxt' = (CClosureBody (zip args (replicate arity topNodeId)):ctxt)
     arity = length args
     enterInfo
-        | null args && not (isAbsentExpr body) = AlwaysEnter
+        | isAbsentExpr body = NeverEnter
+        | null args = AlwaysEnter
         | otherwise = NeverEnter -- Thunks with arity > 0
                                         -- are only entered when applied.
     node_update this_id body_id= do
@@ -1169,7 +1209,7 @@ nodeExpr ctxt (e@StgCase {})          = nodeCase ctxt e
 nodeExpr ctxt (e@StgLet {})           = nodeLet ctxt e
 nodeExpr ctxt (e@StgLetNoEscape {})   = nodeLetNoEscape ctxt e
 nodeExpr ctxt (StgTick t e)           = nodeExpr ctxt e
-nodeExpr ctxt e@(StgConApp _con _args _tys) = nodeConApp ctxt e
+nodeExpr ctxt e@(StgConApp {})        = nodeConApp ctxt e
 
 nodeExpr ctxt e@(StgApp _ f args)      = do
     mapM_ addImportedNode [v | StgVarArg v <- args]
@@ -1276,7 +1316,7 @@ nodeLetNoEscape ctxt (StgLetNoEscape ext bind expr) = do
     return $ (StgLetNoEscape ext bind' expr', node)
 
 nodeConApp :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
-nodeConApp ctxt (StgConApp con args tys) = do
+nodeConApp ctxt (StgConApp _ext con args tys) = do
     -- pprTraceM "ConApp" $ ppr con <+> ppr args
     mapM_ addImportedNode [v | StgVarArg v <- args]
     node_id <- mkUniqueId
@@ -1289,7 +1329,9 @@ nodeConApp ctxt (StgConApp con args tys) = do
             fields <- mapM getField inputs :: AM [EnterLattice]
             -- Todo: When an *expression* returns a value the outer tag
             --       is not really defined.
-            let result = mkConLattice con top fields
+            -- TODO: The strict fields should get an outer tag in all cases.
+            let fieldResults = mapStrictConArgs con (`setOuterInfo` NeverEnter) fields
+            let result = mkConLattice con top fieldResults
             -- pprTraceM "Update conApp" $ ppr (con, args, fields, result)
             updateNode node_id result
             return result
@@ -1307,7 +1349,7 @@ nodeConApp ctxt (StgConApp con args tys) = do
         , node_desc = text "conApp"
         }
 
-    return (StgConApp con args tys, node_id)
+    return (StgConApp node_id con args tys, node_id)
 
 -- | Todo: Higher order functions?
 getFunctionNode :: [SynContext] -> Id -> [EnterLattice] -> AM NodeId
@@ -1388,7 +1430,7 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                                         --     )
                                         lookupNodeResult (mkIdNodeId ctxt f)
                         -- pprTraceM "AppFields" $ ppr (f, func_lat)
-                        when (nestingLevelOver result 10) $ do
+                        when (nestingLevelOver result 12) $ do
                             pprTraceM "Limiting nesting for " (ppr node_id)
                             node <- getNode node_id
                             addNode $ node { node_update = return result }
@@ -1423,6 +1465,15 @@ nodeOpApp ctxt (StgOpApp op args res_ty) = do
     -- pprTraceM "OpApp" $ ppr args
     return $ (StgOpApp op args res_ty, topNodeId)
 
+mapStrictConArgs :: DataCon -> (a -> a) -> [a] -> [a]
+mapStrictConArgs con f args =
+    zipWith (\arg i -> if i `elem` strictOnes then f arg else arg) args [0..]
+    where
+        strictOnes = getStrictConArgs con [0..]
+
+
+
+
 
 solveConstraints :: AM [FlowNode]
 solveConstraints = do
@@ -1450,7 +1501,7 @@ solveConstraints = do
         progress <- liftM2 (||) (update n idList False) (update n uqList False)
         if (not progress)
             then return ()
-            else if (n > 6)
+            else if (n > 10)
                 then pprTraceM "Warning:" (text "Aborting at" <+> ppr n <+> text "iterations")
                 else iterate (n+1)
 
@@ -1494,34 +1545,86 @@ rewriteTopBinds binds = mapM (rewriteTop) binds
 rewriteTop :: TgStgTopBinding -> AM StgTopBinding
 rewriteTop (StgTopStringLit v s) = return (StgTopStringLit v s)
 rewriteTop      (StgTopLifted bind)  = do
-    StgTopLifted <$> rewriteBinds bind
+    (StgTopLifted . fst) <$> (rewriteBinds TopLevel bind)
 
-rewriteBinds :: TgStgBinding -> AM StgBinding
-rewriteBinds (StgNonRec v rhs) = do
-    StgNonRec v <$> rewriteRhs v rhs
-rewriteBinds (StgRec binds) = do
-    rhss' <- mapM (uncurry rewriteRhs) binds
-    return $ StgRec (zip (map fst binds) rhss')
+rewriteBinds :: TopLevelFlag -> TgStgBinding -> AM (StgBinding, StgExpr -> StgExpr)
+rewriteBinds topFlag (StgNonRec v rhs)
+    | TopLevel    <- topFlag = do
+        bind <- (StgNonRec v <$> rewriteRhsInplace v rhs)
+        return (bind, id)
+    | NotTopLevel <- topFlag = do
+        (rhs, wrapper) <-  (,id) <$> rewriteRhsInplace v rhs
+        return (StgNonRec v rhs, wrapper)
+rewriteBinds topFlag (StgRec binds)
+    | TopLevel    <- topFlag = do
+        bind <- mkRec <$> mapM (uncurry rewriteRhsInplace) binds
+        return (bind, id)
+    | NotTopLevel <- topFlag = do
+        rhss <- mapM (uncurry rewriteRhsInplace) binds :: AM ([StgRhs])
+        return (mkRec rhss, id)
+  where
+    mkRec :: [StgRhs] -> StgBinding
+    mkRec rhss = StgRec (zip (map fst binds) rhss)
+    -- rhss' <- mapM (uncurry rewriteRhsInplace) binds
+    -- return $ StgRec (zip (map fst binds) rhss')
 
--- | When dealing with a let bound rhs passing the id in allows us the shortcut the
---  the rule for the rhs tag to flow to the id
-rewriteRhs :: Id -> TgStgRhs -> AM StgRhs
-rewriteRhs binding rhs@(StgRhsCon node_id ccs con args) = do
+-- For top level lets we have to turn lets into closures.
+rewriteRhsInplace :: Id -> TgStgRhs -> AM StgRhs
+rewriteRhsInplace binding rhs@(StgRhsCon node_id ccs con args) = do
+    node <- getNode node_id
     tagInfo <- lookupNodeResult node_id
+    fieldInfos <- mapM lookupNodeResult (node_inputs node)
+    -- pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
     let needsRewrite = not $ hasOuterTag tagInfo
 
     if (not needsRewrite)
         then return (StgRhsCon noExtSilent ccs con args)
         else do
-            pprTraceM "Creating closure for " $ ppr binding
-            let strictIndices = getStrictConArgs con [0..] :: [Int]
-            let needsEval = filter (not . hasOuterTag . indexField tagInfo) strictIndices :: [Int]
+            pprTraceM "Creating closure for " $ ppr binding <+> ppr (node_id, tagInfo)
+            let strictIndices = getStrictConArgs con (zip [0..] fieldInfos) :: [(Int,EnterLattice)]
+            let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
+            -- TODO: selectIndices is not a performant solution, fix that.
             let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
             conExpr <- mkSeqs evalArgs con args (panic "mkSeqs should not need to provide types")
             return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr)
 
-rewriteRhs binding rhs@(StgRhsClosure ext ccs flag args body) = do
+rewriteRhsInplace binding rhs@(StgRhsClosure ext ccs flag args body) = do
+    -- pprTraceM "rewriteRhsClosure" $ ppr binding <+> ppr tagInfo
     StgRhsClosure ext ccs flag args <$> rewriteExpr body
+
+-- | When dealing with a let bound rhs passing the id in allows us the shortcut the
+--  the rule for the rhs tag to flow to the id
+rewriteRhs :: Id -> TgStgRhs -> AM (StgRhs, StgExpr -> StgExpr)
+rewriteRhs binding _ = error "Shouldn't be used ATM"
+-- rewriteRhs binding rhs@(StgRhsCon node_id ccs con args) = do
+--     tagInfo <- lookupNodeResult node_id
+--     pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
+--     let needsRewrite = not $ hasOuterTag tagInfo
+
+--     if (not needsRewrite)
+--         then return (StgRhsCon noExtSilent ccs con args, id)
+--         else do
+                --TODO: Read field input
+--             pprTraceM "Creating seqs for " $ ppr binding
+--             let strictIndices = getStrictConArgs con [0..] :: [Int]
+--             let needsEval = filter (not . hasOuterTag . indexField tagInfo) strictIndices :: [Int]
+--             let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
+--             evaldArgs <- mapM mkLocalArgId evalArgs
+--             let varMap = zip evalArgs evaldArgs
+--             let updateArg (StgLitArg lit) = (StgLitArg lit)
+--                 updateArg (StgVarArg v)
+--                     | Just v' <- lookup v varMap
+--                     = StgVarArg v'
+--                     | otherwise = StgVarArg v
+--             let evaldConArgs = map updateArg args
+--             return ((StgRhsCon noExtSilent ccs con evaldConArgs), \expr -> foldr (\v e -> mkSeq v v e) expr evalArgs)
+--             -- conExpr <- mkSeqs evalArgs con args (panic "mkSeqs should not need to provide types")
+--             -- return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr, id)
+
+-- rewriteRhs binding rhs@(StgRhsClosure ext ccs flag args body) = do
+--     pure (,) <*>
+--         StgRhsClosure ext ccs flag args <$> rewriteExpr body <*>
+--         pure id
 
 rewriteExpr :: TgStgExpr -> AM StgExpr
 rewriteExpr (e@StgCase {})          = rewriteCase e
@@ -1551,24 +1654,40 @@ rewriteAlt alt@(altCon, bndrs, rhs) = do
     return (altCon, bndrs, rhs')
 
 rewriteLet :: TgStgExpr -> AM StgExpr
-rewriteLet (StgLet xt bind expr) =
-    pure (StgLet xt) <*>
-        rewriteBinds bind <*>
-        rewriteExpr expr
+rewriteLet (StgLet xt bind expr) = do
+    (bind', wrapper) <- rewriteBinds NotTopLevel bind
+    expr' <- rewriteExpr expr
+    return $ wrapper (StgLet xt bind' expr')
 
-rewriteLetNoEscape (StgLetNoEscape xt bind expr) =
-    pure (StgLetNoEscape xt) <*>
-        rewriteBinds bind <*>
-        rewriteExpr expr
+rewriteLetNoEscape (StgLetNoEscape xt bind expr) = do
+    (bind', wrapper) <- rewriteBinds NotTopLevel bind
+    expr' <- rewriteExpr expr
+    return $ wrapper (StgLetNoEscape xt bind' expr')
 
-rewriteConApp (StgConApp con args tys) = do
-    --TODO: Closure conversion?
-    return (StgConApp con args tys)
+rewriteConApp :: TgStgExpr -> AM StgExpr
+rewriteConApp (StgConApp nodeId con args tys) = do
+    node <- getNode nodeId
+    tagInfo <- lookupNodeResult nodeId
+    -- We look at the INPUT because the output of this node will always have tagged
+    -- strict fields
+    fieldInfos <- mapM lookupNodeResult (node_inputs node)
+    let strictIndices = getStrictConArgs con (zip [(0 :: Int) ..] fieldInfos) :: [(Int,EnterLattice)]
+    let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
+    let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
+    if (not $ null evalArgs)
+        then do
+            pprTraceM "Creating conAppSeqs for " $ ppr nodeId <+> parens ( ppr evalArgs )
+            mkSeqs evalArgs con args tys
+        else return (StgConApp noExtSilent con args tys)
+    -- return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr)
+    -- mkSeqs evalArgs con args tys
+    -- return (StgConApp con args tys)
 
 rewriteApp :: TgStgExpr -> AM StgExpr
-rewriteApp app@(StgApp nodeId f args) =
-    -- TODO: Fill in info
-    return $ StgApp MayEnter f args
+rewriteApp app@(StgApp nodeId f args) = do
+    tagInfo <- lookupNodeResult nodeId
+    let enterInfo = if hasOuterTag tagInfo then NoEnter else MayEnter
+    return $ StgApp enterInfo f args
 
 rewriteOpApp (StgOpApp op args res_ty) = do
     return (StgOpApp op args res_ty)
@@ -1588,14 +1707,14 @@ mkSeq id bndr expr =
 mkSeqs :: [Id] -> DataCon -> [StgArg] -> [Type] -> AM StgExpr
 mkSeqs untaggedIds con args tys = do
     argMap <- mapM (\arg -> (arg,) <$> mkLocalArgId arg ) untaggedIds :: AM [(InId, OutId)]
-    mapM_ (pprTraceM "tagRhs:Forcing strict args:" . ppr) argMap
+    mapM_ (pprTraceM "Forcing strict args:" . ppr) argMap
     let taggedArgs
             = map   (\v -> case v of
                         StgVarArg v' -> StgVarArg $ fromMaybe v' $ lookup v' argMap
                         lit -> lit)
                     args
 
-    let conBody = StgConApp con taggedArgs tys
+    let conBody = StgConApp noExtSilent con taggedArgs tys
     let body = foldr (\(v,bndr) expr -> mkSeq v bndr expr) conBody argMap
     return body
 

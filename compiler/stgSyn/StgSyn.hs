@@ -25,7 +25,8 @@ module StgSyn (
         GenStgAlt, AltType(..),
 
         StgPass(..), BinderP, XRhsClosure, XRhsCon, XLet, XLetNoEscape, XStgApp,
-        NoExtSilent, noExtSilent, AppEnters(..),
+        XStgConApp,
+        NoExtSilent, noExtSilent, AppEnters(..), noEnterInfo,
         OutputablePass,
 
         UpdateFlag(..), isUpdatable,
@@ -238,7 +239,8 @@ primitives, and literals.
 
         -- StgConApp is vital for returning unboxed tuples or sums
         -- which can't be let-bound first
-  | StgConApp   DataCon
+  | StgConApp   (XStgConApp pass)
+                DataCon
                 [StgArg] -- Saturated
                 [Type]   -- See Note [Types in StgConApp] in UnariseStg
 
@@ -470,6 +472,7 @@ data AppEnters = NoEnter  -- ^ For tagged and evaluated lifted values
                | AlwaysEnter -- ^ Always enter without looking at tag - currently not used.
                | MayEnter -- ^ Otherwise
 
+noEnterInfo = MayEnter
 
 instance Outputable AppEnters where
   ppr NoEnter = char '!'
@@ -513,6 +516,12 @@ type family XStgApp (pass :: StgPass)
 type instance XStgApp 'Vanilla = AppEnters
 type instance XStgApp 'CodeGen = AppEnters
 
+type family XStgConApp (pass :: StgPass)
+type instance XStgConApp 'Vanilla = NoExtSilent
+type instance XStgConApp 'CodeGen = NoExtSilent
+
+
+
 stgRhsArity :: StgRhs -> Int
 stgRhsArity (StgRhsClosure _ _ _ bndrs _)
   = ASSERT( all isId bndrs ) length bndrs
@@ -552,7 +561,7 @@ exprHasCafRefs (StgApp _ f args)
   = stgIdHasCafRefs f || any stgArgHasCafRefs args
 exprHasCafRefs StgLit{}
   = False
-exprHasCafRefs (StgConApp _ args _)
+exprHasCafRefs (StgConApp _ _ args _)
   = any stgArgHasCafRefs args
 exprHasCafRefs (StgOpApp _ args _)
   = any stgArgHasCafRefs args
@@ -753,6 +762,7 @@ type OutputablePass pass =
   , Outputable (XRhsCon pass)
   , OutputableBndr (BinderP pass)
   , Outputable (XStgApp pass)
+  , Outputable (XStgConApp pass)
   )
 
 pprGenStgTopBinding
@@ -817,8 +827,8 @@ pprStgExpr (StgLit lit)     = ppr lit
 pprStgExpr (StgApp ext func args)
   = hang (ppr ext <> ppr func) 4 (sep (map (ppr) args))
 
-pprStgExpr (StgConApp con args _)
-  = hsep [ ppr con, brackets (interppSP args) ]
+pprStgExpr (StgConApp ext con args _)
+  = hsep [ pprExt ext, ppr con, brackets (interppSP args) ]
 
 pprStgExpr (StgOpApp op args _)
   = hsep [ pprStgOp op, brackets (interppSP args)]
