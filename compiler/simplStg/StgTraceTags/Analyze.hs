@@ -166,7 +166,7 @@ instance Outputable EnterInfo where
 {- |
               MaybeEnter
              /    |    \
-      AlwaysEnter  |   NeverEnter
+      AlwaysEnter |  NeverEnter
              \    |    /
             UndetEnterInfo
 
@@ -449,14 +449,11 @@ indexField (LatSum _ sum) n
         [] -> bot
         (x:_xs) -> x
     | otherwise = bot
-indexField LatUnknown {} _ = bot
+-- Field information not available
+indexField LatUnknown {} _ = top
 
 hasOuterTag :: EnterLattice -> Bool
-hasOuterTag (LatUndet NeverEnter) = True
-hasOuterTag (LatProd NeverEnter _) = True
-hasOuterTag (LatSum NeverEnter _) = True
-hasOuterTag (LatUnknown NeverEnter) = True
-hasOuterTag _ = False
+hasOuterTag lat = getOuter lat == NeverEnter
 
 -- TODO: Rewrite for early termination.
 nestingLevelOver :: EnterLattice -> Int -> Bool
@@ -1273,6 +1270,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
           = getStrictConFields con bndrs
           | otherwise = []
 
+        -- Result for ONE of the bindings bound by the alt.
         mkAltBndrNode :: Int -> Id -> AM (Id,NodeId)
         mkAltBndrNode n bndr
           | isUnliftedType bndrTy
@@ -1285,7 +1283,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
           | otherwise = do
                 let node_id = mkIdNodeId ctxt bndr
                 let updater = do
-                        scrut_res <- lookupNodeResult scrutNodeId
+                        scrut_res <- lookupNodeResult scrutNodeId :: AM EnterLattice
                         let res
                                 | elem bndr strictBnds
                                 -- Tag things coming out of strict binds
@@ -1505,7 +1503,8 @@ solveConstraints = do
         progress <- liftM2 (||) (update n idList False) (update n uqList False)
         if (not progress)
             then return ()
-            else if (n > 10)
+            --max iterations
+            else if (n > 8)
                 then pprTraceM "Warning:" (text "Aborting at" <+> ppr n <+> text "iterations")
                 else iterate (n+1)
 
@@ -1522,7 +1521,7 @@ solveConstraints = do
             else do
                 let node' = node { node_result = result }
                 done <- and <$> (mapM isMarkedDone (node_inputs node))
-                when (done || nestingLevelOver result 5) (markDone node')
+                when (done || nestingLevelOver result 8) (markDone node')
 
                 -- pprTraceM "Updated:" (ppr node)
                 -- pprTraceM "Updated:" (text "old:" <> ppr old_result <+> ppr node)
@@ -1579,6 +1578,14 @@ rewriteRhsInplace binding rhs@(StgRhsCon node_id ccs con args) = do
     tagInfo <- lookupNodeResult node_id
     fieldInfos <- mapM lookupNodeResult (node_inputs node)
     -- pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
+    pprTraceM "rewriteConApp" $ ppr con <+> vcat [
+        text "args" <+> ppr args,
+        text "tagInfo" <+> ppr tagInfo,
+        text "fieldInfos" <+> ppr fieldInfos
+        -- text "strictIndices" <+> ppr strictIndices,
+        -- text "needsEval" <+> ppr needsEval,
+        -- text "evalArgs" <+> ppr evalArgs
+        ]
     let needsRewrite = not $ hasOuterTag tagInfo
 
     if (not needsRewrite)
@@ -1678,8 +1685,13 @@ rewriteConApp (StgConApp nodeId con args tys) = do
     let strictIndices = getStrictConArgs con (zip3 [(0 :: Int) ..] fieldInfos args) :: [(Int,EnterLattice, StgArg)]
     let needsEval = map fstOf3 . filter (not . hasOuterTag . sndOf3) $ strictIndices :: [Int]
     let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
+    pprTraceM "rewriteConApp" $ ppr con <+> vcat [
+        text "fields" <+> ppr fieldInfos,
+        text "strictIndices" <+> ppr strictIndices,
+        text "needsEval" <+> ppr needsEval,
+        text "evalArgs" <+> ppr evalArgs
+        ]
     when (not $ null strictIndices) $ do
-        pprTraceM "ConApp" $ ppr con
         pprTraceM "FieldInfos" $ ppr fieldInfos
         pprTraceM "strictIndices" $ ppr strictIndices
         pprTraceM "needsEval" $ ppr needsEval
