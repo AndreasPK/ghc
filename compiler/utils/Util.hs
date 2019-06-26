@@ -626,7 +626,7 @@ changeLast (x:xs) x' = x : changeLast xs x'
 -- | Given a list of increasing indices return only these.
 -- Equal to selectIndicies indices xs == map (xs !!) indices
 -- O(n) so only useful for small/dense selection
--- Indices MUST be ordered and ascending.
+-- Indices MUST be ordered and ascending and are 0 based.
 selectIndices :: [Int] -> [a] -> [a]
 selectIndices [] _ = []
 selectIndices is xs =

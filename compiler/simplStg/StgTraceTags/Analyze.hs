@@ -452,9 +452,10 @@ indexField (LatSum _ sum) n
 indexField LatUnknown {} _ = bot
 
 hasOuterTag :: EnterLattice -> Bool
-hasOuterTag (LatUnknown NeverEnter) = True
+hasOuterTag (LatUndet NeverEnter) = True
 hasOuterTag (LatProd NeverEnter _) = True
 hasOuterTag (LatSum NeverEnter _) = True
+hasOuterTag (LatUnknown NeverEnter) = True
 hasOuterTag _ = False
 
 -- TODO: Rewrite for early termination.
@@ -537,13 +538,15 @@ nestingLevelOver _ _ = False
     -- non-tagged cases in the arguments, or we might infer
     -- SP !x !x; .. SP <undet> <tagged> as tagged.
 
-    -- This means we have to take great care  to assign unknown
+    -- This means we have to take great care to assign unknown
     -- bindings MaybeEnter.
+
+    -- We also mark the strict fields as neverEnter in the result node
 
     rhs@[RhsCon con args], sargs@(strictArgs args)
         => info[rhs] = (lub Tagged sargs, map (noEnterSargs . info) args)
 
-    -- We also mark the strict fields as neverEnter
+
 
     Functions/Closures
     --------------------------------------------------------
@@ -609,6 +612,7 @@ nestingLevelOver _ _ = False
 
     conApp@[StgConApp con args]
         => info[conApp] = (AlwaysEnter, map info args)
+        + tagging of strict fields in the result node.
 
     -- This constraint is currently disabled.
     conApp@[StgConApp con [arg1,arg2,argi,... argn], hasCtxt[letrec argi = ...]
@@ -1486,7 +1490,7 @@ solveConstraints = do
         pprTraceM "ListLengthsFinal" $ ppr (length idList, length uqList, length doneList)
         pprTraceM "Result nodes" empty
         let resultNodes = (idList ++ uqList ++ doneList)
-        -- mapM_ (pprTraceM "node:" . ppr) resultNodes
+        mapM_ (pprTraceM "node:" . ppr) resultNodes
         return $ resultNodes
   where
     iterate :: Int -> AM ()
@@ -1671,12 +1675,18 @@ rewriteConApp (StgConApp nodeId con args tys) = do
     -- We look at the INPUT because the output of this node will always have tagged
     -- strict fields
     fieldInfos <- mapM lookupNodeResult (node_inputs node)
-    let strictIndices = getStrictConArgs con (zip [(0 :: Int) ..] fieldInfos) :: [(Int,EnterLattice)]
-    let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
+    let strictIndices = getStrictConArgs con (zip3 [(0 :: Int) ..] fieldInfos args) :: [(Int,EnterLattice, StgArg)]
+    let needsEval = map fstOf3 . filter (not . hasOuterTag . sndOf3) $ strictIndices :: [Int]
     let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
+    when (not $ null strictIndices) $ do
+        pprTraceM "ConApp" $ ppr con
+        pprTraceM "FieldInfos" $ ppr fieldInfos
+        pprTraceM "strictIndices" $ ppr strictIndices
+        pprTraceM "needsEval" $ ppr needsEval
+        pprTraceM "evalArgs" $ ppr evalArgs
     if (not $ null evalArgs)
         then do
-            pprTraceM "Creating conAppSeqs for " $ ppr nodeId <+> parens ( ppr evalArgs )
+            pprTraceM "Creating conAppSeqs for " $ ppr nodeId <+> parens ( ppr evalArgs ) <+> parens ( ppr fieldInfos )
             mkSeqs evalArgs con args tys
         else return (StgConApp noExtSilent con args tys)
     -- return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr)
@@ -1686,7 +1696,7 @@ rewriteConApp (StgConApp nodeId con args tys) = do
 rewriteApp :: TgStgExpr -> AM StgExpr
 rewriteApp app@(StgApp nodeId f args) = do
     tagInfo <- lookupNodeResult nodeId
-    let enterInfo = if hasOuterTag tagInfo then NoEnter else MayEnter
+    let enterInfo = if null args && hasOuterTag tagInfo then NoEnter else MayEnter
     return $ StgApp enterInfo f args
 
 rewriteOpApp (StgOpApp op args res_ty) = do
@@ -1695,6 +1705,9 @@ rewriteOpApp (StgOpApp op args res_ty) = do
 
 ----------------------------------------------
 -- Utilities for rewriting ConRhs to ConClosure
+
+-- We should really replace ALL references to the evaluatee with the evaluted binding.
+-- Not just in the constructor args.
 
 mkSeq :: Id -> Id -> StgExpr -> StgExpr
 mkSeq id bndr expr =
