@@ -1488,7 +1488,7 @@ solveConstraints = do
         pprTraceM "ListLengthsFinal" $ ppr (length idList, length uqList, length doneList)
         pprTraceM "Result nodes" empty
         let resultNodes = (idList ++ uqList ++ doneList)
-        mapM_ (pprTraceM "node:" . ppr) resultNodes
+        -- mapM_ (pprTraceM "node:" . ppr) resultNodes
         return $ resultNodes
   where
     iterate :: Int -> AM ()
@@ -1578,14 +1578,14 @@ rewriteRhsInplace binding rhs@(StgRhsCon node_id ccs con args) = do
     tagInfo <- lookupNodeResult node_id
     fieldInfos <- mapM lookupNodeResult (node_inputs node)
     -- pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
-    pprTraceM "rewriteConApp" $ ppr con <+> vcat [
-        text "args" <+> ppr args,
-        text "tagInfo" <+> ppr tagInfo,
-        text "fieldInfos" <+> ppr fieldInfos
-        -- text "strictIndices" <+> ppr strictIndices,
-        -- text "needsEval" <+> ppr needsEval,
-        -- text "evalArgs" <+> ppr evalArgs
-        ]
+    -- pprTraceM "rewriteConApp" $ ppr con <+> vcat [
+    --     text "args" <+> ppr args,
+    --     text "tagInfo" <+> ppr tagInfo,
+    --     text "fieldInfos" <+> ppr fieldInfos
+    --     -- text "strictIndices" <+> ppr strictIndices,
+    --     -- text "needsEval" <+> ppr needsEval,
+    --     -- text "evalArgs" <+> ppr evalArgs
+    --     ]
     let needsRewrite = not $ hasOuterTag tagInfo
 
     if (not needsRewrite)
@@ -1685,17 +1685,17 @@ rewriteConApp (StgConApp nodeId con args tys) = do
     let strictIndices = getStrictConArgs con (zip3 [(0 :: Int) ..] fieldInfos args) :: [(Int,EnterLattice, StgArg)]
     let needsEval = map fstOf3 . filter (not . hasOuterTag . sndOf3) $ strictIndices :: [Int]
     let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
-    pprTraceM "rewriteConApp" $ ppr con <+> vcat [
-        text "fields" <+> ppr fieldInfos,
-        text "strictIndices" <+> ppr strictIndices,
-        text "needsEval" <+> ppr needsEval,
-        text "evalArgs" <+> ppr evalArgs
-        ]
-    when (not $ null strictIndices) $ do
-        pprTraceM "FieldInfos" $ ppr fieldInfos
-        pprTraceM "strictIndices" $ ppr strictIndices
-        pprTraceM "needsEval" $ ppr needsEval
-        pprTraceM "evalArgs" $ ppr evalArgs
+    -- pprTraceM "rewriteConApp" $ ppr con <+> vcat [
+    --     text "fields" <+> ppr fieldInfos,
+    --     text "strictIndices" <+> ppr strictIndices,
+    --     text "needsEval" <+> ppr needsEval,
+    --     text "evalArgs" <+> ppr evalArgs
+    --     ]
+    -- when (not $ null strictIndices) $ do
+    --     pprTraceM "FieldInfos" $ ppr fieldInfos
+    --     pprTraceM "strictIndices" $ ppr strictIndices
+    --     pprTraceM "needsEval" $ ppr needsEval
+    --     pprTraceM "evalArgs" $ ppr evalArgs
     if (not $ null evalArgs)
         then do
             pprTraceM "Creating conAppSeqs for " $ ppr nodeId <+> parens ( ppr evalArgs ) <+> parens ( ppr fieldInfos )
