@@ -600,12 +600,8 @@ nestingLevelOver _ _ = False
 
     AppDefault
     -- We just pass it along.
-    app@[StgApp f []]
+    app@[StgApp f []] || app@[StgApp f args], length args == arity
         => info[app] = info f
-
-    -- The result is tagged if the function returns a tagged arguments.
-    [StgApp f []]
-        => fun_out[ [StgApp f []] ] = info[f]
 
     conApp@[StgConApp con args]
         => info[conApp] = (AlwaysEnter, map info args)
@@ -1406,7 +1402,6 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                                     | SimpleRecursion <- recursionKind ctxt
                                     -> do
                                         func_node <- return $ mkIdNodeId ctxt f
-                                            --getFunctionNode ctxt f arg_latts
                                         lookupNodeResult func_node
 
                                     | OtherRecursion <- recursionKind ctxt
@@ -1414,15 +1409,17 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                                     -> pprTrace "mutRec" (Outputable.empty) $ return top
 
                                     -- AppDefault
-                                    | isFunTy (unwrapType $ idType f) -> do
+                                    | isSat -> do
                                         -- pprTraceM "updateStgApp:func" (
                                         --     text "type" <+> ppr (unwrapType $ idType f) $$
                                         --     text "func" <+> ppr f $$
                                         --     text "args" <+> ppr args $$
                                         --     text "context" <+> vcat (map ppr ctxt)
                                         --     )
-                                        func_node <- getFunctionNode ctxt f arg_latts
-                                        lookupNodeResult func_node
+                                        let func_node = (mkIdNodeId ctxt f)
+                                        if isFun
+                                            then (`setOuterInfo` MaybeEnter) <$> lookupNodeResult func_node
+                                            else lookupNodeResult func_node
                                     | otherwise -> do
                                         -- pprTraceM "updateStgApp:other" (
                                         --     text "type" <+> ppr (unwrapType $ idType f) $$
@@ -1430,7 +1427,7 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                                         --     text "args" <+> ppr args $$
                                         --     text "context" <+> vcat (map ppr ctxt)
                                         --     )
-                                        lookupNodeResult (mkIdNodeId ctxt f)
+                                        return top
                         -- pprTraceM "AppFields" $ ppr (f, func_lat)
                         when (nestingLevelOver result 12) $ do
                             pprTraceM "Limiting nesting for " (ppr node_id)
@@ -1453,6 +1450,9 @@ nodeApp ctxt expr@(StgApp _ f args) = do
 
                 return (StgApp node_id f args, node_id)
     where
+        isFun = isFunTy (unwrapType $ idType f)
+        isSat = not isFun || (isFun && length args == arity)
+
         arg_ids = map (getConArgNodeId ctxt) args
         recursionKind [] = NoRecursion
         recursionKind ((CLetRec ids) : todo) | f `elem` ids =
