@@ -901,7 +901,7 @@ cgIdApp strict fun_id args = do
           -> do
             -- Check if it's really taged
             -- when debugIsOn
-            (emitTagTrap fun_id fun)
+            --   (emitTagTrap fun_id fun)
 
 
             pprTraceM "WHNF:" (ppr fun_id <+> ppr args)
