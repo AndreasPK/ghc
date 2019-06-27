@@ -355,7 +355,7 @@ getOuter (LatSum x  _) = x
 
 
 instance Outputable EnterLattice where
-    ppr (LatUnknown outer) = ppr outer
+    ppr (LatUnknown outer) = ppr outer <+> text "top"
     ppr (LatUndet   outer) = ppr outer <+> text "undet"
     ppr (LatProd outer inner) =
         ppr outer <+> (ppr inner)
@@ -894,15 +894,27 @@ data SynContext
         { cid_map :: [(Id,NodeId)] -- ^ Args of a closure mapped to nodes in the body
         }
     -- | Around rhs of case alternative, with alternative binders mapped to nodes.
+    | CCaseBndr { cid_map :: [(Id,NodeId)] } -- ^ Always of length one
     | CAlt { cid_map :: [(Id,NodeId)] }
     | CTopLevel
     | CNone -- ^ No Context given
     deriving Eq
 
+getCtxtIdMap :: SynContext -> Maybe [(Id,NodeId)]
+getCtxtIdMap (CClosureBody m) = Just m
+getCtxtIdMap (CCaseBndr m) = Just m
+getCtxtIdMap (CAlt m) = Just m
+getCtxtIdMap (CLetRec {}) = Nothing
+getCtxtIdMap (CLet {}) = Nothing
+getCtxtIdMap (CTopLevel) = Nothing
+getCtxtIdMap (CNone) = Nothing
+
+
 instance Outputable SynContext where
     ppr CNone = text "CNone"
     ppr (CTopLevel) = text "CTop"
     ppr (CAlt map) = text "CAlt" <> ppr map
+    ppr (CCaseBndr map) = text "CCaseBndr" <> ppr map
     ppr (CClosureBody map) = text "CClosure" <> ppr map
     ppr (CLetRec ids) = text "CLetRec" <> ppr ids
 
@@ -911,11 +923,9 @@ idMappedInCtxt :: Id -> [SynContext] -> Maybe NodeId
 idMappedInCtxt id ctxt
     = go ctxt
   where
-    go ((CClosureBody argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    go ((CAlt argMap):todo)
-        | Just node <- lookup id argMap
+    go (ctxt:todo)
+        | Just argMap <- getCtxtIdMap ctxt
+        , Just node <- lookup id argMap
         = Just node
     go (_:todo) = go todo
     go [] = Nothing
@@ -977,6 +987,7 @@ addConstantNodes = do
     markDone $ mkConstNode botNodeId bot
     addNode $ mkConstNode topNodeId top
     addNode $ mkConstNode neverNodeId (flatLattice NeverEnter)
+    addNode $ mkConstNode maybeNodeId (flatLattice MaybeEnter)
     addNode $ mkConstNode alwaysNodeId (flatLattice AlwaysEnter)
 
 
@@ -985,13 +996,14 @@ mkConstNode id val = FlowNode id [] val (return $ val) (text "const")
 
 -- We don't realy do anything with literals, but for a uniform approach we
 -- map them to (NeverEnter x Bot)
-taggedBotNodeId, litNodeId, botNodeId, topNodeId, neverNodeId, alwaysNodeId :: NodeId
+taggedBotNodeId, litNodeId, botNodeId, topNodeId, neverNodeId, maybeNodeId, alwaysNodeId :: NodeId
 taggedBotNodeId = ConstId 1
 litNodeId       = ConstId 2
 botNodeId       = ConstId 3 -- Always returns bot
 topNodeId       = ConstId 4
 neverNodeId     = ConstId 5
-alwaysNodeId    = ConstId 6
+maybeNodeId     = ConstId 6
+alwaysNodeId    = ConstId 7
 
 
 litNode :: FlowNode
@@ -1065,7 +1077,7 @@ importedFuncNode this_mod id
     , isNullaryRepDataCon con
     = Just $ neverNodeId
     | otherwise
-    = Just $ alwaysNodeId
+    = Just $ maybeNodeId
 
 
 
@@ -1189,14 +1201,34 @@ nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
         updateNode this_id result
         return result
 
--- If the id is the argument of a closure we
--- do a little dance in findMapping to find the appropriate node.
+{-
+Note [Shadowing and NodeIds]
 
+Shadowing makes things slightly more complex.
+
+Let bindings are guaranteed to be unique as otherwise
+this would result in linker errors, so we assign them NodeIds
+based on their actual Id (Var).
+
+For constructs potentially introducing a shadowing id like
+case binders, or the binders of case alternatives we create
+a new NodeId when traversing the AST. When we want to get the
+nodeId for a particular we use mkIdNodeId.
+
+This function checks if we assigned the id to a non-id based nodeId
+and otherwise constructs a NodeId based on the actual Id (Var).
+
+-}
+
+-- Based on the ID look up the nodeid.
+-- Checking if the ID has a mapping to a nodeId in the
+-- context first.
 mkIdNodeId :: [SynContext] -> Id -> NodeId
 mkIdNodeId ctxt id
     | Just node <- idMappedInCtxt id ctxt
     = node
     | otherwise = BoundId id
+
 
 mkUniqueId :: AM NodeId
 mkUniqueId = UniqId <$> getUniqueM
@@ -1216,11 +1248,13 @@ nodeExpr ctxt e@(StgLit _lit)            = nodeLit ctxt e
 nodeExpr ctxt e@(StgOpApp _op _args _ty) = nodeOpApp ctxt e
 nodeExpr ctxt  (StgLam {}) = error "Invariant violated: No lambdas in STG representation."
 
+nodeCase :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
 nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
     -- pprTraceM "NodeCase" $ ppr bndr
     (scrut',scrutNodeId) <- nodeExpr ctxt scrut
-    (alts', altNodeIds) <- unzip <$> mapM (nodeAlt ctxt scrutNodeId) alts
-    mkCaseBndrNode scrutNodeId bndr
+    bndrNodeId <- mkCaseBndrNode scrutNodeId bndr
+    let ctxt' = CCaseBndr [(bndr,bndrNodeId)] : ctxt
+    (alts', altNodeIds) <- unzip <$> mapM (nodeAlt ctxt' scrutNodeId) alts
     caseNodeId <- mkLubNode altNodeIds
 
     -- pprTraceM "Scrut, alts, rhss" $ ppr (scrut, scrutNodeId, altNodeIds, altsId)
@@ -1228,26 +1262,26 @@ nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
     return (StgCase scrut' bndr alt_type alts' , caseNodeId)
 
   where
+    mkCaseBndrNode :: NodeId -> Id -> AM NodeId
     mkCaseBndrNode scrutNodeId bndr = do
         let node_inputs = [scrutNodeId]
-        addNode $ FlowNode  { node_id = bndrId, node_inputs = [scrutNodeId]
-                            , node_result = bot, node_update = updater
-                            , node_desc = text "caseBndr" }
+        bndrNodeId <- mkUniqueId
+        addNode $ FlowNode  { node_id = bndrNodeId, node_inputs = [scrutNodeId]
+                            , node_result = bot, node_update = updater bndrNodeId
+                            , node_desc = text "caseBndr" <-> parens (ppr scrutNodeId) <-> ppr bndr
+                            }
+        return bndrNodeId
       where
-        bndrId = mkIdNodeId ctxt bndr
+
         -- Take the result of the scrutinee and throw an other tag on it.
-        updater = do
+        updater bndrNodeId = do
             -- We don't create nodes for closure arguments, so they might
             -- be undefined
             scrutResult <- lookupNodeResult scrutNodeId
             let result = setOuterInfo scrutResult NeverEnter
-            updateNode bndrId result
+            updateNode bndrNodeId result
             return result
 
-    node_update this_id = do
-        let result = flatLattice UndetEnterInfo
-        updateNode this_id result
-        return result
 nodeCase _ _ = panic "Impossible: nodeCase"
 
 -- TODO: Shadowing is possible here for the alt bndrs
@@ -1277,7 +1311,7 @@ nodeAlt ctxt scrutNodeId (altCon, bndrs, rhs)
                 addNode litNode { node_id = node_id }
                 return (bndr,node_id)
           | otherwise = do
-                let node_id = mkIdNodeId ctxt bndr
+                node_id <- mkUniqueId --Shadows existing binds
                 let updater = do
                         scrut_res <- lookupNodeResult scrutNodeId :: AM EnterLattice
                         let res
@@ -1318,11 +1352,8 @@ nodeConApp ctxt (StgConApp _ext con args tys) = do
     -- pprTraceM "ConApp" $ ppr con <+> ppr args
     mapM_ addImportedNode [v | StgVarArg v <- args]
     node_id <- mkUniqueId
-    let inputs = map (getConArgNodeId ctxt) args :: [NodeId]
-    -- let recInputs = map (getConArgNodeId ctxt . StgVarArg) .
-    --                 filter (ctxt `hasLetRecId`) $
-    --                 [v | StgVarArg v <- args]
 
+    let inputs = map (getConArgNodeId ctxt) args :: [NodeId]
     let updater = do
             fields <- mapM getField inputs :: AM [EnterLattice]
             -- Todo: When an *expression* returns a value the outer tag
@@ -1349,23 +1380,6 @@ nodeConApp ctxt (StgConApp _ext con args tys) = do
 
     return (StgConApp node_id con args tys, node_id)
 
--- | Todo: Higher order functions?
-getFunctionNode :: [SynContext] -> Id -> [EnterLattice] -> AM NodeId
-getFunctionNode ctxt id _arg_lats
-    | Just node <- isArgFunction ctxt
-    = return node
-    | otherwise
-    = return (mkIdNodeId ctxt id)
-  where
-    isArgFunction ((CClosureBody argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    isArgFunction ((CAlt argMap):todo)
-        | Just node <- lookup id argMap
-        = Just node
-    isArgFunction [] = Nothing
-    isArgFunction (_:todo) = isArgFunction todo
-
 {-
     * A recursive call won't produce any new information.
     * Neither will imported functions
@@ -1375,59 +1389,23 @@ getFunctionNode ctxt id _arg_lats
 -}
 nodeApp :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
 nodeApp ctxt expr@(StgApp _ f args) = do
-        s <- get
-        let this_mod = fs_mod s
-        -- pprTraceM "App1" $ ppr f <+> ppr args
+    s <- get
+    let this_mod = fs_mod s
+    -- pprTraceM "App1" $ ppr f <+> ppr args
 
-        case () of
-          _
+
+    case () of
+        _
             | Just node_id <- importedFuncNode this_mod f
             -> return (StgApp node_id f args, node_id)
             | otherwise -> do
-
                 node_id <- mkUniqueId
                 -- pprTraceM "App" $ ppr f <+> ppr args <+> ppr node_id
-                let arg_ids = map (getConArgNodeId ctxt) args
                 let updater = do
                         -- Argument handling:
-                        arg_latts <- mapM lookupNodeResult arg_ids :: AM [EnterLattice]
+                        -- arg_latts <- mapM lookupNodeResult arg_ids :: AM [EnterLattice]
                         -- Try to peek into the function
-                        result <-
-                            case () of
-                                _   -- Rule AppAbsent
-                                    | isAbsentExpr expr
-                                    -> return $ flatLattice NeverEnter
-
-                                    -- Rule AppRec
-                                    | SimpleRecursion <- recursionKind ctxt
-                                    -> do
-                                        func_node <- return $ mkIdNodeId ctxt f
-                                        lookupNodeResult func_node
-
-                                    | OtherRecursion <- recursionKind ctxt
-                                    -- We don't even try to inspect mutual recursion currently.
-                                    -> pprTrace "mutRec" (Outputable.empty) $ return top
-
-                                    -- AppDefault
-                                    | isSat -> do
-                                        -- pprTraceM "updateStgApp:func" (
-                                        --     text "type" <+> ppr (unwrapType $ idType f) $$
-                                        --     text "func" <+> ppr f $$
-                                        --     text "args" <+> ppr args $$
-                                        --     text "context" <+> vcat (map ppr ctxt)
-                                        --     )
-                                        let func_node = (mkIdNodeId ctxt f)
-                                        if isFun
-                                            then (`setOuterInfo` MaybeEnter) <$> lookupNodeResult func_node
-                                            else lookupNodeResult func_node
-                                    | otherwise -> do
-                                        -- pprTraceM "updateStgApp:other" (
-                                        --     text "type" <+> ppr (unwrapType $ idType f) $$
-                                        --     text "func" <+> ppr f $$
-                                        --     text "args" <+> ppr args $$
-                                        --     text "context" <+> vcat (map ppr ctxt)
-                                        --     )
-                                        return top
+                        result <- mkResult
                         -- pprTraceM "AppFields" $ ppr (f, func_lat)
                         when (nestingLevelOver result 12) $ do
                             pprTraceM "Limiting nesting for " (ppr node_id)
@@ -1435,11 +1413,6 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                             addNode $ node { node_update = return result }
                         updateNode node_id result
                         return result
-
-                inputs <- if ( isSimpleRecursion $ recursionKind ctxt )
-                    then do
-                        return (mkIdNodeId ctxt f  : arg_ids)
-                    else return arg_ids
 
                 addNode $ FlowNode
                     { node_id = node_id, node_result = bot
@@ -1449,15 +1422,29 @@ nodeApp ctxt expr@(StgApp _ f args) = do
                     }
 
                 return (StgApp node_id f args, node_id)
-    where
+  where
+        inputs
+            | isAbsentExpr expr = []
+            | OtherRecursion <- recursionKind = []
+            | not isSat = []
+            | otherwise = [f_node_id]
+        mkResult
+            | isAbsent = return $ flatLattice NeverEnter
+            | SimpleRecursion <- recursionKind = lookupNodeResult f_node_id
+            | OtherRecursion <- recursionKind = pprTrace "mutRec" (ppr f_node_id) $ return top
+            | isSat && isFun = (`setOuterInfo` MaybeEnter) <$> lookupNodeResult f_node_id
+            | isSat && (not isFun) = lookupNodeResult f_node_id
+            | otherwise = pprTrace "Unsat?" (ppr f_node_id) $ return top
         isFun = isFunTy (unwrapType $ idType f)
         isSat = not isFun || (isFun && length args == arity)
+        isAbsent = isAbsentExpr expr
+        f_node_id = mkIdNodeId ctxt f
 
-        arg_ids = map (getConArgNodeId ctxt) args
-        recursionKind [] = NoRecursion
-        recursionKind ((CLetRec ids) : todo) | f `elem` ids =
+        recursionKind = getRecursionKind ctxt
+        getRecursionKind [] = NoRecursion
+        getRecursionKind ((CLetRec ids) : todo) | f `elem` ids =
             if length ids == 1 then SimpleRecursion else OtherRecursion
-        recursionKind (_ : todo) = recursionKind todo
+        getRecursionKind (_ : todo) = getRecursionKind todo
         arity = idFunRepArity f
 
 
@@ -1601,7 +1588,7 @@ rewriteRhsInplace binding rhs@(StgRhsCon node_id ccs con args) = do
 
 rewriteRhsInplace binding rhs@(StgRhsClosure ext ccs flag args body) = do
     -- pprTraceM "rewriteRhsClosure" $ ppr binding <+> ppr tagInfo
-    StgRhsClosure ext ccs flag args <$> rewriteExpr body
+    StgRhsClosure ext ccs flag args <$> rewriteExpr False body
 
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
@@ -1637,21 +1624,23 @@ rewriteRhs binding _ = error "Shouldn't be used ATM"
 --         StgRhsClosure ext ccs flag args <$> rewriteExpr body <*>
 --         pure id
 
-rewriteExpr :: TgStgExpr -> AM StgExpr
-rewriteExpr (e@StgCase {})          = rewriteCase e
-rewriteExpr (e@StgLet {})           = rewriteLet e
-rewriteExpr (e@StgLetNoEscape {})   = rewriteLetNoEscape e
-rewriteExpr (StgTick t e)           = StgTick t <$> rewriteExpr e
-rewriteExpr e@(StgConApp {})        = rewriteConApp e
+type IsScrut = Bool
 
-rewriteExpr e@(StgApp _ f args)      = rewriteApp e
-rewriteExpr (StgLit lit)            = return (StgLit lit)
-rewriteExpr e@(StgOpApp _op _args _ty) = rewriteOpApp e
-rewriteExpr  (StgLam {}) = error "Invariant violated: No lambdas in STG representation."
+rewriteExpr :: IsScrut -> TgStgExpr -> AM StgExpr
+rewriteExpr _ (e@StgCase {})          = rewriteCase e
+rewriteExpr _ (e@StgLet {})           = rewriteLet e
+rewriteExpr _ (e@StgLetNoEscape {})   = rewriteLetNoEscape e
+rewriteExpr isScrut (StgTick t e)     = StgTick t <$> rewriteExpr isScrut e
+rewriteExpr _ e@(StgConApp {})        = rewriteConApp e
+
+rewriteExpr isScrut e@(StgApp _ f args)      = rewriteApp isScrut e
+rewriteExpr _ (StgLit lit)            = return (StgLit lit)
+rewriteExpr _ e@(StgOpApp _op _args _ty) = rewriteOpApp e
+rewriteExpr _ (StgLam {}) = error "Invariant violated: No lambdas in STG representation."
 
 rewriteCase cse@(StgCase scrut bndr alt_type alts) =
     pure StgCase <*>
-        rewriteExpr scrut <*>
+        rewriteExpr True scrut <*>
         pure bndr <*>
         pure alt_type <*>
         mapM rewriteAlt alts
@@ -1661,18 +1650,18 @@ rewriteCase _ = panic "Impossible: nodeCase"
 -- TODO: Shadowing is possible here for the alt bndrs
 rewriteAlt :: TgStgAlt -> AM StgAlt
 rewriteAlt alt@(altCon, bndrs, rhs) = do
-    rhs' <- rewriteExpr rhs
+    rhs' <- rewriteExpr False rhs
     return (altCon, bndrs, rhs')
 
 rewriteLet :: TgStgExpr -> AM StgExpr
 rewriteLet (StgLet xt bind expr) = do
     (bind', wrapper) <- rewriteBinds NotTopLevel bind
-    expr' <- rewriteExpr expr
+    expr' <- rewriteExpr False expr
     return $ wrapper (StgLet xt bind' expr')
 
 rewriteLetNoEscape (StgLetNoEscape xt bind expr) = do
     (bind', wrapper) <- rewriteBinds NotTopLevel bind
-    expr' <- rewriteExpr expr
+    expr' <- rewriteExpr False expr
     return $ wrapper (StgLetNoEscape xt bind' expr')
 
 rewriteConApp :: TgStgExpr -> AM StgExpr
@@ -1705,10 +1694,10 @@ rewriteConApp (StgConApp nodeId con args tys) = do
     -- mkSeqs evalArgs con args tys
     -- return (StgConApp con args tys)
 
-rewriteApp :: TgStgExpr -> AM StgExpr
-rewriteApp app@(StgApp nodeId f args) = do
+rewriteApp :: IsScrut -> TgStgExpr -> AM StgExpr
+rewriteApp isScrut app@(StgApp nodeId f args) = do
     tagInfo <- lookupNodeResult nodeId
-    let enterInfo = if null args && hasOuterTag tagInfo then NoEnter else MayEnter
+    let enterInfo = if isScrut && null args && hasOuterTag tagInfo then NoEnter else MayEnter
     return $ StgApp enterInfo f args
 
 rewriteOpApp (StgOpApp op args res_ty) = do
@@ -1751,6 +1740,7 @@ mkLocalArgId id = do
 -- These are inserted by the WW transformation and we treat them semantically as tagged.
 -- This avoids us seqing them again.
 isAbsentExpr :: GenStgExpr p -> Bool
+isAbsentExpr (StgTick t e) = isAbsentExpr e
 isAbsentExpr (StgApp _ f _)
   | idUnique f == absentErrorIdKey = True
 isAbsentExpr _ = False
