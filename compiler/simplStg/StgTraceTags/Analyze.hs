@@ -311,14 +311,39 @@ information about returned values and "uncomputeable" field information.
 
 
 
--- TODO:
+    Note [Comparing Sums and Products]
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-f x = case x of
-    C1 _ -> e1
-    C2 p -> f p
-    C3 _ -> e3
+    At a glance it makes sense that we would ever compare sum and product results.
+    However consider this case:
 
-The information for f is determined by [f] = lub [e1] [f] [e3]
+    case v of
+        True -> case x of prod -> Left prod
+        False -> case y of sum -> Right sum
+
+    Then we will infer taggedness of ![!], being a tagged
+    result with the first field being tagged.
+
+    However the first field will be a prod type in one and
+    a sum type in the other case. But this does not concern
+    us as taggedness is value-level property so their types
+    don't have to match.
+
+    We could go even further still and compare the fields of
+    `prod` and `sum` against each other. But while correct the
+    payoff is small and it's easy to get wrong so for now we
+    widen the fields of any product and sum type comparison
+    to the top of the latice.
+
+
+    Note [Representing taggedness of recursive types]
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    None of this is implemented yet, but here are some thoughts
+    and an idea that on the surface seems feasible:
+
+    TODO
+
 
 -}
 
@@ -333,14 +358,6 @@ data EnterLattice
     | LatUndet !EnterInfo
 
     | LatProd !EnterInfo !ProdInfo
-    -- ^ This cross product allows us to represent all but sum types
-    -- * For things without contents (eg Bool) we have @LatProd tag [].
-    -- * For things for which we care not about the outer tag (unboxed tuples)
-    --   we ignore it.
-    -- * For things where we care about both (tag and fields)
-    --   like:  y = True; x = Just y
-    --   we get for x:
-    --   LatProd NeverEnter [LatProd NeverEnter []]
 
     | LatSum !EnterInfo !SumInfo
     deriving (Eq, Ord,Generic,NFData)
@@ -402,14 +419,12 @@ instance Lattice EnterLattice where
     lub (LatSum outer1 fields1) (LatSum outer2 fields2)
         = LatSum (lub outer1 outer2) (lub fields1 fields2)
 
+    -- See Note [Comparing Sums and Products]
     lub (LatProd o1 _ ) (LatSum o2 _) =
         LatUnknown (lub o1 o2)
-        -- TODO: This should only occure because of shadowing
-        -- which we can work around.
-        -- panic "Comparing sum with prod type"
+
     lub (LatSum o1 _) (LatProd o2 _ ) =
         LatUnknown (lub o1 o2)
-        -- panic "Comparing sum with prod type"
 
 -- Lattice when we only know the outer layer.
 flatLattice :: EnterInfo -> EnterLattice
@@ -1079,7 +1094,25 @@ importedFuncNode this_mod id
     | otherwise
     = Just $ maybeNodeId
 
+-- TODO: If we have a recursive let, but non of the recursive ids are in strict fields
+--       we and should can still tag the resulting let.
 
+{-
+    data Foo a = Foo Foo !a
+    ...
+    let x = Foo y bla
+        y = Foo x blub
+    in expr
+    ...
+    Should result in x and y being tagged with a wrapper like this:
+
+    case bla of bla' ->
+    case blub of blub' ->
+        let x = Foo y bla'
+            y = Foo x blub'
+        in expr
+
+-}
 
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
@@ -1114,8 +1147,13 @@ nodeRhs ctxt topFlag binding (StgRhsCon _ _ccs con args)
         -- pprTraceM "RhsCon" (ppr con <+> ppr this_id <+> ppr fieldResults)
         -- Rule 2
         let outerTag
-                -- | not (isTopLevel topFlag)
-                -- = NeverEnter
+                -- Non-toplevel bindings are wrapped with a case expr.
+                -- This means we can always tag the resulting let,
+                -- although it might no longer be static.
+                | not (isTopLevel topFlag)
+                , (CLet v : _) <- ctxt
+                , v == binding
+                = pprTrace "Avoided tag by wrapping" empty NeverEnter
                 -- All lazy fields
                 | null banged_inputs
                 = NeverEnter
@@ -1385,7 +1423,8 @@ nodeConApp ctxt (StgConApp _ext con args tys) = do
     * Neither will imported functions
 
 
-    -- TODO: Mutual recursion
+    -- TODO:    Mutual recursion
+
 -}
 nodeApp :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
 nodeApp ctxt expr@(StgApp _ f args) = do
@@ -1543,7 +1582,7 @@ rewriteBinds topFlag (StgNonRec v rhs)
         bind <- (StgNonRec v <$> rewriteRhsInplace v rhs)
         return (bind, id)
     | NotTopLevel <- topFlag = do
-        (rhs, wrapper) <-  (,id) <$> rewriteRhsInplace v rhs
+        (rhs, wrapper) <-  rewriteRhs v rhs
         return (StgNonRec v rhs, wrapper)
 rewriteBinds topFlag (StgRec binds)
     | TopLevel    <- topFlag = do
@@ -1573,16 +1612,15 @@ rewriteRhsInplace binding rhs@(StgRhsCon node_id ccs con args) = do
     --     -- text "needsEval" <+> ppr needsEval,
     --     -- text "evalArgs" <+> ppr evalArgs
     --     ]
-    let needsRewrite = not $ hasOuterTag tagInfo
+    let strictIndices = getStrictConArgs con (zip [0..] fieldInfos) :: [(Int,EnterLattice)]
+    let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
+    -- TODO: selectIndices is not a performant solution, fix that.
+    let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
 
-    if (not needsRewrite)
+    if (null evalArgs)
         then return (StgRhsCon noExtSilent ccs con args)
         else do
             pprTraceM "Creating closure for " $ ppr binding <+> ppr (node_id, tagInfo)
-            let strictIndices = getStrictConArgs con (zip [0..] fieldInfos) :: [(Int,EnterLattice)]
-            let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
-            -- TODO: selectIndices is not a performant solution, fix that.
-            let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
             conExpr <- mkSeqs evalArgs con args (panic "mkSeqs should not need to provide types")
             return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr)
 
@@ -1593,36 +1631,44 @@ rewriteRhsInplace binding rhs@(StgRhsClosure ext ccs flag args body) = do
 -- | When dealing with a let bound rhs passing the id in allows us the shortcut the
 --  the rule for the rhs tag to flow to the id
 rewriteRhs :: Id -> TgStgRhs -> AM (StgRhs, StgExpr -> StgExpr)
-rewriteRhs binding _ = error "Shouldn't be used ATM"
--- rewriteRhs binding rhs@(StgRhsCon node_id ccs con args) = do
---     tagInfo <- lookupNodeResult node_id
---     pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
---     let needsRewrite = not $ hasOuterTag tagInfo
+rewriteRhs binding rhs@(StgRhsCon node_id ccs con args) = do
+    node <- getNode node_id
+    tagInfo <- lookupNodeResult node_id
+    fieldInfos <- mapM lookupNodeResult (node_inputs node)
+    -- pprTraceM "rewriteRhsCon" $ ppr binding <+> ppr tagInfo
+    -- pprTraceM "rewriteConApp" $ ppr con <+> vcat [
+    --     text "args" <+> ppr args,
+    --     text "tagInfo" <+> ppr tagInfo,
+    --     text "fieldInfos" <+> ppr fieldInfos
+    --     -- text "strictIndices" <+> ppr strictIndices,
+    --     -- text "needsEval" <+> ppr needsEval,
+    --     -- text "evalArgs" <+> ppr evalArgs
+    --     ]
 
---     if (not needsRewrite)
---         then return (StgRhsCon noExtSilent ccs con args, id)
---         else do
-                --TODO: Read field input
---             pprTraceM "Creating seqs for " $ ppr binding
---             let strictIndices = getStrictConArgs con [0..] :: [Int]
---             let needsEval = filter (not . hasOuterTag . indexField tagInfo) strictIndices :: [Int]
---             let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
---             evaldArgs <- mapM mkLocalArgId evalArgs
---             let varMap = zip evalArgs evaldArgs
---             let updateArg (StgLitArg lit) = (StgLitArg lit)
---                 updateArg (StgVarArg v)
---                     | Just v' <- lookup v varMap
---                     = StgVarArg v'
---                     | otherwise = StgVarArg v
---             let evaldConArgs = map updateArg args
---             return ((StgRhsCon noExtSilent ccs con evaldConArgs), \expr -> foldr (\v e -> mkSeq v v e) expr evalArgs)
---             -- conExpr <- mkSeqs evalArgs con args (panic "mkSeqs should not need to provide types")
---             -- return $ (StgRhsClosure noExtSilent ccs ReEntrant [] conExpr, id)
+    -- TODO: use zip3
+    let strictIndices = getStrictConArgs con (zip [0..] fieldInfos) :: [(Int,EnterLattice)]
+    let needsEval = map fst . filter (not . hasOuterTag . snd) $ strictIndices :: [Int]
+    -- TODO: selectIndices is not a performant solution, fix that.
+    let evalArgs = [v | StgVarArg v <- selectIndices needsEval args] :: [Id]
 
--- rewriteRhs binding rhs@(StgRhsClosure ext ccs flag args body) = do
---     pure (,) <*>
---         StgRhsClosure ext ccs flag args <$> rewriteExpr body <*>
---         pure id
+    if (null evalArgs)
+        then return (StgRhsCon noExtSilent ccs con args, id)
+        else do
+            pprTraceM "Creating seqs (wrapped) for " $ ppr binding <+> ppr (node_id, tagInfo)
+
+            evaldArgs <- mapM mkLocalArgId evalArgs -- Create case binders
+            let varMap = zip evalArgs evaldArgs -- Match them up with original ids
+            let updateArg (StgLitArg lit) = (StgLitArg lit)
+                updateArg (StgVarArg v)
+                    | Just v' <- lookup v varMap
+                    = StgVarArg v'
+                    | otherwise = StgVarArg v
+            let evaldConArgs = map updateArg args
+            return ((StgRhsCon noExtSilent ccs con evaldConArgs), \expr -> foldr (\(v, vEvald) e -> mkSeq v vEvald e) expr varMap)
+rewriteRhs binding rhs@(StgRhsClosure ext ccs flag args body) = do
+    pure (,) <*>
+        (StgRhsClosure ext ccs flag args <$> rewriteExpr False body) <*>
+        pure id
 
 type IsScrut = Bool
 

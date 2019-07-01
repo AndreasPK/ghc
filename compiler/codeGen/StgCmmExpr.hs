@@ -884,7 +884,7 @@ cgIdApp strict fun_id args = do
         v_args      = length $ filter (isVoidTy . stgArgType) args
         node_points dflags = nodeMustPointToIt dflags lf_info
     case getCallMethod dflags fun_name fun_id lf_info n_args v_args (cg_loc fun_info) self_loop_info of
-            -- A value in WHNF, so we can just return it.
+        -- A value in WHNF, so we can just return it.
         ReturnIt
           | isVoidTy (idType fun_id) -> emitReturn []
           | otherwise                -> emitReturn [fun]
