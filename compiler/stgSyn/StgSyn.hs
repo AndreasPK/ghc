@@ -471,7 +471,7 @@ instance Outputable NoExtSilent where
 data AppEnters = NoEnter  -- ^ For tagged and evaluated lifted values
                | AlwaysEnter -- ^ Always enter without looking at tag - currently not used.
                | MayEnter -- ^ Otherwise
-
+               deriving (Eq)
 noEnterInfo = MayEnter
 
 instance Outputable AppEnters where

@@ -27,6 +27,7 @@ import DataCon
 import Data.Bifunctor
 import Id
 import StgSyn hiding (AlwaysEnter)
+import qualified StgSyn
 import StgUtil
 import Outputable
 -- import VarEnv
@@ -545,15 +546,24 @@ nestingLevelOver _ _ = False
     rhs@[RhsCon con args], noneMarkedStrict args
         => info[rhs] = (NeverEnter, map info args)
 
-    -- The special case for constructors with strict fields.
+    -- The special cases for constructors with strict fields.
     -- This works fine, but it requires us to reliable detect
     -- non-tagged cases in the arguments, or we might infer
-    -- SP !x !x; .. SP <undet> <tagged> as tagged.
+    -- SP !x !x; .. SP <undet> <tagged> as tagged since we
+    -- use lub to determine the outer tag based on the inner tag.
 
     -- This means we have to take great care to assign unknown
-    -- bindings MaybeEnter.
+    -- bindings MaybeEnter (top of the lattice).
 
-    -- We also mark the strict fields as neverEnter in the result node
+    -- We also mark the strict fields as neverEnter in the result node.
+
+    -- Local non-recursive binds are allways tagged. The reason is simply,
+    -- even when we need to tag arguments we can always wrap the whole let
+    -- in a case expression. This however isn't true for top level bindings!
+    -- So their tag depends also on the tags of their strict field arguments.
+
+    rhs@[RhsCon con args], sargs@(strictArgs args), not isTopLevel, isNonRec
+        => info[rhs] = (NeverEnter, map (noEnterSargs . info) args)
 
     rhs@[RhsCon con args], sargs@(strictArgs args)
         => info[rhs] = (lub Tagged sargs, map (noEnterSargs . info) args)
@@ -578,13 +588,29 @@ nestingLevelOver _ _ = False
     Expressions:
     ========================================================
 
-    -- Unsure, but likely doesn't matter
+    -- The built in ones are almost all unboxed
+    -- and user imported ones don't expose any info
+    -- so this is always just top.
+
+    TODO: The two exceptions are seq and dataToTag#
+          (SeqOp/DataToTagOp respectivly)
     [StgOpApp]
-        => (MayEnter, top)
+        => top
+
 
     -- Proper STG doesn't contain lambdas.
     [StgLam]
         => panic
+
+    -- TODO: Seq
+    For any bind which is
+        * non-top level
+        * non-rec
+        * binds a RhsCon
+    the arguments to the strict fields can
+    be assumed to be strict in the body. Reason being that we will
+    wrap the let in a case and substitute all occurences of the
+    untagged value with the strict value.
 
     -- Let's just flow along
     [StgLet bnd body]
@@ -820,7 +846,6 @@ lookupNodeResult node_id = do
     case result of
         Just r  -> return $ node_result r
         Nothing -> pprPanic "No node created for " (ppr node_id)
-                   --return $ top -- We know we know nothing
     where
         lookupNode :: FlowState -> NodeId -> (Maybe FlowNode)
         lookupNode s node_id =
@@ -829,24 +854,6 @@ lookupNodeResult node_id = do
                     BoundId v -> lookupUFM  (fs_idNodeMap s) v
                     ConstId i -> IM.lookup  i (fs_constNodeMap s)
 
--- | Loke node_result <$> getNode but defaults to bot
--- for non-existing nodes
-lookupNodeResultOuter :: NodeId -> AM EnterLattice
-lookupNodeResultOuter node_id = do
-    s <- get
-    let result = (M.lookup node_id (fs_doneNodes s)) <|>
-                 (lookupNode s node_id)
-    case result of
-        Just r  -> return $ node_result r
-        Nothing -> pprPanic "No node created for " (ppr node_id)
-                   --return $ top -- We know we know nothing
-    where
-        lookupNode :: FlowState -> NodeId -> (Maybe FlowNode)
-        lookupNode s node_id =
-                case node_id of
-                    UniqId uq -> lookupUFM  (fs_uqNodeMap s) uq
-                    BoundId v -> lookupUFM  (fs_idNodeMap s) v
-                    ConstId i -> IM.lookup  i (fs_constNodeMap s)
 
 -- | If we use a *function* as an unapplied argument to a constructor we throw
 -- away nested information and make do with NeverEnter Top for now.
@@ -1052,6 +1059,8 @@ nodesBind ctxt top (StgRec binds) = do
 
 -- | This adds nodes with information we can figure out about imported ids into the env.
 --   Mimics somewhat what we do in StgCmmClosure.hs:mkLFImported
+--   It's helpful to think about this adding the semantics as if the imported ID
+--   was defined as an top level binding.
 addImportedNode :: Id -> AM ()
 addImportedNode id = do
     s <- get
@@ -1074,6 +1083,10 @@ addImportedNode id = do
             -> markDone $ (mkConstNode node_id (flatLattice NeverEnter))
                             { node_desc = text "ext_nullCon" }
 
+            | not isFun
+            -> markDone $ (mkConstNode node_id (flatLattice AlwaysEnter))
+                            { node_desc = text "ext_unknown_enter" }
+
             -- May or may not be entered.
             | otherwise
             -> markDone $ (mkConstNode node_id (flatLattice MaybeEnter))
@@ -1081,6 +1094,7 @@ addImportedNode id = do
 
   where
     node_id = (mkIdNodeId [CNone] id)
+    isFun = isFunTy (unwrapType $ idType id)
 
 -- | Returns the nodeId for a given imported Id.
 importedFuncNode :: Module -> Id -> Maybe NodeId
@@ -1120,13 +1134,11 @@ nodeRhs :: [SynContext] -> TopLevelFlag -> Id -> StgRhs -> AM (TgStgRhs, NodeId)
 nodeRhs ctxt topFlag binding (StgRhsCon _ _ccs con args)
 --   | pprTrace "nodeRhsCon" (ppr binding) False = undefined
   | null args = do
-        let node_id = mkIdNodeId ctxt binding
         let node = mkConstNode node_id (flatLattice NeverEnter)
         markDone $ node { node_desc = text "rhsCon" }
         return (StgRhsCon node_id _ccs con args, node_id)
   | otherwise = do
         mapM addImportedNode [v | StgVarArg v <- args]
-        let node_id = mkIdNodeId ctxt binding
 
         let node = FlowNode { node_id = node_id
                             , node_inputs = node_inputs
@@ -1137,6 +1149,7 @@ nodeRhs ctxt topFlag binding (StgRhsCon _ _ccs con args)
         addNode node
         return (StgRhsCon node_id _ccs con args, node_id)
   where
+    node_id = mkIdNodeId ctxt binding
     node_inputs = map (getConArgNodeId ctxt) args :: [NodeId]
     banged_inputs = getStrictConArgs con node_inputs
     node_update this_id = do
@@ -1173,59 +1186,39 @@ nodeRhs ctxt topFlag binding (StgRhsCon _ _ccs con args)
         return $ result
 
 
-{- Functions are a pain.
+{- TODO:
+    Is it worth to instantiate local thunks with their actual arguments
+    or an approximation (lub) of them?
 
-We do NOT create their nodes here, instead we create a generator function
-which creates needed nodes on the fly.
+TODO: Partial applications
 
-WHY we do this is that it allows us to instantiate closure nodes with
-actual information of their arguments. If we have for example:
+* RhsCon is never partially applied
+* Partially applied RhsClosures will have arity info exposed.
+* This means we can assign the field info EVEN for partial results,
+  we just have to make sure to only use field info for fully applied
+  results.
 
-let fst x = case x of (a,_) -> a
-in
-    let foo = (C1 <constArgs> ,C2)
-    let bar = fst foo
-    in ... e ...
-
-    we instantiate the function fst with it's arguments
-    and as a consequence know the tag info of bar which gives
-    us better information about e as well.
 
 -}
-nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body)
-    -- | pprTrace "nodeRhs" (ppr binding <+> text "args:" <> ppr args) False
-    -- = undefined
-    -- Nullary thunks
-    | null args
-    = do
-        (body', body_id) <- nodeExpr ctxt' body
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [body_id]
-                            -- ^ We might infer things about nested fields once evaluated.
-                            , node_result = LatUndet enterInfo
-                            , node_update = node_update node_id body_id
-                            , node_desc   = text "rhsThunk"
-                            }
-        addNode node
-        return (StgRhsClosure _ext _ccs _flag args body', node_id)
+nodeRhs ctxt topFlag binding (StgRhsClosure _ext _ccs _flag args body) = do
+    -- pprTraceM "nodeRhs" (ppr binding <+> text "args:" <> ppr args)
 
-    -- Functions
-    | otherwise = do
-        (body', body_id) <- nodeExpr ctxt' body
-
-        let node = FlowNode { node_id = node_id
-                            , node_inputs = [body_id]
-                            -- ^ We might infer things about nested fields once evaluated.
-                            , node_result = bot
-                            , node_update = node_update node_id body_id
-                            , node_desc   = text "rhsFunc"
-                            }
-
-        addNode $ node
-        return (StgRhsClosure _ext _ccs _flag args body', node_id)
+    (body', body_id) <- nodeExpr ctxt' body
+    let node = FlowNode { node_id = node_id
+                        , node_inputs = [body_id]
+                        -- ^ We might infer things about nested fields once evaluated.
+                        , node_result = LatUndet enterInfo
+                        , node_update = node_update node_id body_id
+                        , node_desc   = node_desc
+                        }
+    addNode node
+    return (StgRhsClosure _ext _ccs _flag args body', node_id)
 
   where
     node_id = mkIdNodeId ctxt binding
+    node_desc
+        | null args = text "rhsThunk"
+        | otherwise = text "rhsFunc"
     ctxt' = (CClosureBody (zip args (replicate arity topNodeId)):ctxt)
     arity = length args
     enterInfo
@@ -1288,6 +1281,8 @@ nodeExpr ctxt  (StgLam {}) = error "Invariant violated: No lambdas in STG repres
 
 nodeCase :: [SynContext] -> StgExpr -> AM (TgStgExpr, NodeId)
 nodeCase ctxt (StgCase scrut bndr alt_type alts) = do
+    -- TODO: Make an extension point here to indicate weiter or not to
+    -- check the tag instead of the scrut.
     -- pprTraceM "NodeCase" $ ppr bndr
     (scrut',scrutNodeId) <- nodeExpr ctxt scrut
     bndrNodeId <- mkCaseBndrNode scrutNodeId bndr
@@ -1395,7 +1390,7 @@ nodeConApp ctxt (StgConApp _ext con args tys) = do
     let updater = do
             fields <- mapM getField inputs :: AM [EnterLattice]
             -- Todo: When an *expression* returns a value the outer tag
-            --       is not really defined.
+            --       is not used, but we use top because of strict fields
             -- TODO: The strict fields should get an outer tag in all cases.
             let fieldResults = mapStrictConArgs con (`setOuterInfo` NeverEnter) fields
             let result = mkConLattice con top fieldResults
@@ -1431,7 +1426,6 @@ nodeApp ctxt expr@(StgApp _ f args) = do
     s <- get
     let this_mod = fs_mod s
     -- pprTraceM "App1" $ ppr f <+> ppr args
-
 
     case () of
         _
@@ -1470,21 +1464,37 @@ nodeApp ctxt expr@(StgApp _ f args) = do
         mkResult
             | isAbsent = return $ flatLattice NeverEnter
             | SimpleRecursion <- recursionKind = lookupNodeResult f_node_id
+            -- I'm fairly certain we can do better than this on mutual recursion.
+            -- But it also seems to change hardly anything on GHC
             | OtherRecursion <- recursionKind = pprTrace "mutRec" (ppr f_node_id) $ return top
             | isSat && isFun = (`setOuterInfo` MaybeEnter) <$> lookupNodeResult f_node_id
             | isSat && (not isFun) = lookupNodeResult f_node_id
-            | otherwise = pprTrace "Unsat?" (ppr f_node_id) $ return top
+
+            -- TODO: If we build a pap, but keep track of the field values we should
+            -- be able to use these if it's fully applied later in the body.
+            {- eg:
+                case f x of pap ->
+                let res = pap y (resulting in tagged fields)
+                if cond then Just <taggedThing> else res
+            -}
+            | otherwise = pprTrace "Unsat?" (ppr (f,args)) $ return top
         isFun = isFunTy (unwrapType $ idType f)
+        arity = idFunRepArity f
         isSat = not isFun || (isFun && length args == arity)
         isAbsent = isAbsentExpr expr
         f_node_id = mkIdNodeId ctxt f
 
         recursionKind = getRecursionKind ctxt
+
         getRecursionKind [] = NoRecursion
         getRecursionKind ((CLetRec ids) : todo) | f `elem` ids =
-            if length ids == 1 then SimpleRecursion else OtherRecursion
+            pprTrace "LoopBreaker"
+                 (ppr $ zip3 ids
+                             (map (isStrongLoopBreaker . idOccInfo) ids)
+                             (map (idOccInfo) ids)
+                 ) $
+                    if length ids == 1 then SimpleRecursion else OtherRecursion
         getRecursionKind (_ : todo) = getRecursionKind todo
-        arity = idFunRepArity f
 
 
 nodeLit ctxt (StgLit lit) = return $ (StgLit lit, litNodeId)
@@ -1741,10 +1751,19 @@ rewriteConApp (StgConApp nodeId con args tys) = do
     -- return (StgConApp con args tys)
 
 rewriteApp :: IsScrut -> TgStgExpr -> AM StgExpr
-rewriteApp isScrut app@(StgApp nodeId f args) = do
+rewriteApp True app@(StgApp nodeId f args)
+    | null args = do
     tagInfo <- lookupNodeResult nodeId
-    let enterInfo = if isScrut && null args && hasOuterTag tagInfo then NoEnter else MayEnter
-    return $ StgApp enterInfo f args
+    let !enter = (enterInfo $ getOuter tagInfo)
+    return $ StgApp enter f args
+  where
+    enterInfo AlwaysEnter       = pprTrace "alwaysEnter" (ppr f)
+                                  StgSyn.AlwaysEnter
+    enterInfo NeverEnter        = StgSyn.NoEnter
+    enterInfo MaybeEnter        = StgSyn.MayEnter
+    enterInfo UndetEnterInfo    = StgSyn.MayEnter
+
+rewriteApp _ (StgApp nodeId f args) = return $ StgApp MayEnter f args
 
 rewriteOpApp (StgOpApp op args res_ty) = do
     return (StgOpApp op args res_ty)
@@ -1758,7 +1777,7 @@ rewriteOpApp (StgOpApp op args res_ty) = do
 
 mkSeq :: Id -> Id -> StgExpr -> StgExpr
 mkSeq id bndr expr =
-    -- pprTraceIt "mkSeq" $
+    pprTrace "mkSeq" (ppr (id,bndr)) $
     let altTy = mkStgAltType bndr [(DEFAULT, [], panic "Not used")]
     in
     StgCase (StgApp MayEnter id []) bndr altTy [(DEFAULT, [], expr)]

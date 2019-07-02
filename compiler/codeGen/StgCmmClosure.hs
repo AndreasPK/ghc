@@ -628,7 +628,8 @@ When black-holing, single-entry closures could also be entered via node
 (rather than directly) to catch double-entry. -}
 
 data CallMethod
-  = EnterIt             -- No args, not a function
+  = EnterIt { enterKind :: AppEnters }
+                        -- ^ No args, not a function
 
   | JumpToIt BlockId [LocalReg] -- A join point or a header of a local loop
 
@@ -641,6 +642,14 @@ data CallMethod
   | DirectEntry         -- Jump directly, with args in regs
         CLabel          --   The code label
         RepArity        --   Its arity
+
+instance Outputable CallMethod where
+  ppr (EnterIt k) = text "Enter" <> parens (ppr k)
+  ppr (JumpToIt {}) = text "JumpToIt"
+  ppr (ReturnIt ) = text "ReturnIt"
+  ppr (SlowCall ) = text "SlowCall"
+  ppr (DirectEntry {}) = text "DirectEntry"
+
 
 getCallMethod :: DynFlags
               -> Name           -- Function being applied
@@ -656,10 +665,11 @@ getCallMethod :: DynFlags
                                 -- JumpToIt. This saves us one case branch in
                                 -- cgIdApp
               -> Maybe SelfLoopInfo -- can we perform a self-recursive tail call?
+              -> AppEnters      -- Can we expect the id to be tagged or do we need to enter it?
               -> CallMethod
 
 getCallMethod dflags _ id _ n_args v_args _cg_loc
-              (Just (self_loop_id, block_id, args))
+              (Just (self_loop_id, block_id, args)) _enter_info
   | gopt Opt_Loopification dflags
   , id == self_loop_id
   , args `lengthIs` (n_args - v_args)
@@ -672,7 +682,7 @@ getCallMethod dflags _ id _ n_args v_args _cg_loc
   = JumpToIt block_id args
 
 getCallMethod dflags name id (LFReEntrant _ _ arity _ _) n_args _v_args _cg_loc
-              _self_loop_info
+              _self_loop_info _enter_info
   | n_args == 0 -- No args at all
   && not (gopt Opt_SccProfilingOn dflags)
      -- See Note [Evaluating functions with profiling] in rts/Apply.cmm
@@ -681,15 +691,17 @@ getCallMethod dflags name id (LFReEntrant _ _ arity _ _) n_args _v_args _cg_loc
   | otherwise      = DirectEntry (enterIdLabel dflags name (idCafInfo id)) arity
 
 getCallMethod _ _name _ LFUnlifted n_args _v_args _cg_loc _self_loop_info
+              _enter_info
   = ASSERT( n_args == 0 ) ReturnIt
 
 getCallMethod _ _name _ (LFCon _) n_args _v_args _cg_loc _self_loop_info
+              _enter_info
   = ASSERT( n_args == 0 ) ReturnIt
     -- n_args=0 because it'd be ill-typed to apply a saturated
     --          constructor application to anything
 
 getCallMethod dflags name id (LFThunk _ _ updatable std_form_info is_fun)
-              n_args _v_args _cg_loc _self_loop_info
+              n_args _v_args _cg_loc _self_loop_info _enter_info
   | is_fun      -- it *might* be a function, so we must "call" it (which is always safe)
   = SlowCall    -- We cannot just enter it [in eval/apply, the entry code
                 -- is the fast-entry code]
@@ -701,12 +713,12 @@ getCallMethod dflags name id (LFThunk _ _ updatable std_form_info is_fun)
          if we enter the same thunk multiple times, so the optimisation
          of jumping directly to the entry code is still valid.  --SDM
         -}
-  = EnterIt
+  = EnterIt _enter_info
 
   -- even a non-updatable selector thunk can be updated by the garbage
   -- collector, so we must enter it. (#8817)
   | SelectorThunk{} <- std_form_info
-  = EnterIt
+  = EnterIt _enter_info --TODO: ALways enter?
 
     -- We used to have ASSERT( n_args == 0 ), but actually it is
     -- possible for the optimiser to generate
@@ -721,21 +733,24 @@ getCallMethod dflags name id (LFThunk _ _ updatable std_form_info is_fun)
                 updatable) 0
 
 getCallMethod _ _name _ (LFUnknown True) _n_arg _v_args _cg_locs _self_loop_info
+              _enter_info
   = SlowCall -- might be a function
 
 getCallMethod _ name _ (LFUnknown False) n_args _v_args _cg_loc _self_loop_info
+              _enter_info
   = ASSERT2( n_args == 0, ppr name <+> ppr n_args )
-    EnterIt -- Not a function
+    EnterIt _enter_info -- Not a function
 
 getCallMethod _ name _ (LFEvaldCon _) _n_arg _v_args _cg_locs _self_loop_info
+              _enter_info
   = WARN(True, text "Calling UnknownWHNF" <> ppr name)
     SlowCall -- might be anything.
 
 getCallMethod _ _name _ LFLetNoEscape _n_args _v_args (LneLoc blk_id lne_regs)
-              _self_loop_info
+              _self_loop_info _enter_info
   = JumpToIt blk_id lne_regs
 
-getCallMethod _ _ _ _ _ _ _ _ = panic "Unknown call method"
+getCallMethod _ _ _ _ _ _ _ _ _ = panic "Unknown call method"
 
 -----------------------------------------------------------------------------
 --              Data types for closure information

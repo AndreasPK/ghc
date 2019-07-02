@@ -17,6 +17,8 @@ import GhcPrelude hiding ((<*>))
 
 import {-# SOURCE #-} StgCmmBind ( cgBind )
 
+import CmmUtils (cmmIsNotTagged)
+
 import StgCmmMonad
 import StgCmmHeap
 import StgCmmEnv
@@ -575,7 +577,7 @@ cgCase scrut bndr alt_type alts
     is_cmp_op (StgOpApp (StgPrimOp op) _ _) = isComparisonPrimOp op
     is_cmp_op _                             = False
     evaluatedScrut
-      | (StgApp NoEnter v []) <- scrut = True
+      | (StgApp NoEnter _v []) <- scrut = True
       | otherwise = False
 
 
@@ -812,63 +814,25 @@ cgConApp con stg_args
         ; tickyReturnNewCon (length stg_args)
         ; emitReturn [idInfoToAmode idinfo] }
 
-emitTagTrap :: Id -> CmmExpr -> FCode ()
-emitTagTrap fun_id fun = do
+-- | Cause memory fault on tag missprediction
+--   expectTag informs if we expect a tag or not.
+emitTagTrap :: Outputable what => what -> CmmExpr -> Bool -> FCode ()
+emitTagTrap what fun expectTag = do
   { dflags <- getDynFlags
-  ; adjustHpBackwards
-  -- ; sequel <- getSequel
-  ; updfr_off <- getUpdFrameOff
-  -- The result will be scrutinised in the sequel.  This is where
-  -- we generate a tag-test to avoid entering the closure if
-  -- possible.
-  --
-  -- The generated code will be something like this:
-  --
-  --    R1 = fun  -- copyout
-  --    if (fun & 7 != 0) goto Lret else goto Lcall
-  --  Lcall:
-  --    call [fun] returns to Lret
-  --  Lret:
-  --    fun' = R1  -- copyin
-  --    ...
-  --
-  -- Note in particular that the label Lret is used as a
-  -- destination by both the tag-test and the call.  This is
-  -- because Lret will necessarily be a proc-point, and we want to
-  -- ensure that we generate only one proc-point for this
-  -- sequence.
-  --
-  -- Furthermore, we tell the caller that we generated a native
-  -- return continuation by returning (ReturnedTo Lret off), so
-  -- that the continuation can be reused by the heap-check failure
-  -- code in the enclosing case expression.
-  --
+
   ; lret <- newBlockId
-  -- ; let (off, _, copyin) = copyInOflow dflags NativeReturn (Young lret) res_regs []
-  ; lcall <- newBlockId
-  -- ; updfr_off <- getUpdFrameOff
-  -- ; let area = Young lret
-  -- ; let (outArgs, regs, copyout) = copyOutOflow dflags NativeNodeCall Call area
-  --                                   [fun] updfr_off []
-  --   -- refer to fun via nodeReg after the copyout, to avoid having
-  --   -- both live simultaneously; this sometimes enables fun to be
-  --   -- inlined in the RHS of the R1 assignment.
-  -- ; let entry = entryCode dflags (closureInfoPtr dflags (CmmReg nodeReg))
-  --       the_call = toCall entry (Just lret) updfr_off off outArgs regs
-  -- ; let trapStore =
+  ; lfault <- newBlockId
   ; tscope <- getTickScope
-  ; pprTraceM "emitTagCheck" (ppr fun_id)
+  ; pprTraceM "emitTagTrap" (ppr what)
+  ; let check = if expectTag then cmmIsTagged else cmmIsNotTagged
   ; emit $
-      -- copyout <*>
-      -- Branch to lret if tagged otherwise lcall
-      mkCbranch (cmmIsTagged dflags fun)
-                lret lcall Nothing <*>
       -- The actual debug code block
-      outOfLine lcall (mkStore (CmmLit $ CmmInt 0 W64) (CmmLit $ CmmInt 0 W64) <*> mkBranch lret,tscope) <*>
+      mkCbranch (check dflags fun)
+                lret lfault Nothing <*>
+      outOfLine lfault (mkStore (CmmLit $ CmmInt 0 W64) (CmmLit $ CmmInt 0 W64) <*> mkBranch lret,tscope) <*>
       mkLabel lret tscope
-      -- copyin
-      -- ; return (ReturnedTo lret off)
   }
+
 
 cgIdApp :: AppEnters -> Id -> [StgArg] -> FCode ReturnKind
 cgIdApp strict fun_id args = do
@@ -883,7 +847,7 @@ cgIdApp strict fun_id args = do
         n_args      = length args
         v_args      = length $ filter (isVoidTy . stgArgType) args
         node_points dflags = nodeMustPointToIt dflags lf_info
-    case getCallMethod dflags fun_name fun_id lf_info n_args v_args (cg_loc fun_info) self_loop_info of
+    case getCallMethod dflags fun_name fun_id lf_info n_args v_args (cg_loc fun_info) self_loop_info strict of
         -- A value in WHNF, so we can just return it.
         ReturnIt
           | isVoidTy (idType fun_id) -> emitReturn []
@@ -892,23 +856,23 @@ cgIdApp strict fun_id args = do
 
         -- A value in WHNF, but determined by StgCSR.
         -- See Note [CSR for Stg]
-        _
+        retKind
           -- | isWHNF && isVoidTy (idType fun_id) ->
           --   pprTrace "WHNFv:" (ppr fun_id) $
           --   emitReturn []
           | isWHNF && not (isVoidTy (idType fun_id))
           , not profiling
           -> do
-            -- Check if it's really taged
+            -- TODO: Enable for debug
             -- when debugIsOn
-            --   (emitTagTrap fun_id fun)
+            (emitTagTrap fun_id fun True)
 
 
-            pprTraceM "WHNF:" (ppr fun_id <+> ppr args)
+            pprTraceM "WHNF:" (ppr fun_id <+> ppr args <+> ppr retKind)
             emitReturn [fun]
 
-        EnterIt -> ASSERT( null args )  -- Discarding arguments
-                   emitEnter fun
+        EnterIt untagged -> ASSERT( null args )  -- Discarding arguments
+                   emitEnter untagged fun
 
         SlowCall -> do      -- A slow function call via the RTS apply routines
                 { tickySlowCall lf_info args
@@ -1047,8 +1011,8 @@ cgIdApp strict fun_id args = do
 -- we can turn a call into a self-recursive jump.
 --
 
-emitEnter :: CmmExpr -> FCode ReturnKind
-emitEnter fun = do
+emitEnter :: AppEnters -> CmmExpr -> FCode ReturnKind
+emitEnter untagged fun = do
   { dflags <- getDynFlags
   ; adjustHpBackwards
   ; sequel <- getSequel
@@ -1062,7 +1026,7 @@ emitEnter fun = do
       --
       -- Right now, we do what the old codegen did, and omit the tag
       -- test, just generating an enter.
-      Return -> do
+      Return -> when (untagged /= MayEnter) (pprTraceM "Return " $ ppr (untagged, fun)) >> do
         { let entry = entryCode dflags $ closureInfoPtr dflags $ CmmReg nodeReg
         ; emit $ mkJump dflags NativeNodeCall entry
                         [cmmUntag dflags fun] updfr_off
@@ -1094,7 +1058,10 @@ emitEnter fun = do
       -- that the continuation can be reused by the heap-check failure
       -- code in the enclosing case expression.
       --
-      AssignTo res_regs _ -> do
+      -- If we statically know we have to enter the result then we omit
+      -- the tag check and the associated conditional jump.
+      --
+      AssignTo res_regs _ -> when (untagged /= MayEnter) (pprTraceM "Assign " $ ppr (untagged, fun)) >> do
        { lret <- newBlockId
        ; let (off, _, copyin) = copyInOflow dflags NativeReturn (Young lret) res_regs []
        ; lcall <- newBlockId
@@ -1108,10 +1075,20 @@ emitEnter fun = do
        ; let entry = entryCode dflags (closureInfoPtr dflags (CmmReg nodeReg))
              the_call = toCall entry (Just lret) updfr_off off outArgs regs
        ; tscope <- getTickScope
+       -- We either jump directly when we can assume the pointer will be untagged,
+       -- or only after a tag check otherwise.
+       ; let branch
+              | untagged == AlwaysEnter
+              = mkComment (fsLit "expected untagged") <*>
+                  mkAssign (nodeReg) (cmmUntag dflags $ CmmReg nodeReg) <*>
+                  mkBranch lcall
+              | otherwise = mkCbranch (cmmIsTagged dflags (CmmReg nodeReg)) lret lcall Nothing
+      --  ; when (untagged == AlwaysEnter) (emitTagTrap fun fun False)
        ; emit $
            copyout <*>
-           mkCbranch (cmmIsTagged dflags (CmmReg nodeReg))
-                     lret lcall Nothing <*>
+          --  mkCbranch (cmmIsTagged dflags (CmmReg nodeReg))
+          --            lret lcall Nothing <*>
+           branch <*>
            outOfLine lcall (the_call,tscope) <*>
            mkLabel lret tscope <*>
            copyin
