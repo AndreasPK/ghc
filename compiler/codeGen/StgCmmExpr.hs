@@ -865,9 +865,9 @@ cgIdApp strict fun_id args = do
           -> do
             -- TODO: Enable for debug
             -- when debugIsOn
-            (emitTagTrap fun_id fun True)
+            -- (emitTagTrap fun_id fun True)
 
-
+            tickyTagged
             pprTraceM "WHNF:" (ppr fun_id <+> ppr args <+> ppr retKind)
             emitReturn [fun]
 
@@ -1084,6 +1084,8 @@ emitEnter untagged fun = do
                   mkBranch lcall
               | otherwise = mkCbranch (cmmIsTagged dflags (CmmReg nodeReg)) lret lcall Nothing
       --  ; when (untagged == AlwaysEnter) (emitTagTrap fun fun False)
+       ; when( untagged == AlwaysEnter) $ 
+          tickyUntagged (cmmIsTagged dflags fun)
        ; emit $
            copyout <*>
           --  mkCbranch (cmmIsTagged dflags (CmmReg nodeReg))
